@@ -68,4 +68,8 @@ foreach ($exit in @(@('InstallComplete', '-1'), @('InstallCancelled', '-2'), @('
 }
 $title = Read-Row 'SELECT `Text` FROM `Control` WHERE `Dialog_` = ''InstallComplete'' AND `Control` = ''Title''' 1
 if ($title[0] -notmatch 'completed successfully') { throw 'Success dialog does not confirm completion' }
-Write-Output 'ok MSI: Start Menu shortcut, optional desktop shortcut (default on, checkbox), icon/key path, full-UI success/cancel/error and Finish controls'
+$rm = Read-Row 'SELECT `Dialog` FROM `Dialog` WHERE `Dialog` = ''MsiRMFilesInUse''' 1
+Assert-Equal $rm[0] 'MsiRMFilesInUse' 'Files-in-use dialog'
+[void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Database)
+[void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Installer)
+Write-Output 'ok MSI: Start Menu shortcut, optional desktop shortcut (default on, checkbox), icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog'
