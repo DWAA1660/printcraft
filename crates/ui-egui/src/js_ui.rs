@@ -24,8 +24,8 @@ pub struct DocJsDraft {
 
 impl PdfCraftApp {
     /// Act on what scripts produced in document `id`: alerts are shown, console output goes to
-    /// the console, and print / page / link requests are carried out (form submissions are
-    /// reported, never sent).
+    /// the console, print and page requests are carried out, links wait for the user's permission
+    /// (form submissions are reported, never sent).
     pub fn handle_js(&mut self, id: DocId, out: JsOutput) {
         if out.is_empty() {
             return;
@@ -43,11 +43,7 @@ impl PdfCraftApp {
                         self.views[i].go_to_page(p);
                     }
                 }
-                Request::LaunchUrl(u) => {
-                    if let Some(ctx) = &self.ctx {
-                        ctx.open_url(egui::OpenUrl::new_tab(u));
-                    }
-                }
+                Request::LaunchUrl(u) => self.request_document_url(&u, crate::LinkOrigin::Script),
                 Request::Submit(u) => self.notify(format!(
                     "The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries."
                 )),
@@ -235,6 +231,25 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
         });
     });
     ui.add_space(8.0);
+    ui.label(egui::RichText::new(app.language.tr("Documents and view")).font(theme::semibold(13.0)));
+    ui.horizontal(|ui| {
+        ui.label(app.language.tr("Default workspace mode"));
+        for (mode, label) in [
+            (crate::Mode::AllTools, "All Tools"),
+            (crate::Mode::Read, "Read"),
+            (crate::Mode::Edit, "Edit"),
+            (crate::Mode::Convert, "Convert"),
+            (crate::Mode::Sign, "E-Sign"),
+        ] {
+            ui.radio_value(&mut app.default_mode, mode, app.language.tr(label));
+        }
+    });
+    ui.label(
+        egui::RichText::new(app.language.tr("Used when opening PDFs. An explicit launch or control mode takes precedence for the session."))
+            .small()
+            .color(t.text_muted),
+    );
+    ui.add_space(8.0);
     // Identity: the author of new comments (Acrobat: Preferences ▸ Identity).
     ui.label(egui::RichText::new(app.language.tr("Identity")).font(theme::semibold(13.0)));
     ui.horizontal(|ui| {
@@ -251,7 +266,7 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
             app.session.set_javascript(on);
         }
         ui.label(
-            egui::RichText::new("Scripts run in a sandbox without file or network access. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.")
+            egui::RichText::new("Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.")
                 .small()
                 .color(t.text_muted),
         );

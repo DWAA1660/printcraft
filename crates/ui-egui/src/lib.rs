@@ -40,6 +40,7 @@ pub use create_ui::Clip;
 pub use link_ui::LinkDraft;
 pub use optimize_ui::{OptimizeDraft, OptimizeTab};
 pub use sign_ui::{DigitalIdEntry, SignDraft, SignStep};
+mod autoscroll;
 mod dialogs;
 mod edit_text_ui;
 mod editing;
@@ -52,6 +53,8 @@ pub mod icons;
 mod pageboxes;
 mod palette;
 mod panels;
+#[cfg(not(target_arch = "wasm32"))]
+mod pickers;
 pub mod prepare;
 mod print_ui;
 pub use print_ui::{Handling as PrintHandling, PrintDraft, Which as PrintWhich};
@@ -76,13 +79,28 @@ pub use recovery::{AUTOSAVE_SECS, RecoveryMeta, RecoveryStore};
 use theme::ThemeKind;
 
 /// Top-level workspace modes (Acrobat's mode bar).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Mode {
+    #[serde(rename = "all")]
     AllTools,
     Read,
     Edit,
     Convert,
     Sign,
+}
+
+impl Mode {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "all" => Some(Self::AllTools),
+            "read" => Some(Self::Read),
+            "edit" => Some(Self::Edit),
+            "convert" => Some(Self::Convert),
+            "sign" => Some(Self::Sign),
+            _ => None,
+        }
+    }
 }
 
 /// What the left panel shows.
@@ -288,6 +306,10 @@ pub struct PdfCraftApp {
     /// `None` shows the Home tab.
     pub active: Option<usize>,
     pub mode: Mode,
+    /// Workspace used for newly opened PDFs; independent of PDF Initial View metadata.
+    pub default_mode: Mode,
+    /// Explicit CLI/control mode lasts for this session and is never persisted.
+    mode_override: Option<Mode>,
     pub left: LeftPanel,
     pub left_open: bool,
     pub right: Option<RightPanel>,
@@ -325,6 +347,12 @@ pub struct PdfCraftApp {
     pub view_draft: Option<(DocId, pdfcraft_engine::InitialView)>,
     /// Files picked asynchronously for combine / insert (web).
     pub requests: files::Requests,
+    /// Native file pickers in flight (they never block the frame; see `pickers`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pickers: pickers::Pickers,
+    /// Pick these files instead of showing a picker (tests and automation).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub pick_override: Option<Vec<String>>,
     /// Write exported files (split) here instead of asking (tests and automation).
     pub export_dir_override: Option<String>,
     /// Split dialog settings.
@@ -425,6 +453,7 @@ pub struct PdfCraftApp {
     /// The Create signature / initials dialog, and its typed preview.
     pub signature_draft: fill_sign::SigDraft,
     pub(crate) signature_preview: Option<(String, egui::TextureHandle)>,
+    pub(crate) saved_signature_previews: [Option<(String, egui::TextureHandle)>; 2],
     /// The Comment Properties dialog's state.
     pub comment_props: Option<comment_props::PropsDraft>,
     pub field_props: Option<prepare::FieldDraft>,
@@ -440,6 +469,36 @@ pub struct PdfCraftApp {
     pub replace_draft: Option<files::ReplaceDraft>,
     /// The last web link the app asked the system to open (tests and automation).
     pub last_opened_url: Option<String>,
+    /// A document asked to open this address; the user hasn't answered yet (#90, #91).
+    pub pending_link: Option<PendingLink>,
+}
+
+/// Where in a document a request to open an address came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkOrigin {
+    /// A link on the page.
+    Link,
+    /// A push button's URI action.
+    Button,
+    /// A script (`app.launchURL`).
+    Script,
+}
+
+impl LinkOrigin {
+    fn noun(self) -> &'static str {
+        match self {
+            Self::Link => "A link",
+            Self::Button => "A button",
+            Self::Script => "A script",
+        }
+    }
+}
+
+/// An address a document asked to open, waiting for the user to allow or cancel it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingLink {
+    pub url: String,
+    pub origin: LinkOrigin,
 }
 
 /// Settings for the Number pages dialog.
@@ -465,6 +524,8 @@ impl PdfCraftApp {
             views: Vec::new(),
             active: None,
             mode: Mode::AllTools,
+            default_mode: Mode::AllTools,
+            mode_override: None,
             left: LeftPanel::AllTools,
             left_open: true,
             right: None,
@@ -491,6 +552,10 @@ impl PdfCraftApp {
             props_draft: None,
             view_draft: None,
             requests: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            pickers: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            pick_override: None,
             export_dir_override: None,
             split_draft: SplitDraft::default(),
             extract_draft: ExtractDraft::default(),
@@ -543,6 +608,7 @@ impl PdfCraftApp {
             control: None,
             bookmark_rename: None,
             last_opened_url: None,
+            pending_link: None,
             protect_draft: Default::default(),
             boxes_draft: Default::default(),
             marks_draft: Default::default(),
@@ -552,6 +618,7 @@ impl PdfCraftApp {
             initials: None,
             signature_draft: Default::default(),
             signature_preview: None,
+            saved_signature_previews: [None, None],
             comment_props: None,
             field_props: None,
             redact_prefs: RedactPrefs::default(),
@@ -646,6 +713,16 @@ impl PdfCraftApp {
         self.views.push(DocView::new(id, &doc.info));
         self.active = Some(self.views.len() - 1);
         self.apply_initial_view(self.views.len() - 1, &initial);
+        if let Some(mode) = self.mode_override {
+            // Explicit mode options do not reset independent --tool / --left choices.
+            self.mode = mode;
+        } else if self.mode != self.default_mode {
+            // Switch workspace like the mode bar, but a left panel the user (or `--left closed`)
+            // closed stays closed, and an unchanged mode keeps the tool panel the user chose.
+            let left_open = self.left_open;
+            self.select_mode(self.default_mode);
+            self.left_open = left_open;
+        }
         if let Some(p) = path {
             self.recent.retain(|r| r.path != p);
             self.recent.insert(0, RecentFile { name: name.to_string(), path: p, pages, size });
@@ -751,11 +828,11 @@ impl PdfCraftApp {
 
     pub fn open_dialog(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(p) =
-            rfd::FileDialog::new().add_filter("PDF", &["pdf"]).add_filter("Images and text (converted to PDF)", &create_ui::CONVERTIBLE).pick_file()
-        {
-            self.open_path(&p.to_string_lossy());
-        }
+        self.pick(
+            pickers::PickFor::Open,
+            rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).add_filter("Images and text (converted to PDF)", &create_ui::CONVERTIBLE),
+            false,
+        );
         // Browsers pick files asynchronously; the bytes arrive through `inbox`.
         #[cfg(target_arch = "wasm32")]
         {
@@ -799,12 +876,40 @@ impl PdfCraftApp {
         client
     }
 
-    /// Open a web link in the system browser (a new tab on the web).
+    /// Open a web link in the system browser (a new tab on the web). Only for PdfCraft's own
+    /// links; an address that came from a document goes through [`Self::request_document_url`].
     pub fn open_url(&mut self, url: &str) {
         if let Some(ctx) = &self.ctx {
             ctx.open_url(egui::OpenUrl::new_tab(url));
         }
         self.last_opened_url = Some(url.to_string());
+    }
+
+    /// A document asks to open `url` (a link, a button's URI action or `app.launchURL`). Web and
+    /// email addresses wait for the user to allow them; anything else is refused with a notice
+    /// (#90, #91). While one request is waiting, further ones are dropped, so a script can't
+    /// queue up a stream of dialogs.
+    pub fn request_document_url(&mut self, url: &str, origin: LinkOrigin) {
+        match pdfcraft_engine::links::document_url(url) {
+            Ok(url) => {
+                if self.pending_link.is_none() {
+                    self.pending_link = Some(PendingLink { url, origin });
+                }
+            }
+            Err(e) => self.notify(format!(
+                "{} in this document tried to open an address PdfCraft won't open: {e}. Only web (http, https) and email (mailto) links open from documents.",
+                origin.noun()
+            )),
+        }
+    }
+
+    /// The user's answer to [`Self::pending_link`]: open it, or drop it.
+    pub fn resolve_pending_link(&mut self, open: bool) {
+        if let Some(p) = self.pending_link.take()
+            && open
+        {
+            self.open_url(&p.url);
+        }
     }
 
     pub fn notify(&mut self, msg: impl Into<String>) {
@@ -836,12 +941,25 @@ impl PdfCraftApp {
         self.notify(format!("`{command}` {when}"));
     }
 
+    /// Select the workspace and its matching tool panel, just like the mode bar.
+    pub(crate) fn select_mode(&mut self, mode: Mode) {
+        self.mode = mode;
+        self.left_open = true;
+        self.left = match mode {
+            Mode::Edit => LeftPanel::Tool("edit"),
+            Mode::Convert => LeftPanel::Tool("export"),
+            Mode::Sign => LeftPanel::Tool("fill_sign"),
+            _ => LeftPanel::AllTools,
+        };
+    }
+
     /// Serialize the user's persistent state (recent files, theme). Local only.
     pub fn persist(&self) -> String {
         let trusted: Vec<String> = self.session.trusted_certificates().iter().map(pdfcraft_engine::sign::x509::to_pem).collect();
         serde_json::json!({
             "recent": self.recent,
             "theme": self.theme,
+            "default_mode": self.default_mode,
             "language": self.language,
             "author": self.comment_prefs.author,
             // Drawn signatures keep their original form (older settings read the same).
@@ -869,6 +987,9 @@ impl PdfCraftApp {
         }
         if let Ok(t) = serde_json::from_value::<ThemeKind>(v["theme"].clone()) {
             self.theme = t;
+        }
+        if let Ok(mode) = serde_json::from_value::<Mode>(v["default_mode"].clone()) {
+            self.default_mode = mode;
         }
         if let Ok(language) = serde_json::from_value::<i18n::Language>(v["language"].clone()) {
             self.language = language;
@@ -938,13 +1059,12 @@ impl PdfCraftApp {
                 }
             }
             ("mode", _) => {
-                self.mode = match value {
-                    "read" => Mode::Read,
-                    "edit" => Mode::Edit,
-                    "convert" => Mode::Convert,
-                    "sign" => Mode::Sign,
-                    _ => Mode::AllTools,
-                }
+                let mode = Mode::parse(value).unwrap_or(Mode::AllTools);
+                self.mode_override = Some(mode);
+                self.mode = mode;
+            }
+            ("default-mode", _) => {
+                self.default_mode = Mode::parse(value).ok_or("default-mode must be all, read, edit, convert or sign")?;
             }
             ("tool", _) => {
                 let g = pdfcraft_engine::catalog::group(value).ok_or_else(|| format!("unknown tool {value}"))?;
@@ -1111,11 +1231,25 @@ impl PdfCraftApp {
             }
             return;
         }
+        if let Some(view) = self.active.and_then(|i| self.views.get_mut(i))
+            && view.auto_scroll.escape(ctx)
+        {
+            return;
+        }
         self.registry_shortcuts(ctx);
         if self.full_screen && ctx.input(|i| i.key_pressed(Key::Escape)) {
             self.set_full_screen(ctx, false);
         }
         if let Some(i) = self.active {
+            // Select all belongs to the document or page grid, unless a text field or
+            // overlay owns the keyboard. Other canvas shortcuts keep their own handling.
+            if self.dialog.is_none()
+                && !self.palette_open
+                && !ctx.egui_wants_keyboard_input()
+                && ctx.input_mut(|input| input.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, Key::A)))
+            {
+                self.views[i].select_all();
+            }
             canvas::shortcuts(&mut self.views[i], ctx);
         }
     }
@@ -1177,11 +1311,21 @@ impl eframe::App for PdfCraftApp {
         self.autosave_tick(now);
         self.poll_updates();
         self.shortcuts(ctx);
+        // Scrolling is transient: never resume after changing tabs, opening a modal/palette,
+        // or returning to a window that lost focus.
+        let blocked = self.dialog.is_some() || self.close_request.is_some() || self.palette_open || !ctx.input(|i| i.focused);
+        for (index, view) in self.views.iter_mut().enumerate() {
+            if blocked || self.active != Some(index) {
+                view.auto_scroll.cancel();
+            }
+        }
         self.process_pending_edits();
         self.poll_export();
         self.poll_ocr();
         self.poll_action();
         self.process_file_requests();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.process_picked();
         // Pull finished renders into textures for every open document.
         for view in &mut self.views {
             if let Some(doc) = self.session.get(view.id) {
