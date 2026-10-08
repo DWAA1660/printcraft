@@ -304,37 +304,48 @@ pub fn normalize_base(s: &str) -> Option<String> {
     if s.is_empty() || s.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return None;
     }
-    let (scheme, rest) = match s.split_once("://") {
-        Some((scheme, rest)) => (scheme.to_ascii_lowercase(), rest),
-        None => ("http".to_string(), s),
+    let address = if s.contains("://") { s.to_owned() } else { format!("http://{s}") };
+    let mut base = local_url(&address)?;
+    if base.path() == "/" {
+        base.set_path("/eSCL");
+    }
+    Some(base.as_str().trim_end_matches('/').to_owned())
+}
+
+/// Numeric local addresses only: no DNS lookup/rebinding or proxy can widen this boundary.
+/// mDNS ids use the advertised numeric address and follow the same restriction.
+fn local_url(s: &str) -> Option<url::Url> {
+    let u = url::Url::parse(s).ok()?;
+    if !matches!(u.scheme(), "http" | "https")
+        || !u.username().is_empty()
+        || u.password().is_some()
+        || u.query().is_some()
+        || u.fragment().is_some()
+        || s.contains('\\')
+    {
+        return None;
+    }
+    let allowed = match u.host()? {
+        url::Host::Ipv4(ip) => ip.is_loopback() || ip.is_private() || ip.is_link_local(),
+        url::Host::Ipv6(ip) => match ip.to_ipv4_mapped() {
+            Some(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+            None => ip.is_loopback() || ip.is_unique_local() || ip.is_unicast_link_local(),
+        },
+        url::Host::Domain(_) => false,
     };
-    if scheme != "http" && scheme != "https" {
-        return None;
-    }
-    let (host, path) = rest.split_once('/').map_or((rest, ""), |(h, p)| (h, p));
-    if host.is_empty() || host.contains(['@', '?', '#']) {
-        return None;
-    }
-    let path = path.trim_matches('/');
-    let path = if path.is_empty() { "eSCL" } else { path };
-    Some(format!("{scheme}://{host}/{path}"))
+    allowed.then_some(u)
 }
 
 /// The job URL from a `Location` header (absolute, or a path on the scanner's host).
 pub fn resolve_location(base: &str, location: &str) -> Option<String> {
+    let base = local_url(base)?;
     let location = location.trim();
-    if location.starts_with("http://") || location.starts_with("https://") {
-        return Some(location.trim_end_matches('/').to_string());
+    if location.is_empty() || location.chars().any(|c| c.is_control()) {
+        return None;
     }
-    let (scheme, rest) = base.split_once("://")?;
-    let host = rest.split('/').next()?;
-    if location.starts_with('/') {
-        Some(format!("{scheme}://{host}{}", location.trim_end_matches('/')))
-    } else if location.is_empty() {
-        None
-    } else {
-        Some(format!("{}/{}", base.trim_end_matches('/'), location.trim_end_matches('/')))
-    }
+    let root = url::Url::parse(&format!("{}/", base.as_str().trim_end_matches('/'))).ok()?;
+    let job = local_url(root.join(location).ok()?.as_str())?;
+    (job.origin() == base.origin()).then(|| job.as_str().trim_end_matches('/').to_owned())
 }
 
 /// The scanner's name for `escl:` ids found by discovery: `ty`, else the instance name.
@@ -376,6 +387,8 @@ mod net {
             .timeout_global(Some(timeout))
             .timeout_connect(Some(Duration::from_secs(5)))
             .http_status_as_error(false)
+            .max_redirects(0)
+            .proxy(None)
             .user_agent(concat!("PdfCraft/", env!("CARGO_PKG_VERSION")))
             .build()
             .new_agent()
@@ -389,6 +402,9 @@ mod net {
         fn reply(r: Result<ureq::http::Response<ureq::Body>, ureq::Error>, limit: u64) -> Result<Reply, ScanError> {
             let mut r = r.map_err(|e| ScanError::NotFound(crate::tidy(&e.to_string())))?;
             let status = r.status().as_u16();
+            if (300..400).contains(&status) {
+                return Err(ScanError::Failed("scanner redirects are not allowed".into()));
+            }
             let location = r.headers().get("location").and_then(|v| v.to_str().ok()).map(str::to_string);
             let body = if (200..300).contains(&status) {
                 r.body_mut()
@@ -403,19 +419,24 @@ mod net {
         }
 
         pub fn get(&self, url: &str, limit: u64) -> Result<Reply, ScanError> {
+            local_url(url).ok_or_else(|| ScanError::Failed("use a loopback, link-local or private numeric scanner address".into()))?;
             Self::reply(self.quick.get(url).call(), limit)
         }
 
         pub fn get_page(&self, url: &str) -> Result<Reply, ScanError> {
+            local_url(url).ok_or_else(|| ScanError::Failed("invalid scanner page address".into()))?;
             Self::reply(self.slow.get(url).call(), crate::MAX_PAGE_BYTES)
         }
 
         pub fn post_xml(&self, url: &str, body: &str) -> Result<Reply, ScanError> {
+            local_url(url).ok_or_else(|| ScanError::Failed("invalid scanner job address".into()))?;
             Self::reply(self.quick.post(url).header("Content-Type", "text/xml").send(body), MAX_XML)
         }
 
         pub fn delete(&self, url: &str) {
-            let _ = self.quick.delete(url).call();
+            if local_url(url).is_some() {
+                let _ = self.quick.delete(url).call();
+            }
         }
     }
 }
@@ -547,6 +568,9 @@ pub fn discover(wait: Duration) -> Vec<Scanner> {
                     continue;
                 };
                 let id = id_for(ip, info.port, info.txt_properties.get_property_val_str("rs"));
+                if normalize_base(id.trim_start_matches(Backend::Escl.prefix())).is_none() {
+                    continue;
+                }
                 if !found.iter().any(|s| s.id == id) && found.len() < 256 {
                     found.push(Scanner {
                         id,

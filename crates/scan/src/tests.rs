@@ -91,17 +91,76 @@ fn escl_hostile_documents_are_errors_not_crashes() {
 #[test]
 fn escl_addresses_are_normalized() {
     assert_eq!(escl::normalize_base("192.168.1.20").as_deref(), Some("http://192.168.1.20/eSCL"));
-    assert_eq!(escl::normalize_base("http://printer.local:8080/eSCL/").as_deref(), Some("http://printer.local:8080/eSCL"));
+    assert_eq!(escl::normalize_base("http://printer.local:8080/eSCL/"), None);
     assert_eq!(escl::normalize_base("https://[fe80::1]/escl").as_deref(), Some("https://[fe80::1]/escl"));
     assert_eq!(escl::normalize_base("file:///etc/passwd"), None);
     assert_eq!(escl::normalize_base("user@host"), None);
     assert_eq!(escl::normalize_base(""), None);
     let base = "http://10.0.0.5:80/eSCL";
-    assert_eq!(escl::resolve_location(base, "/eSCL/ScanJobs/7/").as_deref(), Some("http://10.0.0.5:80/eSCL/ScanJobs/7"));
+    assert_eq!(escl::resolve_location(base, "/eSCL/ScanJobs/7/").as_deref(), Some("http://10.0.0.5/eSCL/ScanJobs/7"));
     assert_eq!(escl::resolve_location(base, "http://10.0.0.5/eSCL/ScanJobs/7").as_deref(), Some("http://10.0.0.5/eSCL/ScanJobs/7"));
-    assert_eq!(escl::resolve_location(base, "ScanJobs/7").as_deref(), Some("http://10.0.0.5:80/eSCL/ScanJobs/7"));
+    assert_eq!(escl::resolve_location(base, "ScanJobs/7").as_deref(), Some("http://10.0.0.5/eSCL/ScanJobs/7"));
     assert_eq!(escl::id_for("10.0.0.5".parse().unwrap(), 8080, Some("/eSCL")), "escl:http://10.0.0.5:8080/eSCL");
     assert_eq!(escl::scanner_name("HP OfficeJet [12AB]._uscan._tcp.local.", None), "HP OfficeJet [12AB]");
+}
+
+#[test]
+fn scanner_addresses_and_job_locations_cannot_escape_the_local_device() {
+    for address in ["127.0.0.1", "10.0.0.1", "172.16.0.1", "192.168.1.2", "169.254.1.2", "[::1]", "[fd00::1]", "[fe80::1]", "[::ffff:192.168.1.2]"] {
+        assert!(escl::normalize_base(address).is_some(), "{address}");
+    }
+    for address in [
+        "8.8.8.8",
+        "172.32.0.1",
+        "100.64.0.1",
+        "0.0.0.0",
+        "224.0.0.1",
+        "[2001:4860:4860::8888]",
+        "[::ffff:8.8.8.8]",
+        "example.com",
+        "localhost",
+        "http://127.0.0.1@8.8.8.8/",
+        "http://127.0.0.1/?host=8.8.8.8",
+        "http://127.0.0.1/#fragment",
+        "http://127.0.0.1\\@8.8.8.8/",
+    ] {
+        assert!(escl::normalize_base(address).is_none(), "{address}");
+    }
+    let base = "http://127.0.0.1:8080/eSCL";
+    for location in [
+        "http://8.8.8.8/job",
+        "http://127.0.0.2:8080/job",
+        "http://127.0.0.1:8081/job",
+        "https://127.0.0.1:8080/job",
+        "//8.8.8.8/job",
+        "//127.0.0.2:8080/job",
+        "http://user@127.0.0.1:8080/job",
+    ] {
+        assert!(escl::resolve_location(base, location).is_none(), "{location}");
+    }
+    assert_eq!(escl::resolve_location(base, "ScanJobs/1").as_deref(), Some("http://127.0.0.1:8080/eSCL/ScanJobs/1"));
+}
+
+#[test]
+fn scanner_http_redirects_are_refused_without_following_them() {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let worker = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        let mut bytes = [0; 4096];
+        assert!(stream.read(&mut bytes).unwrap() > 0);
+        stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: http://8.8.8.8/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+    });
+    let result = escl::capabilities(&format!("http://{address}/eSCL"));
+    worker.join().unwrap();
+    assert!(matches!(result, Err(ScanError::Failed(ref message)) if message.contains("redirects")), "{result:?}");
+}
+
+#[test]
+fn wia_is_unavailable_without_launching_a_helper() {
+    assert!(matches!(scan("wia:device", &ScanSettings::default(), &AtomicBool::new(false)), Err(ScanError::BackendMissing(_))));
 }
 
 fn png_size(bytes: &[u8]) -> (u32, u32) {
@@ -206,80 +265,4 @@ fn sane_test_device_scans_flatbed_and_feeder() {
         sane::scan_with(std::path::Path::new("/nonexistent/scanimage"), "test", &s, &no),
         Err(ScanError::BackendMissing("SANE (the scanimage program)"))
     );
-}
-
-// ── WIA ───────────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn wia_script_output_is_read() {
-    let list = "DEVICE\t{6BDD1FC6-810F-11D0-BEC7-08002BE2092F}\\0001\tEPSON Perfection V39\r\nDEVICE\t\t\r\nnoise\r\n";
-    let found = wia::parse_list(list);
-    assert_eq!(found.len(), 1);
-    assert_eq!(found[0].id, "wia:{6BDD1FC6-810F-11D0-BEC7-08002BE2092F}\\0001");
-    assert_eq!(found[0].name, "EPSON Perfection V39");
-    assert_eq!(
-        wia::parse_scan("DPI\t300\r\nPAGE\tC:\\t\\page0001.img\r\nPAGE\tC:\\t\\page0002.img\r\n").unwrap(),
-        (vec!["C:\\t\\page0001.img".to_string(), "C:\\t\\page0002.img".to_string()], Some(300))
-    );
-    assert_eq!(wia::parse_scan("ERROR 80210003 There are no documents in the document feeder.").unwrap_err(), ScanError::FeederEmpty);
-    assert_eq!(wia::parse_scan("ERROR 80210006 busy").unwrap_err(), ScanError::Busy);
-    assert!(matches!(wia::parse_scan("ERROR NOTFOUND the scanner is not connected").unwrap_err(), ScanError::NotFound(_)));
-    let s = ScanSettings { color: ColorMode::Gray, dpi: 200, source: Source::FeederDuplex, paper: Paper::Letter };
-    let a = wia::scan_args("dev", &s, "C:\\out");
-    assert!(
-        a.windows(2).any(|w| w == ["-Source", "duplex"])
-            && a.windows(2).any(|w| w == ["-Intent", "2"])
-            && a.windows(2).any(|w| w == ["-WidthIn", "8.500"]),
-        "{a:?}"
-    );
-    assert!(wia::SCRIPT.is_ascii(), "Windows PowerShell reads a BOM-less script as ANSI");
-}
-
-/// The real WIA script against a fake `WIA.DeviceManager`, when PowerShell 7 (`pwsh`) is
-/// installed: device listing, the arguments [`wia::scan_args`] passes, the properties the
-/// script sets, the feeder loop and the errors it reports.
-#[test]
-fn wia_script_drives_a_fake_device_manager() {
-    if std::process::Command::new("pwsh").arg("-Version").output().is_err() {
-        eprintln!("skipping: pwsh is not installed");
-        return;
-    }
-    let dir = std::env::temp_dir().join(format!("pdfcraft-wia-test-{}", std::process::id()));
-    let out = dir.join("out");
-    std::fs::create_dir_all(&out).unwrap();
-    let (script, mock) = (dir.join("wia.ps1"), dir.join("mock.ps1"));
-    std::fs::write(&script, wia::SCRIPT).unwrap();
-    std::fs::write(&mock, include_str!("wia_mock.ps1")).unwrap();
-    let run = |extra: &[&str], args: &[String]| {
-        let _ = std::fs::remove_dir_all(&out);
-        std::fs::create_dir_all(&out).unwrap();
-        let o = std::process::Command::new("pwsh")
-            .args(["-NoProfile", "-NonInteractive", "-File"])
-            .arg(&mock)
-            .arg("-Script")
-            .arg(&script)
-            .args(extra)
-            .args(args)
-            .output()
-            .unwrap();
-        String::from_utf8_lossy(&o.stdout).into_owned()
-    };
-    let listed = wia::parse_list(&run(&[], &["-Mode".into(), "list".into()]));
-    assert_eq!(listed.len(), 1, "the camera is not a scanner");
-    assert_eq!((listed[0].id.as_str(), listed[0].name.as_str()), ("wia:{6BDD}\\0001", "Fake WIA Scanner"));
-    let dev = "{6BDD}\\0001";
-    let gray = ScanSettings { color: ColorMode::Gray, dpi: 200, source: Source::Feeder, paper: Paper::Letter };
-    let o = run(&["-Sheets", "3"], &wia::scan_args(dev, &gray, &out.to_string_lossy()));
-    let (pages, dpi) = wia::parse_scan(&o).unwrap();
-    assert_eq!((pages.len(), dpi), (3, Some(200)), "{o}");
-    assert!(pages.iter().all(|p| std::path::Path::new(p).starts_with(&out)));
-    assert!(o.contains("6146=2 6147=200 6148=200 6151=1700 6152=2200"), "intent, resolution and Letter extent: {o}");
-    let duplex = ScanSettings { source: Source::FeederDuplex, ..gray };
-    assert_eq!(wia::parse_scan(&run(&["-Sheets", "0"], &wia::scan_args(dev, &duplex, &out.to_string_lossy()))), Err(ScanError::FeederEmpty));
-    let flat = ScanSettings { source: Source::Flatbed, color: ColorMode::BlackWhite, ..gray };
-    assert_eq!(wia::parse_scan(&run(&["-Fail", "x"], &wia::scan_args(dev, &flat, &out.to_string_lossy()))), Err(ScanError::Busy));
-    let (pages, _) = wia::parse_scan(&run(&["-Sheets", "5"], &wia::scan_args(dev, &flat, &out.to_string_lossy()))).unwrap();
-    assert_eq!(pages.len(), 1, "the flatbed scans one page");
-    assert!(matches!(wia::parse_scan(&run(&[], &wia::scan_args("other", &flat, &out.to_string_lossy()))), Err(ScanError::NotFound(_))));
-    let _ = std::fs::remove_dir_all(&dir);
 }

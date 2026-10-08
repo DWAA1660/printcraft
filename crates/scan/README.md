@@ -17,10 +17,25 @@ A scanner's `id` names the backend that drives it:
 |---|---|---|---|
 | `escl:http://host:port/eSCL` | **eSCL** (AirScan / Mopria): HTTP + XML | all but the web build | mDNS `_uscan._tcp`, or typed: `escl:192.168.1.20` |
 | `sane:<device>` | **SANE** through the `scanimage` program | Linux, FreeBSD, other Unix | `scanimage -L` |
-| `wia:<device id>` | **WIA** through PowerShell's `WIA.DeviceManager` | Windows | the same script's `list` mode |
 
 No `unsafe` and no C bindings: eSCL is plain HTTP (`ureq`) and XML (`roxmltree`), mDNS is
-`mdns-sd`, and the other two drive a program the way the print spooler drives `lp`.
+`mdns-sd`, and SANE drives `scanimage`. Windows supports eSCL only; WIA is deferred until a
+suitable Rust binding exists, and no PowerShell scanner helper is launched.
+
+Typed addresses and mDNS results must use numeric loopback, link-local or private addresses
+(RFC 1918 / IPv6 ULA). Hostnames, public addresses, credentials, queries and fragments are
+refused. HTTP redirects are never followed, proxies are disabled, and scan-job `Location`
+headers must remain on the same origin (scheme, address and port). Numeric addresses avoid
+DNS rebinding; mDNS names are shown as labels, while connections use the advertised local IP.
+
+The automation `scanners` and `doc_create` tools advertise `openWorldHint: true`.
+`doc_create` with `from: "scanner"` requires `user_confirmed: true` only after explicit user
+consent; omitted or false consent is rejected before any scanner request. This is a caller
+attestation, not a way for the application to verify a human interaction.
+
+Network access is limited to the scanner workflow: local-address HTTP and mDNS discovery.
+The restrictions above implement the PR #359 review requirements; they do not authorize
+general outbound requests elsewhere in the app.
 
 - **Settings**: colour mode (black and white, gray, colour), resolution (the device's closest
   supported one is used), source (flatbed, document feeder, feeder both sides) and paper
@@ -40,5 +55,5 @@ No `unsafe` and no C bindings: eSCL is plain HTTP (`ureq`) and XML (`roxmltree`)
   feeder; the automation and UI tests scan from it.
 - SANE's `test` device (`sane-utils`) runs the real `scanimage` path, including the 10-sheet feeder
   (skipped when `scanimage` is missing).
-- The WIA script runs against a fake `WIA.DeviceManager` under PowerShell 7 (`pwsh`; skipped when
-  it is missing). It has not been run against a real Windows scanner.
+- Address/Location restrictions and redirect refusal are covered by loopback tests; automation
+  tests verify that missing consent sends no requests. No real scanner hardware was available.

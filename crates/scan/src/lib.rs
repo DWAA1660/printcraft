@@ -1,11 +1,12 @@
 //! pdfcraft-scan — find scanners and scan pages, for Create ▸ PDF from Scanner (issue #312).
 //! Layer L4: no UI, no PDF; the engine turns the scanned images into pages.
 //!
-//! Three backends, none of them needing `unsafe` or C bindings:
+//! Two backends, neither needing `unsafe` or C bindings:
 //! - **eSCL** ([`escl`]): the HTTP + XML protocol of network scanners (AirScan, Mopria), on
 //!   every platform. Scanners are found with mDNS (`_uscan._tcp`), or by their address.
 //! - **SANE** ([`sane`]): the `scanimage` program, on Linux, FreeBSD and other Unix systems.
-//! - **WIA** ([`wia`]): Windows Image Acquisition through PowerShell's `WIA.DeviceManager`.
+//!
+//! Windows currently supports eSCL only; WIA is deferred until a suitable Rust binding exists.
 //!
 //! A scanner's id names the backend that drives it: `escl:<base URL>`, `sane:<device>` or
 //! `wia:<device id>`. [`scanners`] lists what is reachable; [`scan`] scans with a
@@ -23,7 +24,6 @@ pub mod fake;
 pub mod sane;
 #[cfg(test)]
 mod tests;
-pub mod wia;
 
 /// Never more pages in one scan (a jammed feeder that keeps reporting paper stops here).
 pub const MAX_PAGES: usize = 500;
@@ -276,15 +276,14 @@ pub enum ScanError {
 }
 
 /// Every scanner the backends of this platform can reach: eSCL scanners announced on the
-/// local network within `wait`, plus SANE (Unix) or WIA (Windows) devices. Never fails: a
+/// local network within `wait`, plus SANE (Unix) devices. Never fails: a
 /// backend that is missing or errors contributes nothing.
 pub fn scanners(wait: Duration) -> Vec<Scanner> {
     let escl = std::thread::Builder::new().name("pdfcraft-scan-mdns".into()).spawn(move || escl::discover(wait)).ok();
     let mut found = Vec::new();
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     found.extend(sane::scanners());
-    #[cfg(windows)]
-    found.extend(wia::scanners());
+
     if let Some(h) = escl {
         found.extend(h.join().unwrap_or_default());
     }
@@ -305,8 +304,8 @@ pub fn scan(id: &str, settings: &ScanSettings, cancel: &AtomicBool) -> Result<Ve
     if let Some(dev) = id.strip_prefix(Backend::Sane.prefix()) {
         return sane::scan(dev, &settings, cancel);
     }
-    if let Some(dev) = id.strip_prefix(Backend::Wia.prefix()) {
-        return wia::scan(dev, &settings, cancel);
+    if id.starts_with(Backend::Wia.prefix()) {
+        return Err(ScanError::BackendMissing("WIA (use an eSCL network scanner on Windows)"));
     }
     Err(ScanError::UnknownId(id.to_string()))
 }

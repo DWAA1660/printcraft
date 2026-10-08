@@ -9,6 +9,8 @@ use crate::ToolError;
 
 #[derive(Clone, Debug)]
 pub struct ToolDef {
+    /// Interacts with the network or physical hardware outside the document workspace.
+    pub open_world: bool,
     pub name: &'static str,
     pub title: &'static str,
     pub description: &'static str,
@@ -75,6 +77,7 @@ fn schema(props: Value, required: &[&str]) -> Value {
 }
 
 struct T {
+    open_world: bool,
     name: &'static str,
     title: &'static str,
     description: &'static str,
@@ -84,10 +87,14 @@ struct T {
 }
 
 const fn t(name: &'static str, title: &'static str, description: &'static str) -> T {
-    T { name, title, description, read_only: false, destructive: false, command: None }
+    T { name, title, description, read_only: false, destructive: false, command: None, open_world: false }
 }
 
 impl T {
+    const fn open_world(mut self) -> Self {
+        self.open_world = true;
+        self
+    }
     const fn ro(mut self) -> Self {
         self.read_only = true;
         self
@@ -102,6 +109,7 @@ impl T {
     }
     fn with(self, input_schema: Value) -> ToolDef {
         ToolDef {
+            open_world: self.open_world,
             name: self.name,
             title: self.title,
             description: self.description,
@@ -194,6 +202,19 @@ pub fn tools() -> Vec<ToolDef> {
                     "passwords": { "type": "array", "items": { "type": ["string", "null"] } },
                     "out": save_out,
                     "open": open,
+                }),
+                &["paths"],
+            )),
+        t("doc_create_multiple", "Create PDF from multiple files", "Convert several files (PDFs, PNG/JPEG/JPEG 2000/TIFF/GIF/BMP images, .txt files) to PDF in one run. mode \"combine\" (default) joins them, in order, into one PDF with a bookmark per file; pages optionally chooses each file's pages, in step with paths (a range such as \"1-3, 6\" or null). mode \"separate\" writes one PDF per file into out_dir (files that are already PDFs are skipped; existing files are never overwritten) and reports each file's result.")
+            .cmd("create.multiple")
+            .with(schema(
+                json!({
+                    "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": pdfcraft_engine::MAX_CREATE_FILES },
+                    "mode": { "type": "string", "enum": ["combine", "separate"] },
+                    "pages": { "type": "array", "items": { "type": ["string", "null"] } },
+                    "out": save_out.clone(),
+                    "open": open.clone(),
+                    "out_dir": { "type": "string", "description": "Folder for mode \"separate\"." },
                 }),
                 &["paths"],
             )),
@@ -376,8 +397,9 @@ pub fn tools() -> Vec<ToolDef> {
             &["doc"],
         )),
         t("printers", "List printers", "The printers the system's print spooler knows (CUPS on macOS and Linux), with the default marked.").ro().with(schema(json!({}), &[])),
-        t("scanners", "List scanners", "The scanners this computer can use for doc_create from `scanner`: network scanners that announce themselves (eSCL / AirScan, found within `wait` seconds, default 3), plus SANE devices on Linux and macOS-style systems with `scanimage`, and WIA devices on Windows. Each has an `id` to pass as `scanner`. A network scanner that isn't announced can be used by address: `escl:192.168.1.20`.")
+        t("scanners", "List scanners", "The scanners this computer can use for doc_create from `scanner`: network scanners that announce themselves (eSCL / AirScan, found within `wait` seconds, default 3), plus SANE devices on Linux and macOS-style systems with `scanimage`; Windows currently supports eSCL only. Each has an `id` to pass as `scanner`. A network scanner that isn't announced can be used by address: `escl:192.168.1.20`.")
             .ro()
+            .open_world()
             .with(schema(json!({ "wait": { "type": "number", "minimum": 0, "maximum": 30, "description": "Seconds to wait for network scanners to announce themselves (default 3)." } }), &[])),
         t(
             "doc_print",
@@ -632,6 +654,8 @@ pub fn tools() -> Vec<ToolDef> {
             })),
             &["doc"],
         )),
+        t("comment_image_preview", "Preview image signature layers", "Return a PNG of the page without the selected image signature/initials (layer=background, default), or its embedded image with alpha (layer=image). Includes the displayed rectangle, document rotation and annotation opacity. Cache these layers for live placement/resizing; commit once with comment_edit. Does not change the document or undo history.")
+            .ro().with(schema(comment_ref(json!({ "layer": { "type": "string", "enum": ["background", "image"], "default": "background" }, "dpi": { "type": "number", "minimum": 1, "maximum": 600, "default": 96 } })), &["doc"])),
         t("comment_delete", "Delete a comment", "Delete a comment with its pop-up and replies. Undoable.").destructive().with(schema(comment_ref(json!({})), &["doc"])),
         t(
             "doc_protect",
@@ -914,12 +938,14 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_create",
             "Create a PDF",
-            "Create a new, unsaved document and return it like doc_open: `scanner` (scan one or more pages: see scanners, preset, source, paper, ocr), `blank` (pages, width, height in points; default 1 US Letter page), `images` (paths of PNG, JPEG, TIFF (every page), GIF or BMP files, one page each at the image's resolution) or `text` (a .txt path, or `text` directly). Save it with doc_save and a path.",
+            "Create a new, unsaved document and return it like doc_open: `scanner` (operates physical hardware: obtain explicit user consent and pass user_confirmed: true; see scanners, preset, source, paper, ocr), `blank` (pages, width, height in points; default 1 US Letter page), `images` (paths of PNG, JPEG, TIFF (every page), GIF or BMP files, one page each at the image's resolution) or `text` (a .txt path, or `text` directly). Save it with doc_save and a path.",
         )
+        .open_world()
         .with(schema(
             json!({
                 "from": { "type": "string", "enum": ["blank", "images", "text", "scanner"] },
-                "scanner": { "type": "string", "description": "For scanner: a scanner id from the scanners tool, or escl:<address> for a network scanner." },
+                "user_confirmed": { "type": "boolean", "description": "Required true for scanner, only after the user explicitly consents to operating the scanner. Does not apply to other sources." },
+                "scanner": { "type": "string", "description": "For scanner: a scanner id from the scanners tool, or escl:<numeric loopback, link-local or private IP address> for a network scanner. Hostnames and redirects are refused." },
                 "preset": { "type": "string", "enum": ["bw_document", "gray_document", "color_document", "color_photo"], "description": "For scanner: colour mode and resolution (default color_document: colour, 200 dpi). bw_document and gray_document are 300 dpi, color_photo 300 dpi." },
                 "color": { "type": "string", "enum": ["bw", "gray", "color"], "description": "For scanner: overrides the preset's colour mode." },
                 "scan_dpi": { "type": "integer", "minimum": 50, "maximum": 1200, "description": "For scanner: overrides the preset's resolution. The scanner's closest supported one is used." },

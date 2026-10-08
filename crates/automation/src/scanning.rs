@@ -54,6 +54,9 @@ impl Automation {
 
     /// Scan with the scanner named by `scanner`; the new document's name and bytes.
     pub(crate) fn scan_to_pdf(&self, a: &Args) -> Result<(String, std::sync::Arc<Vec<u8>>)> {
+        if a.opt_bool("user_confirmed")? != Some(true) {
+            return Err(bad("scanning operates physical hardware: obtain the user's explicit consent, then pass user_confirmed: true"));
+        }
         let id = a.opt_str("scanner")?.ok_or_else(|| bad("scanner is needed (an id from the scanners tool, or escl:<address>)"))?;
         let settings = self.scan_settings(a)?;
         let pages = scan::scan(id, &settings, &AtomicBool::new(false)).map_err(|e: ScanError| failed(e.to_string()))?;
