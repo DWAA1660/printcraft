@@ -376,6 +376,9 @@ pub fn tools() -> Vec<ToolDef> {
             &["doc"],
         )),
         t("printers", "List printers", "The printers the system's print spooler knows (CUPS on macOS and Linux), with the default marked.").ro().with(schema(json!({}), &[])),
+        t("scanners", "List scanners", "The scanners this computer can use for doc_create from `scanner`: network scanners that announce themselves (eSCL / AirScan, found within `wait` seconds, default 3), plus SANE devices on Linux and macOS-style systems with `scanimage`, and WIA devices on Windows. Each has an `id` to pass as `scanner`. A network scanner that isn't announced can be used by address: `escl:192.168.1.20`.")
+            .ro()
+            .with(schema(json!({ "wait": { "type": "number", "minimum": 0, "maximum": 30, "description": "Seconds to wait for network scanners to announce themselves (default 3)." } }), &[])),
         t(
             "doc_print",
             "Print",
@@ -911,11 +914,19 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_create",
             "Create a PDF",
-            "Create a new, unsaved document and return it like doc_open: `blank` (pages, width, height in points; default 1 US Letter page), `images` (paths of PNG, JPEG, TIFF (every page), GIF or BMP files, one page each at the image's resolution) or `text` (a .txt path, or `text` directly). Save it with doc_save and a path.",
+            "Create a new, unsaved document and return it like doc_open: `scanner` (scan one or more pages: see scanners, preset, source, paper, ocr), `blank` (pages, width, height in points; default 1 US Letter page), `images` (paths of PNG, JPEG, TIFF (every page), GIF or BMP files, one page each at the image's resolution) or `text` (a .txt path, or `text` directly). Save it with doc_save and a path.",
         )
         .with(schema(
             json!({
-                "from": { "type": "string", "enum": ["blank", "images", "text"] },
+                "from": { "type": "string", "enum": ["blank", "images", "text", "scanner"] },
+                "scanner": { "type": "string", "description": "For scanner: a scanner id from the scanners tool, or escl:<address> for a network scanner." },
+                "preset": { "type": "string", "enum": ["bw_document", "gray_document", "color_document", "color_photo"], "description": "For scanner: colour mode and resolution (default color_document: colour, 200 dpi). bw_document and gray_document are 300 dpi, color_photo 300 dpi." },
+                "color": { "type": "string", "enum": ["bw", "gray", "color"], "description": "For scanner: overrides the preset's colour mode." },
+                "scan_dpi": { "type": "integer", "minimum": 50, "maximum": 1200, "description": "For scanner: overrides the preset's resolution. The scanner's closest supported one is used." },
+                "source": { "type": "string", "enum": ["flatbed", "feeder", "duplex"], "description": "For scanner: flatbed (one page), the document feeder (every sheet in it), or the feeder scanning both sides. Default flatbed." },
+                "paper": { "type": "string", "enum": ["letter", "legal", "a4", "a5", "full"], "description": "For scanner: the area to scan (default letter; full is the scanner's whole bed)." },
+                "ocr": { "type": "boolean", "description": "For scanner: run text recognition on the scanned pages so the PDF is searchable (needs the OCR models: ocr_status)." },
+                "language": { "type": "string", "description": "For scanner with ocr: the OCR language code (default en)." },
                 "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
                 "dpi": { "type": "number", "minimum": 1, "maximum": 1200, "description": "For images: override the embedded resolution without resampling. 72 gives one point per pixel; omit to use each image's resolution (72 when absent)." },
                 "text": { "type": "string" },

@@ -53,6 +53,7 @@ const PICKERS: &[&str] = &[
     "create.images",
     "page.replace",
     "create.clipboard",
+    "create.scanner",
     "a11y.report",
     "ocr.recognize_batch",
     "form.merge_data",
