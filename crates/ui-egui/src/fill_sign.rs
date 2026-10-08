@@ -1,11 +1,11 @@
 //! Fill & Sign (Acrobat's Fill & Sign tool, execution plan M5.7): type text onto the page, place
 //! ✓ ✕ ● ─ marks and today's date, and sign with a drawn signature. Everything is an annotation
-//! (typewriter text, PrintCraft-drawn stamps, ink), so it can be moved, deleted and undone like
+//! (typewriter text, PdfCraft-drawn stamps, ink), so it can be moved, deleted and undone like
 //! any comment.
 
 use egui::{Color32, CornerRadius, Pos2, Sense, Stroke, pos2, vec2};
-use printcraft_engine::{Edit, FillMark, NewAnnotation, Shape, Style};
-use printcraft_render::DocInfo;
+use pdfcraft_engine::{Edit, FillMark, NewAnnotation, Shape, Style};
+use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
 use crate::theme::Tokens;
@@ -65,7 +65,7 @@ impl SigDraft {
             self.strokes.iter().any(|s| s.len() > 1)
         } else {
             !self.text.trim().is_empty()
-                && self.text.chars().take(printcraft_engine::MAX_SIGNATURE_CHARS + 1).count() <= printcraft_engine::MAX_SIGNATURE_CHARS
+                && self.text.chars().take(pdfcraft_engine::MAX_SIGNATURE_CHARS + 1).count() <= pdfcraft_engine::MAX_SIGNATURE_CHARS
         }
     }
 
@@ -176,7 +176,7 @@ pub fn signature_at(page: usize, at: [f64; 2], strokes: &[Vec<[f32; 2]>], author
 
 /// Place typed text in the script font with its left edge at `at`, `height` points tall.
 pub fn typed_signature_at(page: usize, at: [f64; 2], text: &str, height: f64, author: &str) -> Option<Edit> {
-    printcraft_engine::typed_signature_shape(at, text, height).map(|shape| new(page, shape, String::new(), author))
+    pdfcraft_engine::typed_signature_shape(at, text, height).map(|shape| new(page, shape, String::new(), author))
 }
 
 /// Place a saved signature or initials.
@@ -184,7 +184,7 @@ pub fn place(page: usize, at: [f64; 2], sig: &SavedSig, initials: bool, author: 
     match sig {
         SavedSig::Drawn(strokes) => signature_at(page, at, strokes, author),
         SavedSig::Typed(text) => {
-            let [left, bottom, right, top] = printcraft_engine::script_outline(text).bounds();
+            let [left, bottom, right, top] = pdfcraft_engine::script_outline(text).bounds();
             let height = if initials { 24.0_f64 } else { 32.0_f64 };
             // Keep long names within the same placement width as drawn signatures.
             let height = height.min(150.0 * (top - bottom).max(0.1) / (right - left).max(0.01));
@@ -195,7 +195,7 @@ pub fn place(page: usize, at: [f64; 2], sig: &SavedSig, initials: bool, author: 
 
 /// The text in the script font as a picture (`w`×`h` px, black on transparent), for previews.
 pub(crate) fn script_preview(text: &str, w: usize, h: usize) -> egui::ColorImage {
-    let o = printcraft_engine::script_outline(text);
+    let o = pdfcraft_engine::script_outline(text);
     let mut img = egui::ColorImage::filled([w, h], Color32::TRANSPARENT);
     let [left, bottom, right, top] = o.bounds();
     let span = (top - bottom).max(0.1);
@@ -234,7 +234,7 @@ pub(crate) fn script_preview(text: &str, w: usize, h: usize) -> egui::ColorImage
 }
 
 /// Saved previews and add/remove controls, shared by the left panel and quick-tool picker.
-pub(crate) fn signature_entries(ui: &mut egui::Ui, app: &mut crate::PrintCraftApp, t: &Tokens) -> Option<&'static str> {
+pub(crate) fn signature_entries(ui: &mut egui::Ui, app: &mut crate::PdfCraftApp, t: &Tokens) -> Option<&'static str> {
     ui.set_width(ui.available_width().clamp(240.0, 248.0));
     let mut command = None;
     for (i, (saved, what, use_id, change_id, remove_id)) in [
@@ -437,7 +437,7 @@ pub(crate) fn signature_pad(ui: &mut egui::Ui, t: &Tokens, d: &mut SigDraft, pre
         let l = ui.label(egui::RichText::new(format!("Type your {what}.")).color(t.text_muted));
         ui.add(
             egui::TextEdit::singleline(&mut d.text)
-                .char_limit(printcraft_engine::MAX_SIGNATURE_CHARS)
+                .char_limit(pdfcraft_engine::MAX_SIGNATURE_CHARS)
                 .desired_width(460.0)
                 .hint_text(if d.initials { "Initials" } else { "Your name" }),
         )

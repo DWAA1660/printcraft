@@ -3,8 +3,8 @@
 use egui::{Pos2, pos2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use printcraft_ui_egui::fill_sign::{FillTool, SavedSig};
-use printcraft_ui_egui::{Dialog, PrintCraftApp, QuickTool};
+use pdfcraft_ui_egui::fill_sign::{FillTool, SavedSig};
+use pdfcraft_ui_egui::{Dialog, PdfCraftApp, QuickTool};
 
 const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -13,9 +13,9 @@ const FIXTURE: &[u8] = b"%PDF-1.7
 trailer << /Root 1 0 R >>
 %%EOF";
 
-fn harness() -> Harness<'static, PrintCraftApp> {
+fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         app.open_bytes("form.pdf", None, FIXTURE.to_vec()).unwrap();
         app.set_option("left", "closed").unwrap();
         app.set_option("zoom", "150").unwrap();
@@ -26,12 +26,12 @@ fn harness() -> Harness<'static, PrintCraftApp> {
     h
 }
 
-fn at(h: &Harness<'static, PrintCraftApp>, x: f32, y: f32) -> Pos2 {
+fn at(h: &Harness<'static, PdfCraftApp>, x: f32, y: f32) -> Pos2 {
     let r = h.state().views[0].page_screen_rect(0).expect("on screen");
     pos2(r.left() + x / 300.0 * r.width(), r.top() + (400.0 - y) / 400.0 * r.height())
 }
 
-fn click(h: &mut Harness<'static, PrintCraftApp>, x: f32, y: f32) {
+fn click(h: &mut Harness<'static, PdfCraftApp>, x: f32, y: f32) {
     let p = at(h, x, y);
     h.hover_at(p);
     h.run_steps(1);
@@ -41,7 +41,7 @@ fn click(h: &mut Harness<'static, PrintCraftApp>, x: f32, y: f32) {
     h.run_steps(3);
 }
 
-fn items(h: &Harness<'static, PrintCraftApp>) -> Vec<(String, Option<String>)> {
+fn items(h: &Harness<'static, PdfCraftApp>) -> Vec<(String, Option<String>)> {
     let s = h.state();
     let mut v: Vec<_> = s.session.get(s.views[0].id).unwrap().info.annotations.iter().map(|a| (a.subtype.clone(), a.contents.clone())).collect();
     v.sort();
@@ -97,7 +97,7 @@ fn signing_draws_a_signature_once_and_places_it() {
     assert!(items(&h).iter().any(|(t, _)| t == "Ink"));
     // The signature is remembered (persisted with the app's settings).
     let saved = h.state().persist();
-    let mut again = PrintCraftApp::new();
+    let mut again = PdfCraftApp::new();
     again.restore(&saved);
     assert!(again.signature.is_some());
 }
@@ -113,7 +113,7 @@ fn typed_signatures_and_initials() {
     assert_eq!(h.state().signature_draft.text, "Grace Hopper");
     h.get_by_label("Apply").click();
     h.run_steps(3);
-    assert_eq!(h.state().signature, Some(printcraft_ui_egui::fill_sign::SavedSig::Typed("Grace Hopper".into())));
+    assert_eq!(h.state().signature, Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("Grace Hopper".into())));
     click(&mut h, 60.0, 100.0);
     assert!(items(&h).iter().any(|(t, _)| t == "Stamp"), "typed signatures are filled outlines");
     // Initials: their own pad (GH), then placed.
@@ -127,10 +127,10 @@ fn typed_signatures_and_initials() {
     assert_eq!(items(&h).iter().filter(|(t, _)| t == "Stamp").count(), 2);
     // Both are remembered.
     let saved = h.state().persist();
-    let mut again = PrintCraftApp::new();
+    let mut again = PdfCraftApp::new();
     again.restore(&saved);
     assert_eq!(again.signature, h.state().signature);
-    assert_eq!(again.initials, Some(printcraft_ui_egui::fill_sign::SavedSig::Typed("GH".into())));
+    assert_eq!(again.initials, Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("GH".into())));
 }
 
 #[test]
@@ -177,7 +177,7 @@ fn changing_saved_signatures_and_initials_preserves_placed_marks() {
     assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Initials));
     click(&mut h, 40.0, 100.0);
     assert_eq!(items(&h).len(), 3);
-    let mut again = PrintCraftApp::new();
+    let mut again = PdfCraftApp::new();
     again.restore(&h.state().persist());
     assert_eq!(again.signature, Some(SavedSig::Typed("Grace Hopper".into())));
     assert_eq!(again.initials, Some(SavedSig::Typed("GH".into())));
@@ -222,7 +222,7 @@ fn saved_signature_cards_remove_and_add_without_changing_the_document() {
     h.state_mut().execute("sign.fill.signature");
     click(&mut h, 40.0, 300.0);
     let original = format!("{:?}", h.state().session.get(h.state().views[0].id).unwrap().info.annotations);
-    h.state_mut().left = printcraft_ui_egui::LeftPanel::Tool("fill_sign");
+    h.state_mut().left = pdfcraft_ui_egui::LeftPanel::Tool("fill_sign");
     h.state_mut().left_open = true;
     h.run_steps(3);
     h.get_by_label("Use signature").click();
@@ -232,7 +232,7 @@ fn saved_signature_cards_remove_and_add_without_changing_the_document() {
     h.run_steps(3);
     assert_eq!(h.state().signature, None);
     assert_eq!(h.state().initials, Some(SavedSig::Typed("AL".into())));
-    let mut again = PrintCraftApp::new();
+    let mut again = PdfCraftApp::new();
     again.restore(&h.state().persist());
     assert_eq!(again.signature, None, "removal survives restart");
     h.get_by_label("Add signature").click();
@@ -256,12 +256,12 @@ fn saved_signature_cards_remove_and_add_without_changing_the_document() {
 fn long_typed_names_fit_the_placed_signature_and_keep_every_outline() {
     let text = "Alexandria Catherine Elizabeth Montgomery-Wellington";
     let sig = SavedSig::Typed(text.into());
-    let printcraft_engine::Edit::AddAnnotation(a) = printcraft_ui_egui::fill_sign::place(0, [40.0, 200.0], &sig, false, "").unwrap() else {
+    let pdfcraft_engine::Edit::AddAnnotation(a) = pdfcraft_ui_egui::fill_sign::place(0, [40.0, 200.0], &sig, false, "").unwrap() else {
         panic!("expected annotation");
     };
-    let printcraft_engine::Shape::TypedSignature { rect, contours } = a.shape else { panic!("expected typed signature") };
+    let pdfcraft_engine::Shape::TypedSignature { rect, contours } = a.shape else { panic!("expected typed signature") };
     assert!((rect[2] - rect[0] - 150.0).abs() < 0.001, "long names shrink to fit: {rect:?}");
-    assert_eq!(contours.len(), printcraft_engine::script_outline(text).contours.len());
+    assert_eq!(contours.len(), pdfcraft_engine::script_outline(text).contours.len());
     assert!(contours.iter().flatten().all(|p| p.iter().all(|v| (0.0..=1.0).contains(v))), "all ink stays inside the appearance bounds");
     let mut h = harness();
     h.state_mut().signature = Some(sig.clone());
