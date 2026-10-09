@@ -21,6 +21,27 @@
 	Name on new comments	新註解的作者名稱
 	Open…	開啟…
 	Open Recent	開啟最近的檔案
+	Clear Recent Files	清除最近的檔案
+	Remove from Recent	從最近的檔案中移除
+	Remove {name} from Recent	從最近的檔案中移除{name}
+	Pin folder to Home…	將資料夾釘選到首頁…
+	Folders	資料夾
+	Pin a folder…	釘選資料夾…
+	Pin a folder to Home	將資料夾釘選到首頁
+	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	釘選資料夾後，即可在此列出其中最新的 PDF，例如掃描器或同步雲端硬碟儲存檔案的位置。
+	Unpin	取消釘選
+	Unpin {folder}	取消釘選 {folder}
+	Looking for PDFs…	正在尋找 PDF…
+	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	此資料夾目前無法使用。它可能已被移動，或其所在磁碟或雲端同步處於離線狀態。
+	No PDFs in this folder yet	此資料夾中還沒有 PDF
+	Show less	顯示較少
+	Show {n} more	再顯示 {n} 個
+	The newest {n} of {total} PDFs	共 {total} 個 PDF 中最新的 {n} 個
+	Pinned folders need the desktop app	釘選資料夾需要桌面版應用程式
+	Choose a folder on this computer to pin	請選擇這部電腦上要釘選的資料夾
+	{folder} is already pinned to Home	{folder} 已釘選到首頁
+	You can pin up to {n} folders. Unpin one first.	最多可釘選 {n} 個資料夾。請先取消釘選一個。
+	Pinned {folder} to Home	已將 {folder} 釘選到首頁
 	No recent files	沒有最近的檔案
 	Open	開啟
 	Open file	開啟檔案
@@ -233,6 +254,7 @@
 	Bottom:	下：
 	Width:	寬：
 	Height:	高：
+	Rotation:	旋轉：
 	Points from the page's bottom-left corner.	從頁面左下角算起的點數。
 	Alignment:	對齊：
 	Default Value:	預設值：
@@ -1949,6 +1971,25 @@
 	None of those files can be made into a PDF; use PDFs, images or .txt files	這些檔案都無法轉換為 PDF；請使用 PDF、圖片或 .txt 檔案
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	選擇 PNG 或 JPEG 圖像（最大 4 MiB）。透明度會保留。
 	Couldn't import the signature image: {e}	無法匯入簽名圖像：{e}
+	Go to page…	轉到頁面…
+	Reopen the files that were open when PdfCraft last closed	重新開啟上次關閉 PdfCraft 時開啟的檔案
+	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	標準字型無法顯示「{c}」（{code}）。目前只能新增西歐字元作為文字。
+	Larger pages	放大頁面
+	Smaller pages	縮小頁面
+	Reset page size	重設頁面大小
+	Date format	日期格式
+	Fill & Sign dates	填寫與簽署的日期
+	Pattern	模式
+	Today: {date}	今天：{date}
+	yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is.	yyyy 或 yy 年 · m 或 mm 月 · mmm 或 mmmm 月份名稱 · d 或 dd 日 · ddd 或 dddd 星期。H、h、M、s 和 t 是時間字母，不能單獨使用：在字母前加上 {escape} 即可照原樣顯示。
+	Same as interface ({language})	與介面相同（{language}）
+	{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.	暫時無法將 {chars} 寫入 PDF：填寫與簽署的文字僅支援西歐字元。請選擇數字格式，例如 dd.mm.yyyy。
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	開啟印表機驅動程式的喜好設定。這些設定會儲存並用於此電腦的所有列印；此處選擇的份數、雙面、灰階和紙張仍然適用。
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	此次列印的印表機驅動程式專屬設定：紙匣、紙張類型、裝訂整理等。
+	Couldn't open the printer's preferences: {e}	無法開啟印表機喜好設定：{e}
+	Printer properties	印表機內容
+	Reset to printer defaults	還原印表機預設值
+	This printer offers no settings of its own.	此印表機沒有專屬設定。
 	Create PDF from scanner…	從掃描器建立 PDF…
 	1 page scanned	已掃描 1 頁
 	{n} pages scanned	已掃描 {n} 頁
