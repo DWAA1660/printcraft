@@ -5,7 +5,9 @@ Layer L4. Create a PDF (Acrobat's Create a PDF tool), execution plan M10.2:
 - `blank(width, height, pages)`: an empty document;
 - `from_images(&[(name, bytes)])`: one page per image, sized from the image's resolution
   (PNG `pHYs`, JPEG JFIF density; 72 dpi when absent). JPEG data is embedded as is
-  (`/DCTDecode`, grey, RGB or Adobe-inverted CMYK); PNG is decoded and stored with Flate,
+  (`/DCTDecode`, grey, RGB or Adobe-inverted CMYK), and an embedded ICC profile (`APP2
+  ICC_PROFILE`) becomes an `/ICCBased` colour space with the device space as `/Alternate`
+  (a profile that is incomplete or doesn't match the image is ignored); PNG is decoded and stored with Flate,
   with transparency as a soft mask;
 - `from_images_with_resolution(images, ImageResolution::Dpi(dpi))`: override the page
   resolution (1–1200 dpi), without resampling or recompressing image pixels. Use 72 dpi

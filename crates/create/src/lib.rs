@@ -72,15 +72,77 @@ pub fn blank(width: f64, height: f64, pages: usize) -> Result<Document, CreateEr
 
 // ── images ──────────────────────────────────────────────────────────────────────────────────
 
-/// An image ready to embed: its XObject dictionary, encoded data, optional soft mask, and size
-/// in pixels and dots per inch.
+/// An image ready to embed: its XObject dictionary, encoded data, optional soft mask, optional
+/// embedded ICC profile (component count, profile bytes), and size in pixels and dots per inch.
 struct Embedded {
     dict: Dict,
     data: Vec<u8>,
     filtered: bool,
     smask: Option<(Dict, Vec<u8>)>,
+    icc: Option<(u8, Vec<u8>)>,
     px: (u32, u32),
     dpi: (f64, f64),
+}
+
+/// Add `img` to `doc` as an image XObject (with its soft mask and, when the source carried an
+/// ICC profile, an `/ICCBased` colour space built from it). Returns the XObject.
+fn add_xobject(doc: &mut Document, img: Embedded) -> ObjRef {
+    let mut d = img.dict;
+    d.set(b"Type".to_vec(), Object::name("XObject"));
+    d.set(b"Subtype".to_vec(), Object::name("Image"));
+    d.set(b"Width".to_vec(), Object::Int(img.px.0 as i64));
+    d.set(b"Height".to_vec(), Object::Int(img.px.1 as i64));
+    if let Some((m, alpha)) = img.smask {
+        let mr = doc.add(Object::Stream(Stream::flate(m, &alpha)));
+        d.set(b"SMask".to_vec(), Object::Ref(mr));
+    }
+    if let Some((n, profile)) = img.icc {
+        let mut id = Dict::new();
+        id.set(b"N".to_vec(), Object::Int(n as i64));
+        // The device space the image used before is the alternate (ISO 32000-2 §8.6.5.5).
+        if let Some(alt) = d.get(b"ColorSpace").cloned() {
+            id.set(b"Alternate".to_vec(), alt);
+        }
+        let ir = doc.add(Object::Stream(Stream::flate(id, &profile)));
+        d.set(b"ColorSpace".to_vec(), Object::Array(vec![Object::name("ICCBased"), Object::Ref(ir)]));
+    }
+    let stream = if img.filtered { Stream::from_raw(d, img.data) } else { Stream::flate(d, &img.data) };
+    doc.add(Object::Stream(stream))
+}
+
+/// The largest ICC profile kept from an image (a JPEG can carry at most 255 × 65 519 bytes).
+const MAX_ICC: usize = 16 << 20;
+
+/// The ICC profile from a JPEG's `APP2 ICC_PROFILE` chunks, joined in sequence order, when the
+/// chunks are complete and consistent and the profile's colour space has `comps` components.
+/// `None` otherwise: the image then keeps its device colour space.
+fn jpeg_icc(chunks: &[(u8, u8, &[u8])], comps: u8) -> Option<Vec<u8>> {
+    let count = chunks.first()?.1;
+    if count == 0 || chunks.len() != count as usize || chunks.iter().any(|c| c.1 != count) {
+        return None;
+    }
+    let mut profile = Vec::new();
+    for seq in 1..=count {
+        let mut it = chunks.iter().filter(|c| c.0 == seq);
+        let (Some(c), None) = (it.next(), it.next()) else { return None };
+        if profile.len().saturating_add(c.2.len()) > MAX_ICC {
+            return None;
+        }
+        profile.extend_from_slice(c.2);
+    }
+    // ICC.1 header: profile size (bytes 0–3), data colour space (bytes 16–19).
+    let size = be32(&profile, 0)? as usize;
+    let space = profile.get(16..20)?;
+    let n = match space {
+        b"GRAY" => 1,
+        b"RGB " => 3,
+        b"CMYK" => 4,
+        _ => return None,
+    };
+    ((128..=profile.len()).contains(&size) && n == comps).then(|| {
+        profile.truncate(size);
+        profile
+    })
 }
 
 const JP2_SIGNATURE: &[u8] = &[0, 0, 0, 0x0C, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A];
@@ -156,7 +218,7 @@ fn jpx(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
     }
     let mut d = Dict::new();
     d.set(b"Filter".to_vec(), Object::name("JPXDecode"));
-    Ok(Embedded { dict: d, data: bytes.to_vec(), filtered: true, smask: None, px: (w, h), dpi })
+    Ok(Embedded { dict: d, data: bytes.to_vec(), filtered: true, smask: None, icc: None, px: (w, h), dpi })
 }
 
 fn jpeg(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
@@ -165,6 +227,8 @@ fn jpeg(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
         return Err(bad("not a JPEG file"));
     }
     let (mut i, mut size, mut comps, mut dpi, mut adobe) = (2usize, None, 0u8, (72.0, 72.0), false);
+    // APP2 ICC_PROFILE chunks: (sequence number, chunk count, data).
+    let mut icc_chunks: Vec<(u8, u8, &[u8])> = Vec::new();
     while i + 4 <= bytes.len() {
         if bytes[i] != 0xFF {
             i += 1;
@@ -190,6 +254,11 @@ fn jpeg(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
                 }
             }
             0xEE if seg.starts_with(b"Adobe") => adobe = true,
+            0xE2 if seg.starts_with(b"ICC_PROFILE\0") => {
+                if let (Some(&seq), Some(&count), Some(data)) = (seg.get(12), seg.get(13), seg.get(14..)) {
+                    icc_chunks.push((seq, count, data));
+                }
+            }
             0xC0..=0xCF if marker != 0xC4 && marker != 0xC8 && marker != 0xCC => {
                 if seg.len() < 6 {
                     return Err(bad("bad frame header"));
@@ -220,7 +289,8 @@ fn jpeg(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
     d.set(b"ColorSpace".to_vec(), Object::name(cs));
     d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
     d.set(b"Filter".to_vec(), Object::name("DCTDecode"));
-    Ok(Embedded { dict: d, data: bytes.to_vec(), filtered: true, smask: None, px: (w, h), dpi })
+    let icc = jpeg_icc(&icc_chunks, comps).map(|p| (comps, p));
+    Ok(Embedded { dict: d, data: bytes.to_vec(), filtered: true, smask: None, icc, px: (w, h), dpi })
 }
 
 fn png_image(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
@@ -266,7 +336,7 @@ fn png_image(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
         m.set(b"BitsPerComponent".to_vec(), Object::Int(8));
         (m, alpha)
     });
-    Ok(Embedded { dict: d, data: colour, filtered: false, smask, px: (w, h), dpi })
+    Ok(Embedded { dict: d, data: colour, filtered: false, smask, icc: None, px: (w, h), dpi })
 }
 
 /// 8-bit RGBA pixels → an image (gray when every pixel is, with a soft mask when any pixel is
@@ -292,7 +362,7 @@ fn rgba_image(rgba: &[u8], (w, h): (u32, u32), dpi: (f64, f64)) -> Embedded {
         m.set(b"BitsPerComponent".to_vec(), Object::Int(8));
         (m, rgba.as_chunks::<4>().0.iter().map(|p| p[3]).collect())
     });
-    Embedded { dict: d, data: colour, filtered: false, smask, px: (w, h), dpi }
+    Embedded { dict: d, data: colour, filtered: false, smask, icc: None, px: (w, h), dpi }
 }
 
 /// BMP and GIF (the first frame), through the `image` decoders. Their resolution is not read:
@@ -338,25 +408,25 @@ fn tiff_pages(name: &str, bytes: &[u8]) -> Result<Vec<Embedded>, CreateError> {
                 let mut d = Dict::new();
                 d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
                 d.set(b"BitsPerComponent".to_vec(), Object::Int(1));
-                Embedded { dict: d, data, filtered: false, smask: None, px: (w, h), dpi }
+                Embedded { dict: d, data, filtered: false, smask: None, icc: None, px: (w, h), dpi }
             }
             C::Gray(8 | 16) => {
                 let mut d = Dict::new();
                 d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
                 d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
-                Embedded { dict: d, data, filtered: false, smask: None, px: (w, h), dpi }
+                Embedded { dict: d, data, filtered: false, smask: None, icc: None, px: (w, h), dpi }
             }
             C::RGB(8 | 16) => {
                 let mut d = Dict::new();
                 d.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
                 d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
-                Embedded { dict: d, data, filtered: false, smask: None, px: (w, h), dpi }
+                Embedded { dict: d, data, filtered: false, smask: None, icc: None, px: (w, h), dpi }
             }
             C::CMYK(8 | 16) => {
                 let mut d = Dict::new();
                 d.set(b"ColorSpace".to_vec(), Object::name("DeviceCMYK"));
                 d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
-                Embedded { dict: d, data, filtered: false, smask: None, px: (w, h), dpi }
+                Embedded { dict: d, data, filtered: false, smask: None, icc: None, px: (w, h), dpi }
             }
             C::RGBA(8 | 16) => rgba_image(&data, (w, h), dpi),
             C::GrayA(8 | 16) => {
@@ -437,17 +507,7 @@ fn embed(name: &str, bytes: &[u8]) -> Result<Vec<Embedded>, CreateError> {
 pub fn image_xobject(doc: &mut Document, name: &str, bytes: &[u8]) -> Result<(ObjRef, (f64, f64)), CreateError> {
     let img = embed(name, bytes)?.into_iter().next().ok_or_else(|| CreateError::Image(name.into(), "the file has no image".into()))?;
     let size = (img.px.0 as f64 * 72.0 / img.dpi.0, img.px.1 as f64 * 72.0 / img.dpi.1);
-    let mut d = img.dict;
-    d.set(b"Type".to_vec(), Object::name("XObject"));
-    d.set(b"Subtype".to_vec(), Object::name("Image"));
-    d.set(b"Width".to_vec(), Object::Int(img.px.0 as i64));
-    d.set(b"Height".to_vec(), Object::Int(img.px.1 as i64));
-    if let Some((m, alpha)) = img.smask {
-        let mr = doc.add(Object::Stream(Stream::flate(m, &alpha)));
-        d.set(b"SMask".to_vec(), Object::Ref(mr));
-    }
-    let stream = if img.filtered { Stream::from_raw(d, img.data) } else { Stream::flate(d, &img.data) };
-    Ok((doc.add(Object::Stream(stream)), size))
+    Ok((add_xobject(doc, img), size))
 }
 
 /// Resolution used to size PDF pages. Image pixels are never resampled.
@@ -486,17 +546,7 @@ pub fn from_images_with_resolution(images: &[(String, Vec<u8>)], resolution: Ima
         let k = (MAX_SIDE / w.max(h)).min(1.0);
         w *= k;
         h *= k;
-        let mut d = img.dict;
-        d.set(b"Type".to_vec(), Object::name("XObject"));
-        d.set(b"Subtype".to_vec(), Object::name("Image"));
-        d.set(b"Width".to_vec(), Object::Int(img.px.0 as i64));
-        d.set(b"Height".to_vec(), Object::Int(img.px.1 as i64));
-        if let Some((m, alpha)) = img.smask {
-            let mr = doc.add(Object::Stream(Stream::flate(m, &alpha)));
-            d.set(b"SMask".to_vec(), Object::Ref(mr));
-        }
-        let stream = if img.filtered { Stream::from_raw(d, img.data) } else { Stream::flate(d, &img.data) };
-        let xr = doc.add(Object::Stream(stream));
+        let xr = add_xobject(&mut doc, img);
         let mut xobj = Dict::new();
         xobj.set(b"Im0".to_vec(), Object::Ref(xr));
         let mut res = Dict::new();

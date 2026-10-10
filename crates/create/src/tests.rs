@@ -273,3 +273,79 @@ fn source_kind_tells_pdfs_images_and_text_apart() {
     assert_eq!(source_kind("a.docx", b"PK\x03\x04"), None);
     assert_eq!(source_kind("", b""), None);
 }
+
+/// A minimal CMYK JPEG header (SOI, Adobe APP14, the given APP2 ICC_PROFILE chunks, SOF0 3×2
+/// with four components, EOI).
+fn cmyk_jpeg_with_icc(chunks: &[(u8, u8, &[u8])]) -> Vec<u8> {
+    let mut v = vec![0xFF, 0xD8];
+    v.extend_from_slice(&[0xFF, 0xEE, 0, 14, b'A', b'd', b'o', b'b', b'e', 0, 100, 0, 0, 0, 0, 2]);
+    for (seq, count, data) in chunks {
+        let len = (2 + 12 + 2 + data.len()) as u16;
+        v.extend_from_slice(&[0xFF, 0xE2]);
+        v.extend_from_slice(&len.to_be_bytes());
+        v.extend_from_slice(b"ICC_PROFILE\0");
+        v.extend_from_slice(&[*seq, *count]);
+        v.extend_from_slice(data);
+    }
+    v.extend_from_slice(&[0xFF, 0xC0, 0, 20, 8, 0, 2, 0, 3, 4, 1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0, 4, 0x11, 0]);
+    v.extend_from_slice(&[0xFF, 0xD9]);
+    v
+}
+
+/// A synthetic ICC profile: a 128-byte header (size, data colour space) and some tag bytes.
+fn icc_profile(space: &[u8; 4]) -> Vec<u8> {
+    let mut p = vec![0u8; 200];
+    p[..4].copy_from_slice(&200u32.to_be_bytes());
+    p[16..20].copy_from_slice(space);
+    p[36..40].copy_from_slice(b"acsp");
+    for (i, b) in p.iter_mut().enumerate().skip(128) {
+        *b = i as u8;
+    }
+    p
+}
+
+/// Issue #666: a JPEG's embedded ICC profile becomes an `/ICCBased` colour space (chunks joined
+/// in sequence order, the device space as `/Alternate`) instead of being dropped.
+#[test]
+fn jpeg_icc_profile_becomes_icc_based_colour_space() {
+    let profile = icc_profile(b"CMYK");
+    let (a, b) = profile.split_at(90);
+    // Chunks out of order on purpose: sequence numbers decide the order.
+    let jpeg = cmyk_jpeg_with_icc(&[(2, 2, b), (1, 2, a)]);
+    let doc = reopen(&from_images(&[("cmyk.jpg".into(), jpeg.clone())]).unwrap());
+    let im = image_of(&doc, 0);
+    let cs = im.get(b"ColorSpace").unwrap().as_array().unwrap().clone();
+    assert_eq!(cs[0].as_name(), Some(&b"ICCBased"[..]));
+    let Object::Stream(icc) = &*doc.resolve(&cs[1]) else { panic!("no ICC stream") };
+    assert_eq!(icc.dict.int(b"N"), Some(4));
+    assert_eq!(icc.dict.get(b"Alternate").and_then(Object::as_name), Some(&b"DeviceCMYK"[..]));
+    assert_eq!(icc.decoded().unwrap(), profile);
+    assert!(im.get(b"Decode").is_some(), "Adobe CMYK JPEGs stay inverted");
+
+    // image_xobject (stamps, image placement) keeps the profile too.
+    let mut doc = Document::new_empty();
+    let (r, _) = image_xobject(&mut doc, "cmyk.jpg", &jpeg).unwrap();
+    let Object::Stream(s) = &*doc.get(r) else { panic!("not a stream") };
+    assert!(s.dict.get(b"ColorSpace").unwrap().as_array().is_some());
+    // The image still exports as the original JPEG.
+    let out = extract_images(&reopen(&from_images(&[("cmyk.jpg".into(), jpeg.clone())]).unwrap()), &[0], 0);
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    assert_eq!(out.images.first().map(|i| &i.data), Some(&jpeg));
+}
+
+/// A profile that doesn't fit the image (wrong colour space, missing or duplicated chunk, bad
+/// header) is ignored: the image keeps its device colour space.
+#[test]
+fn unusable_jpeg_icc_profiles_keep_the_device_colour_space() {
+    let cmyk = icc_profile(b"CMYK");
+    let rgb = icc_profile(b"RGB ");
+    let (a, b) = cmyk.split_at(90);
+    let mut short = cmyk.clone();
+    short[..4].copy_from_slice(&64u32.to_be_bytes());
+    let cases: [&[(u8, u8, &[u8])]; 6] =
+        [&[(1, 1, &rgb)], &[(1, 2, a)], &[(1, 2, a), (1, 2, b)], &[(1, 2, a), (2, 3, b)], &[(1, 1, &short)], &[(0, 0, &cmyk)]];
+    for chunks in cases {
+        let doc = from_images(&[("cmyk.jpg".into(), cmyk_jpeg_with_icc(chunks))]).unwrap();
+        assert_eq!(image_of(&doc, 0).get(b"ColorSpace").and_then(Object::as_name), Some(&b"DeviceCMYK"[..]));
+    }
+}
