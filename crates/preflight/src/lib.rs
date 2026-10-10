@@ -172,6 +172,10 @@ struct DeviceColour {
     gray: bool,
     rgb: bool,
     cmyk: bool,
+    /// Resources that define `DefaultRGB` / `DefaultCMYK`: device colour there is drawn in that
+    /// space, which PDF/A accepts whatever the output intent (ISO 19005-2 6.2.4.3).
+    default_rgb: bool,
+    default_cmyk: bool,
 }
 
 impl DeviceColour {
@@ -185,6 +189,17 @@ fn uses_device_colour(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)])
     let mut used = DeviceColour::default();
     for (_, o) in objs {
         let Some(d) = dict_of(o) else { continue };
+        // A resource dictionary's /ColorSpace, whether it is this object or the page's inline
+        // /Resources.
+        let resources = d.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned());
+        for holder in [Some(d), resources.as_ref()].into_iter().flatten() {
+            if let Some(spaces) = holder.get(b"ColorSpace").map(|c| doc.resolve(c))
+                && let Some(spaces) = spaces.as_dict()
+            {
+                used.default_rgb |= spaces.get(b"DefaultRGB").is_some();
+                used.default_cmyk |= spaces.get(b"DefaultCMYK").is_some();
+            }
+        }
         if let Some(cs) = d.get(b"ColorSpace").map(|c| doc.resolve(c)) {
             match &*cs {
                 Object::Name(n) if n == b"DeviceGray" => used.gray = true,
@@ -249,10 +264,10 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
         }
         // 6.2.4.3: DeviceRGB needs an RGB output intent and DeviceCMYK a CMYK one (#667).
         Some(n) => {
-            if used.cmyk && n != Some(4) {
+            if used.cmyk && !used.default_cmyk && n != Some(4) {
                 issue("6.2.4.3", "DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile".into(), None, false);
             }
-            if used.rgb && n != Some(3) {
+            if used.rgb && !used.default_rgb && n != Some(3) {
                 issue("6.2.4.3", "DeviceRGB is used, but the PDF/A output intent isn't an RGB profile".into(), None, false);
             }
         }

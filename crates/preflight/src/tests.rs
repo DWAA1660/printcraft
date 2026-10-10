@@ -157,6 +157,23 @@ fn verify_reports_an_output_intent_that_does_not_match_device_colour() {
     let issues = verify(&cmyk_page(intent, "/Im0 Do 1 0 0 rg", &[&cmyk]), Level::A2b);
     assert!(messages(&issues).contains(&rgb_msg) && !messages(&issues).contains(&cmyk_msg), "{issues:#?}");
 
+    // DefaultCMYK in the page's resources draws DeviceCMYK in that space, which PDF/A accepts
+    // under any output intent.
+    let catalog = format!("<< /Type /Catalog /Pages 2 0 R {intent} >>");
+    let doc = build(
+        &[
+            catalog.as_str(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /ColorSpace << /DefaultCMYK [/ICCBased 7 0 R] >> /XObject << /Im0 5 0 R >> >> >>",
+            "<< /Length 7 >>\nstream\n/Im0 Do\nendstream",
+            "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceCMYK /BitsPerComponent 8 /Length 4 >>\nstream\n\u{0}\u{0}\u{0}\u{0}\nendstream",
+            rgb.as_str(),
+            cmyk.as_str(),
+        ],
+        "",
+    );
+    assert!(!messages(&verify(&doc, Level::A2b)).contains(&cmyk_msg), "DefaultCMYK covers DeviceCMYK");
+
     // Without /N, the ICC header's colour space decides.
     let mut header = vec![b' '; 128];
     header[16..20].copy_from_slice(b"CMYK");
