@@ -220,7 +220,7 @@ fn colour_key(doc: &Document, s: &Stream) -> Option<Vec<(u32, u32)>> {
     let m = doc.resolve(s.dict.get(b"Mask")?);
     let a = m.as_array()?;
     let v: Vec<u32> = a.iter().map(|o| doc.resolve(o).as_f64().map(|f| f.clamp(0.0, 65_535.0) as u32)).collect::<Option<_>>()?;
-    (!v.is_empty() && v.len().is_multiple_of(2)).then(|| v.chunks_exact(2).map(|p| (p[0], p[1])).collect())
+    (!v.is_empty() && v.len().is_multiple_of(2)).then(|| v.as_chunks::<2>().0.iter().map(|&[lo, hi]| (lo, hi)).collect())
 }
 
 /// Alpha from a colour key: pixels whose every component falls in its range are transparent.
