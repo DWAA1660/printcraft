@@ -115,6 +115,27 @@ pub struct ExtractDraft {
     pub separate: bool,
     /// Delete the pages after extracting them.
     pub delete: bool,
+    /// The name the extracted pages are saved under, without `.pdf` (#737). The dialog fills in
+    /// the document's name when it opens; empty means that name too. As separate files each
+    /// page is `<name> (page N).pdf`, and a single page the user renamed is `<name>.pdf`.
+    pub name: String,
+}
+
+/// `name` made safe as a file name on every platform: no path separators, reserved or control
+/// characters, no trailing dots or spaces (Windows drops them), no `.pdf` (added back on
+/// writing), at most 200 characters. Empty when nothing usable is left.
+pub(crate) fn file_stem_from_user(name: &str) -> String {
+    let name = name.trim();
+    // Any case of ".pdf": it's added back on writing.
+    let name =
+        name.len().checked_sub(4).and_then(|i| name.get(i..).filter(|ext| ext.eq_ignore_ascii_case(".pdf")).and(name.get(..i))).unwrap_or(name);
+    let cleaned: String = name
+        .chars()
+        .map(|c| if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
+        .take(200)
+        .collect();
+    // Trimming trailing dots also leaves "." and ".." empty.
+    cleaned.trim().trim_end_matches(['.', ' ']).trim_start().to_string()
 }
 
 /// Pages ▸ Rotate Pages.
@@ -382,6 +403,13 @@ impl PdfCraftApp {
         }
     }
 
+    /// Show Extract pages, its file name filled in with the active document's (#737).
+    pub fn open_extract_dialog(&mut self) {
+        self.extract_draft.name =
+            self.active_ids().and_then(|(_, id)| self.session.get(id)).map(|d| strip_pdf(&d.name).to_string()).unwrap_or_default();
+        self.dialog = Some(crate::Dialog::Extract);
+    }
+
     /// Copy the selected pages (or the current page) into a new unsaved document tab.
     pub fn extract_selection(&mut self) {
         // What's typed in a form field is part of the document (#166).
@@ -392,12 +420,18 @@ impl PdfCraftApp {
         let pages = self.views[i].target_pages();
         let stem = self.session.get(id).map(|d| strip_pdf(&d.name).to_string()).unwrap_or_default();
         let opts = self.extract_draft.clone();
+        // The name typed in the dialog (#737), else the document's.
+        let chosen = file_stem_from_user(&opts.name);
+        let renamed = !chosen.is_empty() && chosen != file_stem_from_user(&stem);
+        let base = if chosen.is_empty() { stem.clone() } else { chosen };
         if opts.separate {
             // Each page as its own file, in a chosen folder.
             let mut named = Vec::new();
             for &p in &pages {
                 match self.session.extract(id, &[p]) {
-                    Ok(bytes) => named.push((format!("{stem} (page {}).pdf", p + 1), bytes)),
+                    // One page the user named is saved under exactly that name.
+                    Ok(bytes) if renamed && pages.len() == 1 => named.push((format!("{base}.pdf"), bytes)),
+                    Ok(bytes) => named.push((format!("{base} (page {}).pdf", p + 1), bytes)),
                     Err(e) => {
                         self.notify_fmt("Couldn't extract pages: {e}", &[("e", &e.to_string())]);
                         return;
@@ -429,7 +463,9 @@ impl PdfCraftApp {
                     } else {
                         crate::i18n::fmt(tl!("Extracted {n} pages"), &[("n", &pages.len().to_string())])
                     };
-                    self.open_created(&format!("{stem} (extract).pdf"), bytes, &message)
+                    // Save As offers the tab's name, so a name typed in the dialog is kept.
+                    let name = if renamed { format!("{base}.pdf") } else { format!("{stem} (extract).pdf") };
+                    self.open_created(&name, bytes, &message)
                 }
                 Err(e) => {
                     self.notify_fmt("Couldn't extract pages: {e}", &[("e", &e.to_string())]);
