@@ -129,13 +129,23 @@ pub(crate) fn file_stem_from_user(name: &str) -> String {
     // Any case of ".pdf": it's added back on writing.
     let name =
         name.len().checked_sub(4).and_then(|i| name.get(i..).filter(|ext| ext.eq_ignore_ascii_case(".pdf")).and(name.get(..i))).unwrap_or(name);
-    let cleaned: String = name
-        .chars()
-        .map(|c| if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
-        .take(200)
-        .collect();
+    let cleaned: String =
+        name.chars().map(|c| if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c }).collect();
+    // At most 200 bytes, so " (page N).pdf" still fits the usual 255-byte file name limit.
+    let mut end = cleaned.len().min(200);
+    while !cleaned.is_char_boundary(end) {
+        end -= 1;
+    }
+    let cleaned = cleaned.get(..end).unwrap_or_default();
     // Trimming trailing dots also leaves "." and ".." empty.
-    cleaned.trim().trim_end_matches(['.', ' ']).trim_start().to_string()
+    let stem = cleaned.trim().trim_end_matches(['.', ' ']).trim_start();
+    // Windows reserves these device names whatever the extension: "NUL.pdf" writes nowhere.
+    let device = stem.split('.').next().unwrap_or_default().to_ascii_uppercase();
+    let reserved = matches!(device.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (device.len() == 4
+            && (device.starts_with("COM") || device.starts_with("LPT"))
+            && device.as_bytes().get(3).is_some_and(|d| (b'1'..=b'9').contains(d)));
+    if reserved { format!("_{stem}") } else { stem.to_string() }
 }
 
 /// Pages ▸ Rotate Pages.
@@ -788,5 +798,26 @@ impl PdfCraftApp {
             }
             Err(e) => self.notify_error(e),
         }
+    }
+}
+
+#[cfg(test)]
+mod stem_tests {
+    use super::file_stem_from_user;
+
+    #[test]
+    fn user_file_names_stay_inside_the_folder_and_writable_everywhere() {
+        assert_eq!(file_stem_from_user("../../etc/passwd"), ".._.._etc_passwd");
+        assert_eq!(file_stem_from_user(".."), "");
+        assert_eq!(file_stem_from_user("Report.PDF"), "Report");
+        // Windows device names, in any case and with any extension, get a prefix.
+        assert_eq!(file_stem_from_user("nul"), "_nul");
+        assert_eq!(file_stem_from_user("COM1.pdf"), "_COM1");
+        assert_eq!(file_stem_from_user("lpt9.tar"), "_lpt9.tar");
+        assert_eq!(file_stem_from_user("COM10"), "COM10");
+        assert_eq!(file_stem_from_user("Console"), "Console");
+        // At most 200 bytes, cut on a character boundary.
+        let long = file_stem_from_user(&"文".repeat(300));
+        assert!(long.len() <= 200 && long.chars().all(|c| c == '文'), "{}", long.len());
     }
 }
