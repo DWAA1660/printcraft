@@ -369,3 +369,33 @@ fn the_about_dialog_shows_the_running_version() {
     h.run_steps(3);
     h.get_by_label_contains(&format!("Version {}", env!("CARGO_PKG_VERSION")));
 }
+
+/// ⌘W with Preferences (or any modal dialog) open closes the dialog, never the document
+/// underneath it; ⌘⇧W does nothing there (#870). With no dialog, ⌘W closes the tab as before.
+#[test]
+fn close_shortcuts_under_a_modal_dialog_leave_the_document_open() {
+    let mut h = harness();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Comma);
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::Preferences), "⌘, opens Preferences");
+    h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::W);
+    h.run_steps(3);
+    assert_eq!(h.state().views.len(), 1, "⌘⇧W under Preferences keeps the document");
+    assert_eq!(h.state().dialog, Some(Dialog::Preferences), "and leaves Preferences alone");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::W);
+    h.run_steps(3);
+    assert_eq!(h.state().views.len(), 1, "⌘W under Preferences keeps the document");
+    assert_eq!(h.state().dialog, None, "⌘W closes Preferences");
+
+    h.state_mut().execute("file.properties");
+    h.run_steps(3);
+    assert!(matches!(h.state().dialog, Some(Dialog::Properties(_))));
+    h.key_press_modifiers(Modifiers::COMMAND, Key::W);
+    h.run_steps(3);
+    assert_eq!(h.state().views.len(), 1, "⌘W under Document Properties keeps the document");
+    assert_eq!(h.state().dialog, None);
+
+    h.key_press_modifiers(Modifiers::COMMAND, Key::W);
+    h.run_steps(3);
+    assert!(h.state().views.is_empty(), "with no dialog up, ⌘W closes the document");
+}

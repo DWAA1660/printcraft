@@ -1686,6 +1686,9 @@ impl PdfCraftApp {
             }
             return;
         }
+        if self.close_shortcut_under_modal(ctx) {
+            return;
+        }
         if let Some(view) = self.active.and_then(|i| self.views.get_mut(i))
             && view.auto_scroll.escape(ctx)
         {
@@ -1718,6 +1721,45 @@ impl PdfCraftApp {
 }
 
 impl PdfCraftApp {
+    /// ⌘W while a modal dialog is up (Preferences, Document Properties, Updates, "Open this web
+    /// page?", the password prompt…) closes that dialog, as ⌘W closes the front window on macOS;
+    /// it never closes the document underneath the dialog, and neither does ⌘⇧W (#870). Returns
+    /// whether a close shortcut was taken, so nothing else runs this frame.
+    fn close_shortcut_under_modal(&mut self, ctx: &egui::Context) -> bool {
+        use egui::{Key, KeyboardShortcut, Modifiers};
+        if self.dialog.is_none() && !self.updates.open && self.pending_link.is_none() && self.password_prompt.is_none() {
+            return false;
+        }
+        // ⌘⇧W first: a plain ⌘W pattern also matches with Shift held.
+        let all = ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::W)));
+        let one = !all && ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::W)));
+        if !one {
+            return all;
+        }
+        // The topmost dialog goes: the link and password prompts are drawn over the others.
+        // The password prompt keeps its own Cancel (it decides what happens to the file), so
+        // ⌘W only stops there.
+        if self.password_prompt.is_some() {
+            return true;
+        }
+        if self.pending_link.is_some() {
+            self.resolve_pending_link(false);
+        } else if self.updates.open {
+            self.updates.open = false;
+        } else {
+            self.close_dialog();
+        }
+        true
+    }
+
+    /// Close the open dialog and drop its drafts.
+    pub(crate) fn close_dialog(&mut self) {
+        self.dialog = None;
+        self.props_draft = None;
+        self.view_draft = None;
+        self.bulk_field_props = None;
+    }
+
     /// The quick tools' keys, as in Acrobat: V selects, H pans, and holding Space pans until it
     /// is released. Plain letters, so not while a text field, a form field, a dialog or the
     /// palette has the keyboard.
