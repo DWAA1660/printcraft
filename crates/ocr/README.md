@@ -43,6 +43,16 @@ no vertical Japanese claim, and deskew refuses annotated pages rather than separ
 annotations from their targets. Supported OCR languages are deliberately limited to
 those exposed and tested, despite the model's larger vocabulary.
 
+Recognition includes a small margin around detected lines to retain capital accents
+and final punctuation; invisible text retains the detected line's original height.
+For the Latin languages, decoding excludes CJK, kana, full-width forms and letters
+outside ASCII/Latin-1/Latin Extended-A, while preserving other European names,
+digits and punctuation. Japanese retains the full dictionary. This is not a
+language-specific spelling filter. Community French checks still found missed
+`ï`, capital `Œ`/`Æ` and `Ë`, and inconsistent straight/curly apostrophes; the model
+does not guarantee exact transcription. Apostrophe equivalence in search remains
+separate work.
+
 Validation: `cargo test -p pdfcraft-engine --test scan_ocr` covers actual models,
 languages, all quarter-turns, deskew, crop offsets and padding, unchanged exact-mode pixels, save/reopen, undo
 and stale results. Model tests report a skip when models are absent. The Japanese
@@ -55,5 +65,10 @@ the scanned pixels. This is a regression fixture, not a real-document accuracy b
 
 The additional Latin-language regression checks Dutch `één`, `coöperatie`, `België`
 and accented words in Danish, Norwegian, Swedish, Finnish and Portuguese after
-save/reopen. The same model is used without per-language character restrictions.
+save/reopen. The same model is used without per-language spelling restrictions.
 Icelandic remains unclaimed because community tests found weak recognition of þ/Þ and Í.
+
+The French save/reopen regression covers accented capitals, ç, œ, straight
+and curly apostrophes (allowing the model's normalization) and line-final punctuation,
+with unchanged scan pixels. Decoder unit
+tests cover European names and curly apostrophes without depending on model files.

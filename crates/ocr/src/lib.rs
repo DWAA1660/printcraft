@@ -206,7 +206,7 @@ impl Ocr {
             let rect = line.iter().map(|r| r.bounding_rect()).fold([f32::INFINITY, f32::INFINITY, 0.0f32, 0.0f32], |a, r| {
                 [a[0].min(r.left()), a[1].min(r.top()), a[2].max(r.right()), a[3].max(r.bottom())]
             });
-            let words = self.multilingual.read_line(image, rect)?;
+            let words = self.multilingual.read_line(image, rect, language)?;
             if !words.is_empty() {
                 out.push(Line { words });
             }

@@ -133,6 +133,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-10-11 (M10, #1012 review):** Recognition crops include margins for accents and final punctuation while invisible text retains the detected line height. Latin decoding keeps European names and punctuation while excluding other scripts and full-width forms; Japanese retains the full dictionary. Added decoder/crop unit cases and a French save/reopen regression. Percentages unchanged.
+
 - **2026-10-11 (M10, OCR language picker):** Increase the popup height so all twelve language choices are reachable at the standard window size. The UI regression clicks the last language, Portuguese, and verifies the stored choice. Percentages unchanged.
 
 - **2026-10-11 (M10, OCR languages and defaults):** Fold Dutch, Danish, Norwegian Bokmål, Swedish, Finnish and Portuguese into the scan/OCR work, with save/reopen regressions for accented words. The UI selects the primary system/browser language, independently of UI translations, with English fallback; manual selection remains available. Icelandic stays unclaimed. Overall percentage unchanged.

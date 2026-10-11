@@ -211,6 +211,25 @@ fn scan_recognizes_accents_in_requested_languages() {
 }
 
 #[test]
+fn french_ocr_preserves_capitals_cedilla_ligature_and_apostrophes_after_save() {
+    if !ocr::available() {
+        eprintln!("skipped: run cargo xtask models");
+        return;
+    }
+    let (mut s, id) = scan("ÉTÉ français cœur l'été l’été à Paris.", 0, 0.0);
+    let before = render(&s, id);
+    s.recognize_text(id, &[], OcrSettings { language: "fr".into(), auto_rotate: false, deskew: false, ..Default::default() }).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    let reopened = s.open("french.pdf", None, saved, None).unwrap();
+    let extracted = text(&s, reopened);
+    for expected in ["ÉTÉ", "français", "cœur", "l'été", "Paris."] {
+        assert!(extracted.contains(expected), "missing {expected:?}: {extracted:?}");
+    }
+    assert_eq!(extracted.replace('’', "'").matches("l'été").count(), 2, "both apostrophe forms: {extracted:?}");
+    assert_eq!(before, render(&s, reopened), "searchable text must not change scan pixels");
+}
+
+#[test]
 fn italian_ocr_preserves_all_six_accents_after_save() {
     if !ocr::available() {
         eprintln!("skipped: run cargo xtask models");
