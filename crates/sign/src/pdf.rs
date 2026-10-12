@@ -406,6 +406,29 @@ pub const WORDINGS: &[&str] = &[
     "Signature is invalid",
 ];
 
+/// The byte/signature check, independent of certificate trust or revocation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Integrity {
+    Intact,
+    /// Signed bytes, the signature value/range, or permitted later changes failed.
+    Altered {
+        reason: String,
+    },
+    /// The signature could not be checked, with the actual validation reason.
+    Unknown {
+        reason: String,
+    },
+    NotApplicable,
+}
+
+/// The result of verified evidence embedded in `/DSS`; never inferred from prose.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Revocation {
+    Good,
+    Revoked { detail: String },
+    Unknown,
+}
+
 /// One signature field.
 #[derive(Clone, Debug)]
 pub struct SignatureInfo {
@@ -445,6 +468,8 @@ pub struct SignatureInfo {
     /// used as the validation time.
     pub timestamp_time: Option<Time>,
     pub status: Status,
+    pub integrity: Integrity,
+    pub revocation: Revocation,
     pub modification: Modification,
     /// Acrobat-style sentences explaining the verdict, each one ready to read in English and ready to
     /// be said in another language (see [`Detail`]).
@@ -591,6 +616,12 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
             timestamp: false,
             timestamp_time: None,
             status: Status::Unknown,
+            integrity: if v.is_some() {
+                Integrity::Unknown { reason: "No validation outcome is available.".into() }
+            } else {
+                Integrity::NotApplicable
+            },
+            revocation: Revocation::Unknown,
             modification: Modification::None,
             details: Vec::new(),
         };
@@ -634,6 +665,8 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
             timestamp: true,
             timestamp_time: None,
             status: Status::Unknown,
+            integrity: Integrity::Unknown { reason: "No validation outcome is available.".into() },
+            revocation: Revocation::Unknown,
             modification: Modification::None,
             details: Vec::new(),
         };
@@ -664,6 +697,18 @@ fn is_doc_timestamp(d: &Dict) -> bool {
     d.name(b"SubFilter") == Some(b"ETSI.RFC3161") && matches!(d.name(b"Type"), Some(b"DocTimeStamp" | b"Sig"))
 }
 
+fn invalid_integrity(info: &mut SignatureInfo, why: Detail) {
+    info.status = Status::Invalid;
+    info.integrity = Integrity::Altered { reason: why.message.clone() };
+    info.details.push(why);
+}
+
+fn incomplete_integrity(info: &mut SignatureInfo, why: Detail, status: Status) {
+    info.status = status;
+    info.integrity = Integrity::Unknown { reason: why.message.clone() };
+    info.details.push(why);
+}
+
 fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, info: &mut SignatureInfo, cache: &DigestCache) {
     // A document timestamp can also be the value of a signature field (Documenso writes
     // `Timestamp_1` that way). Its `/Contents` is a bare RFC 3161 token, not a signature over the
@@ -692,10 +737,7 @@ fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, inf
         .map(|r| {
             r.get(b"TransformParams").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().and_then(|p| p.int(b"P"))).unwrap_or(2).clamp(1, 3) as u8
         });
-    let invalid = |info: &mut SignatureInfo, why: Detail| {
-        info.status = Status::Invalid;
-        info.details.push(why);
-    };
+    let invalid = invalid_integrity;
     // Byte ranges: [0 a b c] with the gap holding exactly the hex /Contents.
     let Some(br) = nums(doc, v, b"ByteRange").filter(|b| b.len() == 4 && b.iter().all(|x| *x >= 0.0)) else {
         return invalid(info, Detail::plain("The signature has no valid byte range."));
@@ -716,9 +758,8 @@ fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, inf
     // What can't be checked is unknown, not invalid: only data that is wrong or fails its check
     // is "invalid".
     let unsupported = |info: &mut SignatureInfo, why: &str| {
-        info.status = Status::Unknown;
         // What is not supported yet is named by the reader, in its own words.
-        info.details.push(Detail::of("PdfCraft can't check this signature yet: {}.", Fill::Reason(why.to_owned())));
+        incomplete_integrity(info, Detail::of("PdfCraft can't check this signature yet: {}.", Fill::Reason(why.to_owned())), Status::Unknown);
     };
     if info.sub_filter.as_deref() == Some("adbe.x509.rsa_sha1") {
         return validate_x509_rsa_sha1(doc, bytes, trust, v, info, cache, (l0, o1, covered), &contents);
@@ -727,7 +768,9 @@ fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, inf
         Ok(sd) => sd,
         Err(SignError::Unsupported(e)) => return unsupported(info, &e),
         // What the reader made of it goes in as it stands: it is a developer's detail, not a sentence.
-        Err(e) => return invalid(info, Detail::of("The signature could not be read ({}).", Fill::Reason(e.to_string()))),
+        Err(e) => {
+            return incomplete_integrity(info, Detail::of("The signature could not be read ({}).", Fill::Reason(e.to_string())), Status::Invalid);
+        }
     };
     let s = &sd.signer;
     // A quirk is a whole sentence the reader words for itself, so it goes on the list in `WORDINGS`.
@@ -777,7 +820,7 @@ fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, inf
         return invalid(info, Detail::plain("The document has been altered or corrupted since the signature was applied."));
     }
     let Some(cert) = sd.signer_certificate().cloned() else {
-        return invalid(info, Detail::plain("The signer's certificate is not in the signature."));
+        return incomplete_integrity(info, Detail::plain("The signer's certificate is not in the signature."), Status::Invalid);
     };
     info.algorithm = Some(format!("{} with {}", cert.public_key.describe(), s.scheme_digest.unwrap_or(s.digest).name()));
     info.signer = Some(cert.display_name());
@@ -795,7 +838,7 @@ fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, inf
         }
         Err(e) => {
             info.certificate = Some(cert);
-            return invalid(info, Detail::of("The signature could not be checked ({}).", Fill::Reason(e.to_string())));
+            return incomplete_integrity(info, Detail::of("The signature could not be checked ({}).", Fill::Reason(e.to_string())), Status::Invalid);
         }
     }
     finish_validation(doc, bytes, trust, info, cache, covered, cert, &sd.certificates, s.signing_time, unverified_time);
@@ -816,6 +859,9 @@ fn finish_validation(
     cms_time: Option<Time>,
     unverified_time: Option<Time>,
 ) {
+    // Both CMS and legacy callers reach this point only after the signed digest
+    // and signature value verify. Certificate refusals must not change this fact.
+    info.integrity = Integrity::Intact;
     info.signing_time = cms_time.or_else(|| info.date.as_deref().and_then(Time::from_pdf));
     let mut pool = embedded.to_vec();
     pool.extend(trust.certs.iter().cloned());
@@ -856,6 +902,7 @@ fn finish_validation(
                 Fill::Changes(kinds.clone()),
             );
             info.status = Status::Invalid;
+            info.integrity = Integrity::Altered { reason: said.message.clone() };
             info.details.push(said);
             problems = true;
         }
@@ -965,10 +1012,13 @@ fn check_dss_revocation(doc: &Document, signer: Option<&Certificate>, at: &Optio
             info.status = Status::Invalid;
             // The evidence and the date go in together: one hole, so a reader can put the
             // sentence's parts in whatever order its language wants.
-            info.details.push(Detail::of("The signer's certificate has been revoked ({}).", Fill::Value(format!("{}, {at}", sources.join(", ")))));
+            let detail = Detail::of("The signer's certificate has been revoked ({}).", Fill::Value(format!("{}, {at}", sources.join(", "))));
+            info.revocation = Revocation::Revoked { detail: detail.message.clone() };
+            info.details.push(detail);
             true
         }
         None if covered => {
+            info.revocation = Revocation::Good;
             info.details
                 .push(Detail::plain("The document's embedded revocation information shows that the signer's certificate has not been revoked."));
             false
@@ -981,10 +1031,7 @@ fn check_dss_revocation(doc: &Document, signer: Option<&Certificate>, at: &Optio
 /// cryptographically valid and its message imprint must cover the file's signed bytes.
 fn validate_doc_timestamp(doc: &Document, bytes: &[u8], v: &Dict, info: &mut SignatureInfo, cache: &DigestCache, trust: &TrustStore) {
     info.date = text(doc, v, b"M");
-    let invalid = |info: &mut SignatureInfo, why: Detail| {
-        info.status = Status::Invalid;
-        info.details.push(why);
-    };
+    let invalid = invalid_integrity;
     let Some(br) = nums(doc, v, b"ByteRange").filter(|b| b.len() == 4 && b.iter().all(|x| *x >= 0.0)) else {
         return invalid(info, Detail::plain("The timestamp has no valid byte range."));
     };
@@ -1004,7 +1051,13 @@ fn validate_doc_timestamp(doc: &Document, bytes: &[u8], v: &Dict, info: &mut Sig
     info.revision = cache.revision(bytes, covered).map_or(1, |d| d.revisions().len().max(1));
     let token = match crate::timestamp::parse_token(&contents) {
         Ok(t) => t,
-        Err(e) => return invalid(info, Detail::of("The timestamp token could not be read ({}).", Fill::Reason(e.to_string()))),
+        Err(e) => {
+            return incomplete_integrity(
+                info,
+                Detail::of("The timestamp token could not be read ({}).", Fill::Reason(e.to_string())),
+                Status::Invalid,
+            );
+        }
     };
     info.digest = Some(token.digest);
     info.timestamp_time = Some(token.gen_time);
@@ -1013,6 +1066,7 @@ fn validate_doc_timestamp(doc: &Document, bytes: &[u8], v: &Dict, info: &mut Sig
     if doc_digest != token.imprint {
         return invalid(info, Detail::plain("The document has been altered or corrupted since the timestamp was applied."));
     }
+    info.integrity = Integrity::Intact;
     if let Some(cert) = token.signer_certificate() {
         info.signer = Some(cert.display_name());
         info.certificate = Some(cert.clone());
@@ -1034,10 +1088,12 @@ fn validate_doc_timestamp(doc: &Document, bytes: &[u8], v: &Dict, info: &mut Sig
         )),
         Modification::Disallowed(kinds) => {
             info.status = Status::Invalid;
-            info.details.push(Detail::of(
+            let detail = Detail::of(
                 "The document has been altered since this timestamp was applied in ways it does not permit ({}).",
                 Fill::Changes(kinds.clone()),
-            ));
+            );
+            info.integrity = Integrity::Altered { reason: detail.message.clone() };
+            info.details.push(detail);
         }
     }
     if info.status != Status::Invalid {
@@ -1112,10 +1168,7 @@ fn validate_x509_rsa_sha1(
     (l0, o1, covered): (usize, usize, usize),
     contents: &[u8],
 ) {
-    let fail = |info: &mut SignatureInfo, why: Detail| {
-        info.status = Status::Invalid;
-        info.details.push(why);
-    };
+    let fail = invalid_integrity;
     let certs: Vec<Certificate> = match v.get(b"Cert").map(|c| doc.resolve(c)).as_deref() {
         Some(Object::Array(a)) => a.iter().filter_map(|c| doc.resolve(c).as_string().map(|s| s.bytes.clone())).collect::<Vec<_>>(),
         Some(Object::String(s)) => vec![s.bytes.clone()],
@@ -1124,11 +1177,15 @@ fn validate_x509_rsa_sha1(
     .iter()
     .filter_map(|raw| Certificate::parse(raw).ok())
     .collect();
-    let Some(cert) = certs.first().cloned() else { return fail(info, Detail::plain("The signer's certificate is not in the signature.")) };
+    let Some(cert) = certs.first().cloned() else {
+        return incomplete_integrity(info, Detail::plain("The signer's certificate is not in the signature."), Status::Invalid);
+    };
     let signature = match crate::der::Tlv::parse_ber(contents).and_then(|(t, _)| t.octets("signature").map(|o| o.into_owned())) {
         Ok(sig) => sig,
         // What the reader made of it goes in as it stands: it is a developer's detail, not a sentence.
-        Err(e) => return fail(info, Detail::of("The signature could not be read ({}).", Fill::Reason(e.to_string()))),
+        Err(e) => {
+            return incomplete_integrity(info, Detail::of("The signature could not be read ({}).", Fill::Reason(e.to_string())), Status::Invalid);
+        }
     };
     info.digest = Some(DigestAlg::Sha1);
     info.algorithm = Some(format!("{} with SHA-1", cert.public_key.describe()));
@@ -1146,14 +1203,13 @@ fn validate_x509_rsa_sha1(
         // malformed is a signature that doesn't verify (as on the CMS path).
         Err(SignError::Unsupported(e)) => {
             info.certificate = Some(cert);
-            info.status = Status::Unknown;
             // What is not supported yet is named by the reader, in its own words.
-            info.details.push(Detail::of("PdfCraft can't check this signature yet: {}.", Fill::Reason(e.to_string())));
+            incomplete_integrity(info, Detail::of("PdfCraft can't check this signature yet: {}.", Fill::Reason(e.to_string())), Status::Unknown);
             return;
         }
         Err(e) => {
             info.certificate = Some(cert);
-            return fail(info, Detail::of("The signature could not be verified ({}).", Fill::Reason(e.to_string())));
+            return incomplete_integrity(info, Detail::of("The signature could not be verified ({}).", Fill::Reason(e.to_string())), Status::Invalid);
         }
     }
     info.details.push(Detail::plain("The signature uses the legacy adbe.x509.rsa_sha1 format."));

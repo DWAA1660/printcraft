@@ -1217,7 +1217,7 @@ fn a_signed_page_relabelled_or_stripped_of_type_is_still_page_content() {
 }
 
 /// A self-signed CRL from `id` revoking its own certificate, valid from `this` to `next`.
-fn self_crl(id: &pkcs12::DigitalId, this: Time, next: Time, revoked_at: Time) -> Vec<u8> {
+fn self_crl(id: &pkcs12::DigitalId, this: Time, next: Time, revoked_at: Option<Time>) -> Vec<u8> {
     let alg = id.key.signature_algorithm(pdfcraft_sign::DigestAlg::Sha256);
     let tbs = der::seq(&[
         &der::int(1),
@@ -1225,7 +1225,7 @@ fn self_crl(id: &pkcs12::DigitalId, this: Time, next: Time, revoked_at: Time) ->
         &id.certificate.subject.raw,
         &this.encode(),
         &next.encode(),
-        &der::seq(&[&der::seq(&[&der::uint(&id.certificate.serial), &revoked_at.encode()])]),
+        &der::seq(&revoked_at.map(|at| der::seq(&[&der::uint(&id.certificate.serial), &at.encode()])).iter().map(Vec::as_slice).collect::<Vec<_>>()),
     ]);
     let sig = id.key.sign(pdfcraft_sign::DigestAlg::Sha256, &tbs).unwrap();
     der::seq(&[&tbs, &alg, &der::bit_string(&sig)])
@@ -1239,7 +1239,7 @@ fn a_revoked_certificate_stays_invalid_when_it_was_also_expired_at_signing() {
     let late = SignOptions { date: "D:20400101120000Z".into(), ..opts() };
     let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &late).unwrap();
     let t = |year| Time { year, month: 1, day: 1, hour: 0, minute: 0, second: 0 };
-    let crl = self_crl(&id, t(2039), t(2041), t(2039));
+    let crl = self_crl(&id, t(2039), t(2041), Some(t(2039)));
     let ltv = dss::embed(&open(&signed), &Evidence { certs: Vec::new(), ocsps: Vec::new(), crls: vec![crl] }).unwrap();
     let anchor = id.chain.first().cloned().unwrap_or_else(|| id.certificate.clone());
     for trust in [TrustStore::default(), TrustStore { certs: vec![anchor] }] {
@@ -1247,6 +1247,45 @@ fn a_revoked_certificate_stays_invalid_when_it_was_also_expired_at_signing() {
         assert!(s.details.iter().any(|d| d.message.contains("not valid at the time of signing")), "{:?}", s.details);
         assert_eq!(s.status, Status::Invalid, "{:?}", s.details);
         assert!(s.details.iter().any(|d| d.message.contains("revoked")), "{:?}", s.details);
+        let report = pdfcraft_sign::verify::report_for(&s, &trust);
+        assert_eq!(report.integrity, pdfcraft_sign::verify::Integrity::Intact, "revocation is not changed signed bytes");
+        assert!(matches!(report.revocation, pdfcraft_sign::verify::Revocation::Revoked { .. }));
+        assert!(!report.summary.contains("document changed"));
+        assert!(report.next_steps.iter().any(|step| step.contains("revoked")));
+        assert!(!report.next_steps.iter().any(|step| step.contains("add the signer's root")));
+        assert!(!pdfcraft_sign::verify::summarize(std::slice::from_ref(&report)).overall_text.contains("document changed"));
+        let expected = report.revocation.clone();
+        let mut reworded = s.clone();
+        for detail in &mut reworded.details {
+            detail.message = "Unrelated wording: unsupported; signature value does not match.".into();
+        }
+        let reworded_report = pdfcraft_sign::verify::report_for(&reworded, &trust);
+        assert_eq!(reworded_report.integrity, pdfcraft_sign::verify::Integrity::Intact);
+        assert_eq!(reworded_report.revocation, expected, "verdicts must not depend on detail prose");
+    }
+}
+
+#[test]
+fn revocation_reports_use_only_verified_embedded_evidence() {
+    use pdfcraft_sign::dss::{self, Evidence};
+    use pdfcraft_sign::verify::{self, Integrity, Revocation};
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let t = |year| Time { year, month: 1, day: 1, hour: 0, minute: 0, second: 0 };
+    let good = self_crl(&id, t(2025), t(2030), None);
+    let mut forged = good.clone();
+    *forged.last_mut().unwrap() ^= 0x40;
+    for (crl, expected) in [(good, Revocation::Good), (forged, Revocation::Unknown)] {
+        let bytes = dss::embed(&open(&signed), &Evidence { certs: Vec::new(), ocsps: Vec::new(), crls: vec![crl] }).unwrap();
+        let trust = TrustStore { certs: vec![id.certificate.clone()] };
+        let mut info = signatures(&open(&bytes), &bytes, &trust).into_iter().find(|s| s.signed && !s.doc_timestamp).unwrap();
+        assert_eq!(info.status, Status::Valid);
+        for detail in &mut info.details {
+            detail.message = "The signer's certificate has been revoked; unsupported.".into();
+        }
+        let report = verify::report_for(&info, &trust);
+        assert_eq!(report.integrity, Integrity::Intact);
+        assert_eq!(report.revocation, expected);
     }
 }
 

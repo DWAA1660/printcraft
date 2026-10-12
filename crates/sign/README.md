@@ -138,6 +138,12 @@ those roots. PdfCraft bundles them and verifies natively — no separate app, no
 - **Reports respect core validation:** an anchor match cannot promote a core
   Unknown/Invalid result to Trusted or an overall valid result. Missing signing
   time is reported separately from an expired certificate.
+- **Recorded outcomes:** `SignatureInfo` carries integrity and embedded-revocation
+  results recorded at the validation checks. Reports do not classify detail prose.
+  A revoked certificate keeps verified signed bytes intact and the signature invalid;
+  a missing signer certificate leaves integrity unchecked. The actual failure/evidence
+  reason is retained even when harmless CMS notes come first. Unusable or forged
+  revocation evidence yields Unknown rather than Good/Revoked.
 - **Document appearance:** signature widgets retain their own appearance. No
   canvas plate or copied third-party stamp covers signed document content.
 - **Validation reuse:** the engine caches session reports for the current validation

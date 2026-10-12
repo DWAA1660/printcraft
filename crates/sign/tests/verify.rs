@@ -256,6 +256,7 @@ fn unsupported_signature_maps_to_unknown_integrity() {
     let trust = TrustStore { certs: vec![id.certificate.clone()] };
     let mut info = signatures(&open(&signed), &signed, &trust).into_iter().find(|s| s.signed).unwrap();
     info.status = Status::Unknown;
+    info.integrity = Integrity::Unknown { reason: "Unsupported test algorithm.".into() };
     info.details.push(pdfcraft_sign::Detail {
         message: "PdfCraft can't check this signature yet: test seam.".into(),
         pattern: "test",
@@ -301,6 +302,21 @@ fn missing_signing_time_is_reported_without_claiming_expiry() {
     let summary = verify::summarize(&[report]);
     assert_eq!(summary.overall, "no-signing-time");
     assert_eq!(summary.valid, 0);
+}
+
+#[test]
+fn missing_signer_certificate_is_unchecked_not_altered() {
+    let mut bytes = data("x509-rsa-sha1.pdf");
+    let at = bytes.windows(5).position(|word| word == b"/Cert").unwrap();
+    bytes[at..at + 5].copy_from_slice(b"/Xert");
+    let mut info = signatures(&open(&bytes), &bytes, &TrustStore::default()).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(info.status, Status::Invalid);
+    info.details
+        .insert(0, pdfcraft_sign::Detail { message: "An unrelated encoding note.".into(), pattern: "test", fill: pdfcraft_sign::Fill::Nothing });
+    let report = verify::report_for(&info, &TrustStore::default());
+    assert_eq!(report.cert_validity, CertValidity::NoCertificate);
+    assert!(matches!(&report.integrity, Integrity::Unknown { reason } if reason.contains("certificate")), "{:?}", report.integrity);
+    assert!(!report.summary.contains("document changed"));
 }
 
 #[test]

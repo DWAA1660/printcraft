@@ -20,22 +20,8 @@
 use pdfcraft_cos::Document;
 
 use crate::cca;
-use crate::pdf::{Detail, Modification, SignatureInfo, Status, TrustStore, list};
-
-/// Whether the signed bytes still match the signature.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Integrity {
-    /// The digest and the signature value verify.
-    Intact,
-    /// The digest, the signature value, or the byte range does not verify, or
-    /// later changes are disallowed.
-    Altered { reason: String },
-    /// PdfCraft cannot check this signature yet (unsupported algorithm or
-    /// structure) or there is nothing signed to check.
-    Unknown { reason: String },
-    /// An empty signature field: nothing to verify.
-    NotApplicable,
-}
+pub use crate::pdf::{Integrity, Revocation};
+use crate::pdf::{Modification, SignatureInfo, Status, TrustStore, list};
 
 /// Whether the signer's chain reaches the trust store.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -61,18 +47,6 @@ pub enum CertValidity {
     NoSigningTime,
     /// The signature carries no signer certificate.
     NoCertificate,
-}
-
-/// Revocation from evidence embedded in the document (/DSS).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Revocation {
-    /// Embedded evidence shows the certificate was not revoked.
-    Good,
-    Revoked {
-        detail: String,
-    },
-    /// No usable embedded evidence: offline verification cannot tell.
-    Unknown,
 }
 
 /// Where the reported signing time comes from.
@@ -142,17 +116,6 @@ pub struct DocumentSummary {
     pub overall_text: String,
 }
 
-fn contains_any(details: &[Detail], needles: &[&str]) -> bool {
-    details.iter().any(|d| {
-        let lower = d.message.to_lowercase();
-        needles.iter().any(|n| lower.contains(n))
-    })
-}
-
-fn first_detail(details: &[Detail]) -> String {
-    details.first().map(|d| d.message.clone()).unwrap_or_else(|| "No details recorded.".to_string())
-}
-
 fn chain_trusts(info: &SignatureInfo, trust: &TrustStore) -> bool {
     info.chain.iter().any(|c| trust.certs.iter().any(|t| t.raw == c.raw))
 }
@@ -193,39 +156,13 @@ pub fn report_for(info: &SignatureInfo, trust: &TrustStore) -> SignatureReport {
         },
     };
 
-    let unsupported = contains_any(&info.details, &["can't check", "cannot check", "not supported", "unsupported"]);
-    let altered_words = contains_any(
-        &info.details,
-        &["altered or corrupted", "signature value does not match", "does not permit", "does not match the file", "does not exclude exactly"],
-    );
-    let integrity = if !info.signed {
-        Integrity::NotApplicable
-    } else if matches!(info.modification, Modification::Disallowed(_)) || (info.status == Status::Invalid && altered_words) {
-        Integrity::Altered { reason: first_detail(&info.details) }
-    } else {
-        match info.status {
-            Status::Valid => Integrity::Intact,
-            Status::Invalid => Integrity::Altered { reason: first_detail(&info.details) },
-            Status::Unknown if unsupported => Integrity::Unknown { reason: first_detail(&info.details) },
-            Status::Unknown => Integrity::Intact,
-        }
-    };
-
-    let (revocation, revocation_note) = if !info.signed {
-        (Revocation::Unknown, None)
-    } else if contains_any(&info.details, &["has been revoked"]) {
-        (Revocation::Revoked { detail: first_detail(&info.details) }, None)
-    } else if contains_any(&info.details, &["has not been revoked"]) {
-        (Revocation::Good, None)
-    } else {
-        (
-            Revocation::Unknown,
-            Some(
-                "Revocation status unknown: offline verification only checks revocation evidence embedded in the document (/DSS); this signature carries none."
-                    .to_string(),
-            ),
-        )
-    };
+    // These facts were recorded at the actual validation/evidence checks. Detail
+    // wording, translations and harmless CMS notes cannot change the verdict.
+    let integrity = if info.signed { info.integrity.clone() } else { Integrity::NotApplicable };
+    let revocation = if info.signed { info.revocation.clone() } else { Revocation::Unknown };
+    let revocation_note = (info.signed && revocation == Revocation::Unknown).then(|| {
+        "Revocation status unknown: offline verification checks only usable evidence embedded in the document (/DSS). No conclusive embedded result is available for this signature.".to_string()
+    });
 
     let time_source = if info.timestamp_time.is_some() {
         TimeSource::TrustedTimestamp
@@ -254,9 +191,11 @@ pub fn report_for(info: &SignatureInfo, trust: &TrustStore) -> SignatureReport {
         Integrity::Intact | Integrity::NotApplicable => {}
     }
     if info.signed {
-        if anchored && info.status != Status::Valid {
+        if matches!(revocation, Revocation::Revoked { .. }) {
+            next_steps.push("Do not rely on this signature: embedded evidence shows that the signer certificate was revoked. Obtain a replacement from the issuer.".into());
+        } else if anchored && info.status != Status::Valid {
             next_steps.push("The core validator did not accept this signature. Review its validation details before relying on the document.".into());
-        } else if matches!(trust, Trust::Untrusted) {
+        } else if matches!(trust, Trust::Untrusted) && integrity == Integrity::Intact {
             next_steps.push("The signature is intact but the signer is not trusted. For e-Aadhaar, verify with the bundled CCA India roots; otherwise add the signer's root to trusted certificates and validate again.".to_string());
         }
         if matches!(cert_validity, CertValidity::NotValidAtSigning { .. }) {
@@ -274,7 +213,7 @@ pub fn report_for(info: &SignatureInfo, trust: &TrustStore) -> SignatureReport {
 
     let summary = if !info.signed {
         "Unsigned signature field.".to_string()
-    } else if info.status == Status::Unknown && anchored {
+    } else if matches!(revocation, Revocation::Revoked { .. }) || (info.status == Status::Unknown && anchored) {
         info.summary().to_string()
     } else {
         match (&integrity, &trust, &cert_validity) {
@@ -395,7 +334,7 @@ pub fn summarize(reports: &[SignatureReport]) -> DocumentSummary {
     let (overall, overall_text) = if signed == 0 {
         ("no-signatures", "This document has no digital signatures to verify.")
     } else if s.invalid > 0 || s.altered > 0 {
-        ("invalid", "At least one signature is invalid: the document changed or the signature does not verify.")
+        ("invalid", "At least one signature is invalid.")
     } else if s.unsupported > 0 {
         ("unsupported", "Verification is incomplete: at least one signature uses an algorithm or structure PdfCraft cannot check yet.")
     } else if s.expired_or_invalid_cert > 0 {
