@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use pdfcraft_cos::{Dict, Document, Object, PdfString};
 
-use crate::data::{DataNode, parse_datasets, som_to_path};
+use crate::data::{DataNode, data_path, parse_datasets};
 use crate::model::*;
 use crate::{Report, XfaError};
 
@@ -171,6 +171,8 @@ fn child_som(parent: &str, name: Option<&str>, index: usize) -> String {
 }
 
 struct Walker<'a> {
+    /// For data paths (areas are not data scopes).
+    tpl: &'a Template,
     data: Option<&'a DataNode>,
     ov: &'a Overrides,
     events: Vec<ScriptEvent>,
@@ -241,7 +243,7 @@ impl Walker<'_> {
 
     fn field(&mut self, f: &Field, parent_som: &str, index: usize, radio: Option<&str>) -> FormNode {
         let som = child_som(parent_som, f.common.name.as_deref().or(Some("field")), index);
-        let data_value = self.data.and_then(|d| d.value_at(&som_to_path(&som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+        let data_value = self.data.and_then(|d| d.value_at(&data_path(self.tpl, &som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
         let value = match (radio, data_value) {
             // A radio button's value is its on value when the group picked it.
             (Some(selected), _) => {
@@ -268,6 +270,16 @@ impl Walker<'_> {
         }
     }
 
+    /// What [`Self::field`] gives a field outside an exclusion group: its data value (as saved)
+    /// or its template default.
+    fn plain_field_value(tpl: &Template, data: Option<&DataNode>, f: &Field, som: &str) -> String {
+        let data_value = data.and_then(|d| d.value_at(&data_path(tpl, som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+        match data_value {
+            Some(v) => f.saved_value(&v),
+            None => f.value.plain().map(|v| f.saved_value(v.trim())).unwrap_or_default(),
+        }
+    }
+
     fn children(&mut self, nodes: &[Node], parent_som: &str, depth: usize) -> Vec<FormNode> {
         let mut out = Vec::new();
         if depth > MAX_DEPTH {
@@ -281,7 +293,7 @@ impl Walker<'_> {
             match n {
                 Node::Subform(sf) => {
                     let from_data = match (&sf.common.name, self.data) {
-                        (Some(name), Some(d)) if sf.occur.max != Some(1) => d.count(&som_to_path(parent_som), name),
+                        (Some(name), Some(d)) if sf.occur.max != Some(1) => d.count(&data_path(self.tpl, parent_som), name),
                         _ => 0,
                     };
                     let instances = crate::layout::instance_count(&sf.occur, from_data);
@@ -344,7 +356,8 @@ impl Walker<'_> {
                 }
                 Node::ExclGroup(g) => {
                     let som = child_som(parent_som, g.common.name.as_deref().or(Some("group")), sib);
-                    let selected = self.data.and_then(|d| d.text_at(&som_to_path(&som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+                    let selected =
+                        self.data.and_then(|d| d.text_at(&data_path(self.tpl, &som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
                     self.push_events(&som, &g.scripts, None, None, None);
                     let fields: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
                     let mut children = Vec::new();
@@ -378,7 +391,7 @@ impl Walker<'_> {
 /// from the template and `ov`) and every scripted event, in document order, within
 /// [`MAX_FORM_NODES`] objects.
 pub fn form_tree(tpl: &Template, data: Option<&DataNode>, ov: &Overrides) -> LiveForm {
-    let mut w = Walker { data, ov, events: Vec::new(), nodes: 0, truncated: false };
+    let mut w = Walker { tpl, data, ov, events: Vec::new(), nodes: 0, truncated: false };
     let root = Node::Subform(Box::new(tpl.root.clone()));
     let mut nodes = w.children(std::slice::from_ref(&root), "", 0);
     let mut root_node = nodes.pop().unwrap_or_default();
@@ -577,6 +590,70 @@ pub fn template_of(doc: &Document) -> Result<Template, XfaError> {
         return Err(XfaError::Malformed("the XFA packets hold no template".into()));
     }
     crate::parse(&packets.xdp).map(|(t, _)| t)
+}
+
+/// The template field the object at `som` is an instance of, when it is a field outside an
+/// exclusion group (whose buttons take their value from the group).
+fn template_field<'a>(tpl: &'a Template, som: &str) -> Option<&'a Field> {
+    let path = crate::data::som_to_path(som);
+    let (first, rest) = path.split_first()?;
+    if tpl.root.common.name.as_deref() != Some(first.0.as_str()) {
+        return None;
+    }
+    let mut level: &[Node] = &tpl.root.children;
+    let mut found: Option<&Node> = None;
+    for (name, _) in rest {
+        let next = named_in(level, name, 0)?;
+        level = match next {
+            Node::Subform(sf) => &sf.children,
+            Node::Area(a) => &a.children,
+            _ => &[],
+        };
+        found = Some(next);
+    }
+    match found {
+        Some(Node::Field(f)) => Some(f),
+        _ => None,
+    }
+}
+
+/// The child of `nodes` named `name`, looking through unnamed subforms and areas (as data
+/// paths do); exclusion groups are not looked into.
+fn named_in<'a>(nodes: &'a [Node], name: &str, depth: usize) -> Option<&'a Node> {
+    if depth > MAX_DEPTH {
+        return None;
+    }
+    nodes.iter().find(|n| n.common().name.as_deref() == Some(name)).or_else(|| {
+        nodes.iter().find_map(|n| match n {
+            Node::Subform(sf) if sf.common.name.is_none() => named_in(&sf.children, name, depth + 1),
+            Node::Area(a) if a.common.name.is_none() => named_in(&a.children, name, depth + 1),
+            _ => None,
+        })
+    })
+}
+
+/// Give the field at `som` in `live` the value [`form_tree`] would give it from `data` now,
+/// so a value change needs no rebuild of the tree. `None`: not a plain field the tree can
+/// refresh alone (a radio button, an object the template doesn't have): rebuild the tree.
+pub fn refresh_value(live: &mut FormNode, tpl: &Template, data: Option<&DataNode>, som: &str) -> Option<bool> {
+    let f = template_field(tpl, som)?;
+    let value = Walker::plain_field_value(tpl, data, f, som);
+    fn set(n: &mut FormNode, som: &str, value: &str, depth: usize) -> Option<bool> {
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        if n.som == som {
+            if n.kind != Some(NodeKind::Field) {
+                return None;
+            }
+            let changed = n.value != value;
+            n.value = value.to_string();
+            return Some(changed);
+        }
+        n.children.iter_mut().find_map(|c| set(c, som, value, depth + 1))
+    }
+    // Not in the live tree (hidden, or past the node budget): nothing to refresh.
+    Some(set(live, som, &value, 0).unwrap_or(false))
 }
 
 /// The data tree of a document's datasets packet.

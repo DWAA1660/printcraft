@@ -124,6 +124,32 @@ fn text_is_wrapped_and_paginated() {
     assert!(content(p.last().unwrap()).contains("(After a form feed) Tj"), "a form feed starts a page");
 }
 
+/// Text Helvetica can't draw is refused with its line and character, never set as `?`; text
+/// PdfCraft generates writes such characters as [U+XXXX] and says so.
+#[test]
+fn text_helvetica_cannot_draw_is_refused_or_escaped() {
+    let err = from_text("notes", "Café —\tok\r\n\u{c}第二页 notes", LETTER, 11.0).unwrap_err();
+    let CreateError::Invalid(msg) = &err else { panic!("{err:?}") };
+    assert!(msg.contains("(line 2)") && msg.contains("\"第\" (U+7B2C)") && msg.contains("Western European"), "{msg}");
+    // Western European text, tabs, CRLF and form feeds included, still converts.
+    from_text("notes", "Café —\tok\r\n\u{c}Seite zwei: Grüße", LETTER, 11.0).unwrap();
+    let (doc, escaped) = from_text_escaped("Summary of Comments on 报告.pdf", "Comment: 签名 ok\nPage 2", LETTER, 11.0).unwrap();
+    assert_eq!(escaped, 2);
+    let doc = reopen(&doc);
+    let p = pages(&doc);
+    let c = doc.resolve(p[0].get(b"Contents").unwrap());
+    let Object::Stream(s) = &*c else { panic!() };
+    let shown = String::from_utf8_lossy(&s.decoded().unwrap()).into_owned();
+    assert!(shown.contains("(Comment: [U+7B7E][U+540D] ok) Tj") && shown.contains(&format!("({ESCAPED_NOTE}) Tj")), "{shown}");
+    assert!(!shown.contains('?'), "{shown}");
+    // Nothing to escape: no note.
+    let (doc, escaped) = from_text_escaped("r", "Plain report", LETTER, 11.0).unwrap();
+    assert_eq!(escaped, 0);
+    let p = pages(&doc);
+    let Object::Stream(s) = &*doc.resolve(p[0].get(b"Contents").unwrap()) else { panic!() };
+    assert!(!String::from_utf8_lossy(&s.decoded().unwrap()).contains("U+XXXX"));
+}
+
 fn image_of(doc: &Document, page: usize) -> Dict {
     let p = &pages(doc)[page];
     let res = doc.resolve(p.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
@@ -196,6 +222,64 @@ fn a_tiff_claiming_enormous_dimensions_is_refused() {
     assert_eq!(tif.len(), 122);
     tif.push(0);
     assert!(matches!(from_images(&[("huge.tif".into(), tif)]), Err(CreateError::Image(..))));
+}
+
+/// A PNG of a few bytes whose header claims `w`×`h` 8-bit RGBA pixels, with no pixel data.
+fn png_claiming(w: u32, h: u32) -> Vec<u8> {
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut c = !0u32;
+        for &b in bytes {
+            c ^= u32::from(b);
+            for _ in 0..8 {
+                c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+            }
+        }
+        !c
+    }
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut chunk = |kind: &[u8], data: &[u8]| {
+        png.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        let body = [kind, data].concat();
+        png.extend_from_slice(&body);
+        png.extend_from_slice(&crc32(&body).to_be_bytes());
+    };
+    let ihdr = [&w.to_be_bytes()[..], &h.to_be_bytes(), &[8, 6, 0, 0, 0]].concat();
+    chunk(b"IHDR", &ihdr);
+    // An empty zlib stream: one stored block of no bytes.
+    chunk(b"IDAT", &[0x78, 0x01, 0x01, 0x00, 0x00, 0xff, 0xff, 0x00, 0x00, 0x00, 0x01]);
+    chunk(b"IEND", &[]);
+    png
+}
+
+#[test]
+fn a_tiny_png_claiming_huge_dimensions_is_refused_before_allocating() {
+    // 68 bytes claiming 13 GiB (and 1 TiB) of pixels: refused before anything is allocated,
+    // where it used to abort the process when the allocation failed.
+    for (w, h) in [(60_000, 60_000), (1 << 20, 1 << 18)] {
+        let png = png_claiming(w, h);
+        assert_eq!(png.len(), 68);
+        let r = from_images(&[("huge.png".into(), png)]);
+        assert!(matches!(&r, Err(CreateError::Image(_, m)) if m.contains("too large")), "{w}x{h}");
+    }
+}
+
+/// Likewise a PNG: the png crate's limits don't cover the frame buffer, which its header sizes
+/// (60000x60000 RGBA is 14.4 GB). Refused before anything is allocated, not after.
+#[test]
+fn a_png_claiming_enormous_dimensions_is_refused() {
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 60_000, 60_000);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut w = enc.write_header().unwrap();
+        // A zlib stream holding one zero byte: far too little data, but a well-formed start.
+        w.write_chunk(png::chunk::IDAT, &[0x78, 0x01, 0x01, 0x01, 0x00, 0xFE, 0xFF, 0x00, 0x00, 0x01, 0x00, 0x01]).unwrap();
+    }
+    match from_images(&[("huge.png".into(), png)]) {
+        Err(CreateError::Image(_, m)) => assert!(m.contains("too large"), "{m}"),
+        other => panic!("expected a refusal, got {:?}", other.map(|_| ())),
+    }
 }
 
 #[test]
@@ -287,6 +371,28 @@ fn jpeg_2000_images_are_embedded_as_is() {
     }
     let doc = reopen(&from_images(&[("raw.j2k".into(), siz)]).unwrap());
     assert_eq!(media(&pages(&doc)[0])[2], 64.0);
+}
+
+#[test]
+fn text_files_are_decoded_by_byte_order_mark_then_utf8_then_code_page() {
+    let utf16 = |text: &str, big: bool| -> Vec<u8> {
+        let mut v = if big { vec![0xFE, 0xFF] } else { vec![0xFF, 0xFE] };
+        for u in text.encode_utf16() {
+            v.extend_from_slice(&if big { u.to_be_bytes() } else { u.to_le_bytes() });
+        }
+        v
+    };
+    assert_eq!(decode_text("Kış İstanbul".as_bytes()), "Kış İstanbul");
+    assert_eq!(decode_text(b"\xEF\xBB\xBFMerhaba"), "Merhaba", "a UTF-8 byte order mark is dropped");
+    assert_eq!(decode_text(&utf16("Kış İstanbul\r\nŞubat", false)), "Kış İstanbul\r\nŞubat");
+    assert_eq!(decode_text(&utf16("Grüße 日本", true)), "Grüße 日本");
+    // Not UTF-8: Windows-1254 for Turkish, 1252 for other Western text (Icelandic included).
+    assert_eq!(decode_text(b"K\xFD\xFE \xDDstanbul \xF0\xFC\xE7"), "Kış İstanbul ğüç");
+    assert_eq!(decode_text(b"\xDE\xF3r\xF0ur \xE1 \xEDslandi"), "Þórður á íslandi");
+    assert_eq!(decode_text(b"caf\xE9 \x80 5"), "café € 5");
+    // Odd and broken input never fails.
+    assert_eq!(decode_text(&[0xFF, 0xFE, b'A']), "\u{FFFD}");
+    assert_eq!(decode_text(b""), "");
 }
 
 #[test]
@@ -460,4 +566,158 @@ fn embedded_icc_profiles_tag_the_image_colour_space() {
     let (r, _) = image_xobject(&mut doc, "a.jpg", &jpeg).unwrap();
     let Object::Stream(s) = &*doc.get(r) else { panic!() };
     assert_eq!(icc_of(&doc, &s.dict).map(|(n, ..)| n), Some(4));
+}
+
+/// Replaces page 0's image with the stream `image` builds (it can add objects, e.g. a mask).
+fn with_image(doc: &mut Document, image: impl FnOnce(&mut Document) -> Stream) {
+    let page = pdfcraft_model::pages(doc)[0].clone();
+    let res = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+    let r = xo.iter().next().map(|(_, v)| v.as_ref().unwrap()).unwrap();
+    let s = image(doc);
+    doc.set(r, Object::Stream(s));
+}
+
+fn image_dict(w: i64, h: i64, space: &str, bpc: i64) -> Dict {
+    let mut d = Dict::new();
+    d.set(b"Type".to_vec(), Object::name("XObject"));
+    d.set(b"Subtype".to_vec(), Object::name("Image"));
+    d.set(b"Width".to_vec(), Object::Int(w));
+    d.set(b"Height".to_vec(), Object::Int(h));
+    d.set(b"ColorSpace".to_vec(), Object::name(space));
+    d.set(b"BitsPerComponent".to_vec(), Object::Int(bpc));
+    d
+}
+
+/// The exported file's extension and its pixels as RGBA.
+fn exported_rgba(doc: &Document) -> (&'static str, Vec<u8>) {
+    let out = extract_images(doc, &[0], 0);
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    let img = &out.images[0];
+    if img.extension == "jpg" {
+        return ("jpg", image::load_from_memory(&img.data).unwrap().into_rgba8().into_raw());
+    }
+    let dec = png::Decoder::new(std::io::Cursor::new(img.data.clone()));
+    let mut r = dec.read_info().unwrap();
+    let mut buf = vec![0; r.output_buffer_size().unwrap()];
+    let info = r.next_frame(&mut buf).unwrap();
+    buf.truncate(info.buffer_size());
+    let rgba = match info.color_type {
+        png::ColorType::Rgba => buf,
+        png::ColorType::Rgb => buf.as_chunks::<3>().0.iter().flat_map(|c| [c[0], c[1], c[2], 255]).collect(),
+        other => panic!("unexpected {other:?}"),
+    };
+    ("png", rgba)
+}
+
+fn alphas(rgba: &[u8]) -> Vec<u8> {
+    rgba.as_chunks::<4>().0.iter().map(|p| p[3]).collect()
+}
+
+/// A 4×2 grey JPEG (mid grey).
+fn real_jpeg() -> Vec<u8> {
+    let mut out = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 95).encode(&[128u8; 8], 4, 2, image::ExtendedColorType::L8).unwrap();
+    out
+}
+
+#[test]
+fn jpeg_images_with_a_soft_mask_export_as_png_with_alpha() {
+    // Issue #645: a cut-out photo (JPEG with an /SMask) lost its transparent background.
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut doc, |doc| {
+        let mask = Stream::from_raw(image_dict(4, 2, "DeviceGray", 8), vec![0, 255, 0, 255, 255, 0, 255, 0]);
+        let m = doc.add(Object::Stream(mask));
+        let mut d = image_dict(4, 2, "DeviceGray", 8);
+        d.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+        d.set(b"SMask".to_vec(), Object::Ref(m));
+        Stream::from_raw(d, real_jpeg())
+    });
+    let (ext, rgba) = exported_rgba(&doc);
+    assert_eq!(ext, "png", "a JPEG with transparency is written as a PNG");
+    assert_eq!(alphas(&rgba), [0, 255, 0, 255, 255, 0, 255, 0]);
+    assert!(rgba.as_chunks::<4>().0.iter().all(|p| p[0].abs_diff(128) <= 4 && p[0] == p[1] && p[1] == p[2]), "{rgba:?}");
+    // Without a mask the JPEG is still written as is.
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut doc, |_| {
+        let mut d = image_dict(4, 2, "DeviceGray", 8);
+        d.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+        Stream::from_raw(d, real_jpeg())
+    });
+    let out = extract_images(&doc, &[0], 0);
+    assert_eq!((out.images[0].extension, &out.images[0].data), ("jpg", &real_jpeg()));
+}
+
+#[test]
+fn soft_masks_of_another_size_and_stencil_and_colour_key_masks_become_alpha() {
+    // A 2×1 soft mask on a 4×2 image is scaled to the image's size.
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut doc, |doc| {
+        let m = doc.add(Object::Stream(Stream::from_raw(image_dict(2, 1, "DeviceGray", 8), vec![0, 255])));
+        let mut d = image_dict(4, 2, "DeviceRGB", 8);
+        d.set(b"SMask".to_vec(), Object::Ref(m));
+        Stream::from_raw(d, vec![10; 24])
+    });
+    let a = alphas(&exported_rgba(&doc).1);
+    assert!(a[0] < 64 && a[3] > 192 && a[4] < 64 && a[7] > 192, "{a:?}");
+
+    // A stencil /Mask: its 1 samples hide the image.
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut doc, |doc| {
+        let mut md = Dict::new();
+        md.set(b"Type".to_vec(), Object::name("XObject"));
+        md.set(b"Subtype".to_vec(), Object::name("Image"));
+        md.set(b"Width".to_vec(), Object::Int(4));
+        md.set(b"Height".to_vec(), Object::Int(2));
+        md.set(b"ImageMask".to_vec(), Object::Bool(true));
+        let m = doc.add(Object::Stream(Stream::from_raw(md, vec![0b1100_0000, 0b0011_0000])));
+        let mut d = image_dict(4, 2, "DeviceRGB", 8);
+        d.set(b"Mask".to_vec(), Object::Ref(m));
+        Stream::from_raw(d, vec![10; 24])
+    });
+    assert_eq!(alphas(&exported_rgba(&doc).1), [0, 0, 255, 255, 255, 255, 0, 0]);
+
+    // A colour-key /Mask: pure white pixels are transparent.
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut doc, |_| {
+        let mut d = image_dict(2, 1, "DeviceRGB", 8);
+        d.set(b"Mask".to_vec(), Object::Array([250, 255, 250, 255, 250, 255].map(Object::Int).to_vec()));
+        Stream::from_raw(d, vec![255, 255, 255, 255, 0, 0])
+    });
+    assert_eq!(exported_rgba(&doc).1, [255, 255, 255, 0, 255, 0, 0, 255]);
+
+    // A soft mask with /Matte: the colours are un-blended from the matte colour.
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut doc, |doc| {
+        let mut md = image_dict(2, 1, "DeviceGray", 8);
+        md.set(b"Matte".to_vec(), Object::Array(vec![Object::Int(1)]));
+        let m = doc.add(Object::Stream(Stream::from_raw(md, vec![255, 128])));
+        let mut d = image_dict(2, 1, "DeviceGray", 8);
+        d.set(b"SMask".to_vec(), Object::Ref(m));
+        // Black at half alpha, pre-blended with white: 255 + (0 − 255) × 128 / 255 ≈ 127.
+        Stream::from_raw(d, vec![0, 127])
+    });
+    let rgba = exported_rgba(&doc).1;
+    assert_eq!(rgba[..4], [0, 0, 0, 255]);
+    assert!(rgba[4] <= 2 && rgba[7] == 128, "{rgba:?}");
+}
+
+#[test]
+fn damaged_masks_and_sizes_never_panic() {
+    for (w, h, mw, mh, data) in [(4, 2, -3, 1, vec![]), (4, 2, i64::MAX, 2, vec![0; 8]), (-4, 2, 4, 2, vec![0; 8]), (4, 2, 4, 2, vec![])] {
+        let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+        with_image(&mut doc, |doc| {
+            let m = doc.add(Object::Stream(Stream::from_raw(image_dict(mw, mh, "DeviceGray", 8), data.clone())));
+            let mut d = image_dict(w, h, "DeviceRGB", 8);
+            d.set(b"SMask".to_vec(), Object::Ref(m));
+            d.set(b"Mask".to_vec(), Object::Array(vec![Object::Real(f64::NAN), Object::Int(-5)]));
+            Stream::from_raw(d, vec![10; 24])
+        });
+        let page = pdfcraft_model::pages(&doc)[0].clone();
+        let res = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+        let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+        let r = xo.iter().next().map(|(_, v)| v.as_ref().unwrap()).unwrap();
+        let _ = extract_images(&doc, &[0], 0);
+        let _ = image_file(&doc, r);
+    }
 }

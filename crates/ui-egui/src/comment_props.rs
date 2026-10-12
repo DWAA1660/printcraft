@@ -1,5 +1,5 @@
 //! Comment Properties (Acrobat: right-click a comment ▸ Properties…; audit "Comment
-//! properties"): Appearance (colour, opacity, line thickness, note icon), General (author,
+//! properties"): Appearance (colour, fill, opacity, line thickness, note icon), General (author,
 //! subject, modified) and Review History (status changes), with Acrobat's Locked box.
 
 use egui::{Align, Layout};
@@ -100,6 +100,9 @@ impl PdfCraftApp {
         if let Some(w) = p.width {
             style.width = w;
         }
+        if p.fillable && tool.has_fill() {
+            style.fill = p.fill;
+        }
         self.comment_prefs.set_style(tool, style);
         self.notify_fmt("New {tool} comments will look like this one", &[("tool", &crate::i18n::in_sentence(tl!(tool.label())))]);
     }
@@ -127,6 +130,9 @@ pub fn edits(d: &PropsDraft) -> Vec<Edit> {
     let endings = (e.endings != o.endings).then(|| e.endings.clone()).flatten();
     if e.restylable && (color.is_some() || opacity.is_some() || width.is_some() || endings.is_some()) {
         out.push(Edit::StyleAnnotation { page: d.page, index: d.index, color, opacity, width, endings });
+    }
+    if e.restylable && e.fillable && e.fill != o.fill {
+        out.push(Edit::FillAnnotation { page: d.page, index: d.index, fill: e.fill });
     }
     let author = (e.author != o.author).then(|| e.author.clone());
     let subject = (e.subject != o.subject).then(|| e.subject.clone());
@@ -161,7 +167,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     let kind = tl!(crate::comments_panel::subtype_label(&d.edited.subtype)).to_string();
     ui.label(egui::RichText::new(crate::i18n::fmt(tl!("{kind} Properties"), &[("kind", &kind)])).font(theme::semibold(18.0)));
     ui.add_space(6.0);
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         for (tab, label) in
             [(PropsTab::Appearance, tl!("Appearance")), (PropsTab::General, tl!("General")), (PropsTab::ReviewHistory, tl!("Review History"))]
         {
@@ -194,6 +200,13 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                         e.color = Some(c);
                     }
                     ui.end_row();
+                    if e.fillable {
+                        ui.label(tl!("Fill colour"));
+                        if let Some(f) = crate::comments::fill_picker(ui, e.fill) {
+                            e.fill = f;
+                        }
+                        ui.end_row();
+                    }
                     ui.label(tl!("Opacity"));
                     let mut pct = e.opacity * 100.0;
                     if ui.add(egui::Slider::new(&mut pct, 0.0..=100.0).suffix("%")).changed() {
@@ -227,10 +240,10 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         PropsTab::General => {
             egui::Grid::new("comment-general").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
                 let l = ui.label(tl!("Author"));
-                ui.add(egui::TextEdit::singleline(&mut e.author).desired_width(280.0)).labelled_by(l.id);
+                ui.add(crate::widgets::line(&mut e.author).desired_width(280.0)).labelled_by(l.id);
                 ui.end_row();
                 let l = ui.label(tl!("Subject"));
-                ui.add(egui::TextEdit::singleline(&mut e.subject).desired_width(280.0)).labelled_by(l.id);
+                ui.add(crate::widgets::line(&mut e.subject).desired_width(280.0)).labelled_by(l.id);
                 ui.end_row();
                 ui.label(tl!("Modified"));
                 ui.label(e.modified.as_deref().map(pdfcraft_render::pretty_date).unwrap_or_else(|| "—".into()));
@@ -247,7 +260,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         }
     }
     ui.add_space(12.0);
-    ui.checkbox(&mut d.edited.locked, tl!("Locked"));
+    ui.add(widgets::checkbox(&mut d.edited.locked, tl!("Locked")));
     let (mut apply, mut cancel) = (false, false);
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
         if widgets::pill_button(ui, tl!("OK"), true).clicked() {

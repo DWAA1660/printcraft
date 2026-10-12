@@ -4,13 +4,16 @@ description = "The egui shell of PdfCraft"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version = "1.95"
 
 [lints]
 workspace = true
 
 [dependencies]
+craft-ui = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 pdfcraft-engine = { workspace = true }
+pdfcraft-cos = { workspace = true }
 pdfcraft-render = { workspace = true }
 pdfcraft-model = { workspace = true }
 pdfcraft-platform = { workspace = true }
@@ -39,10 +42,9 @@ pollster = "1.0"
 # Checks that an installed fallback font parses and has the glyphs; the same skrifa egui uses.
 skrifa = "0.44"
 
-[target.'cfg(any(target_os = "linux", target_os = "freebsd", windows))'.dependencies]
-# Where the pointer is while files are dragged over the window, on the systems without an AppKit
-# to ask (below): X11 and Win32 queries behind a safe API. Wayland has no such query (no position).
-mouse_position = "0.1.4"
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
+# Fallible X11 queries; a missing display must not reach unchecked Xlib pointers.
+x11rb = { version = "0.13.2", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Where the pointer is while files are dragged over the window (winit doesn't say): safe AppKit
@@ -52,19 +54,22 @@ objc2-app-kit = { version = "0.3", default-features = false, features = ["std", 
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSGeometry"] }
 
 [target.'cfg(windows)'.dependencies]
+# Existing safe Win32 cursor query; keep the original Windows implementation.
+mouse_position = "0.1.4"
 # Auto interface language: the Windows display language, without starting a process.
 sys-locale = "0.3"
+# Region ▸ Measurement system for the default Units, read from the registry without starting reg.exe.
+winsafe = { version = "0.0.29", default-features = false, features = ["advapi"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 rfd = { workspace = true, features = ["file-handle-inner"] }
 wasm-bindgen-futures = "0.4"
 wasm-bindgen = "0.2"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "HtmlIFrameElement", "HtmlImageElement", "HtmlCollection", "Node", "EventTarget"] }
 
 [dev-dependencies]
 pdfcraft-xfa = { workspace = true }
-pdfcraft-cos = { workspace = true }
 egui_kittest = { workspace = true, features = ["eframe", "wgpu"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 # Glyph-coverage test of the interface fonts; the same skrifa pdfcraft-fonts already uses.

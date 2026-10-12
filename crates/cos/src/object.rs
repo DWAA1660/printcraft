@@ -66,24 +66,10 @@ impl PdfString {
             b => match std::str::from_utf8(b) {
                 // Pure ASCII is identical either way; only non-ASCII UTF-8 needs the switch.
                 Ok(utf8) if !b.is_ascii() => utf8.to_owned(),
-                _ => b.iter().map(|&c| pdfdoc_char(c)).collect(),
+                _ => b.iter().map(|&c| pdfcraft_crypt::pdfdoc_char(c)).collect(),
             },
         };
         if s.starts_with('\u{FEFF}') { s.trim_start_matches('\u{FEFF}').to_owned() } else { s }
-    }
-}
-
-/// PDFDocEncoding → Unicode (ISO 32000-2 Annex D). Bytes 0x18–0x1F and 0x80–0xA0 differ from Latin-1.
-fn pdfdoc_char(c: u8) -> char {
-    const HIGH: [char; 33] = [
-        '•', '†', '‡', '…', '—', '–', 'ƒ', '⁄', '‹', '›', '−', '‰', '„', '“', '”', '‘', '’', '‚', '™', 'ﬁ', 'ﬂ', 'Ł', 'Œ', 'Š', 'Ÿ', 'Ž', 'ı', 'ł',
-        'œ', 'š', 'ž', '\u{FFFD}', '€',
-    ];
-    const LOW: [char; 8] = ['˘', 'ˇ', 'ˆ', '˙', '˝', '˛', '˚', '˜'];
-    match c {
-        0x18..=0x1F => LOW[(c - 0x18) as usize],
-        0x80..=0xA0 => HIGH[(c - 0x80) as usize],
-        _ => c as char,
     }
 }
 
@@ -242,6 +228,17 @@ impl Stream {
             return self.raw_within(MAX_DECODED);
         }
         pdfcraft_filters::decode(&chain, &self.raw, MAX_DECODED).map_err(|e| CosError::Filter(e.to_string()))
+    }
+
+    /// Data after the first filter alone, bounded by `max`: the rest of the chain stays encoded.
+    /// Any corruption in that first filter is an error.
+    pub fn decoded_first_filter_strict(&self, max: usize) -> Result<Vec<u8>, CosError> {
+        let mut chain = self.filters();
+        chain.truncate(1);
+        if chain.is_empty() {
+            return self.raw_within(max);
+        }
+        pdfcraft_filters::decode(&chain, &self.raw, max.min(MAX_DECODED)).map_err(|e| CosError::Filter(e.to_string()))
     }
 
     fn raw_within(&self, max: usize) -> Result<Vec<u8>, CosError> {
@@ -483,5 +480,21 @@ mod tests {
         assert!(matches!(stream.decoded_within(2), Err(CosError::Filter(_))));
         assert_eq!(stream.decoded_within(3).unwrap(), b"abc");
         assert_eq!(stream.decoded_strict().unwrap(), b"abc");
+    }
+
+    #[test]
+    fn first_filter_decodes_only_the_outer_wrapper() {
+        let data = "0 0 m 100 100 l S\n".repeat(64).into_bytes();
+        let inner = Stream::flate(Dict::new(), &data).raw.to_vec();
+        for (outer, name, corrupt) in [(Filter::Ascii85, "ASCII85Decode", &b"{~>"[..]), (Filter::AsciiHex, "ASCIIHexDecode", &b"G0>"[..])] {
+            let encoded = pdfcraft_filters::encode(&outer, &Params::default(), &inner).unwrap();
+            let mut dict = Dict::new();
+            dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name(name), Object::name("FlateDecode")]));
+            let stream = Stream::from_raw(dict.clone(), encoded);
+            assert_eq!(stream.decoded_first_filter_strict(usize::MAX).unwrap(), inner);
+            assert_eq!(stream.decoded_strict().unwrap(), data);
+            assert!(matches!(stream.decoded_first_filter_strict(inner.len() - 1), Err(CosError::Filter(_))));
+            assert!(matches!(Stream::from_raw(dict, corrupt.to_vec()).decoded_first_filter_strict(usize::MAX), Err(CosError::Filter(_))));
+        }
     }
 }

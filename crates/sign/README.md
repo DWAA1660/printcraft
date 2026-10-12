@@ -20,7 +20,9 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
   no fix, so `rsa` is only used to verify). ECDSA signs with deterministic nonces (RFC 6979).
 - **Signing:** PAdES B-B (`ETSI.CAdES.detached`, signing-certificate-v2, SHA-256/384, no SHA-1).
   An existing unsigned field or a new one (visible with Acrobat's name-and-details appearance,
-  or invisible); certification with DocMDP P=1/2/3. The document is written incrementally
+  or invisible); certification with DocMDP P=1/2/3. A visible signature can show a `Graphic`
+  where the large name would be: drawn strokes, filled outlines (a typed signature) or RGBA
+  pixels (an image XObject with a soft mask), checked and size-capped first. The document is written incrementally
   with a zero-filled `/Contents` and fixed-width `/ByteRange`, which are then patched in
   place. Encrypted documents are refused for now.
 - **Timestamps (PAdES B-T):** the `timestamp` module builds and parses RFC 3161 requests,
@@ -54,7 +56,11 @@ ECDSA P-256/P-384; the store integration is tested with software-backed keys. A 
 or token whose driver registers a CNG key storage provider is such an identity too: the key
 is opened for signing without the silent flag, so the provider shows its own PIN dialog
 (checked by hand with a SafeNet token; CI has no hardware). A store identity signs with the
-issuers Windows chains its certificate to, without the root.
+issuers Windows chains its certificate to, without the root. Store certificates that can't
+sign (no private key, another key type, a key CNG can't open) are returned by
+`windows::list` as `unusable` with the reason and the Windows error code, shown greyed in
+the Sign dialog and by `sign_windows_ids`, instead of being left out silently; a key that
+needs a prompt to open is listed and asks at signing (issue #179).
 - **Validation:** `/ByteRange` and the CMS are read from the file's own bytes; the digest,
   the signature value and the signer's chain (against a `TrustStore`) are checked. Later
   revisions are diffed against the signed one, and the changes are classified (signing, form
