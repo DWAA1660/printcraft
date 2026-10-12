@@ -274,6 +274,41 @@ fn theme_commands_and_options_report_preference_and_effective_colours() {
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["theme_preference"], "System");
 }
 
+#[test]
+fn lithuanian_password_dialog_translates_dynamic_labels_and_validation() {
+    let (mut h, c) = harness();
+    ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "lt" }));
+    ok(&mut h, &c, "ui.set", json!({ "key": "dialog", "value": "protect" }));
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "Peržiūrėti");
+    h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "Redaguoti").click();
+    h.run_steps(2);
+    assert!(!h.state().protect_draft.viewing);
+    h.get_by_role_and_label(egui::accesskit::Role::PasswordInput, "Įveskite slaptažodį");
+    h.get_by_role_and_label(egui::accesskit::Role::PasswordInput, "Pakartokite slaptažodį");
+    h.state_mut().protect_draft.password = "abc".into();
+    h.state_mut().protect_draft.confirm = "xyz".into();
+    h.run_steps(2);
+    h.get_by_label("Slaptažodžiai nesutampa.");
+}
+
+#[test]
+fn lithuanian_inspector_title_updates_through_the_control_channel() {
+    let (mut h, c) = harness();
+    ok(&mut h, &c, "ui.set", json!({ "key": "panel", "value": "comments" }));
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::Tab, "Inspector");
+    let documents = ok(&mut h, &c, "ui.state", json!({}))["documents"].clone();
+    ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "lt" }));
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::Tab, "Inspektorius");
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Tab, "Inspector").is_none());
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"], documents);
+    ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "en" }));
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::Tab, "Inspector");
+}
+
 /// Switching the interface language changes labels only: documents, their dirty state and the
 /// command ids agents drive stay exactly the same.
 #[test]
@@ -285,7 +320,7 @@ fn language_switch_preserves_document_and_command_ids() {
     let documents = ok(&mut h, &c, "ui.state", json!({}))["documents"].clone();
     assert_eq!(documents[0]["dirty"], true);
     let commands = ok(&mut h, &c, "ui.commands", json!({}));
-    for code in ["ja", "zh-hans", "fr", "de", "uk", "en"] {
+    for code in ["ja", "zh-hans", "fr", "de", "uk", "lt", "en"] {
         ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": code }));
         h.run_steps(2);
         let state = ok(&mut h, &c, "ui.state", json!({}));
@@ -304,7 +339,8 @@ fn language_switch_preserves_document_and_command_ids() {
         h.run_steps(2);
     }
     let error = call(&mut h, &c, "ui.set", json!({ "key": "language", "value": "xx" })).unwrap_err();
-    assert!(error.contains("auto, en, ja"), "{error}");
+    let codes = std::iter::once(i18n::AUTO).chain(i18n::Lang::all().map(i18n::Lang::code)).collect::<Vec<_>>().join(", ");
+    assert_eq!(error, format!("language must be one of {codes}"));
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["language"], "en");
 }
 
@@ -1389,7 +1425,7 @@ fn rail_reveals_its_remembered_inactive_inspector_then_closes_the_visible_panel(
 fn control_quit_retains_inactive_fill_sign_typing_after_cancel() {
     let (mut h, c) = harness();
     h.state_mut().views[0].fill_text =
-        Some(pdfcraft_ui_egui::fill_sign::TypeBox { page: 0, at: [40.0, 200.0], text: "Unsaved signature note".into(), focus: false });
+        Some(pdfcraft_ui_egui::fill_sign::TypeBox { page: 0, at: [40.0, 200.0], text: "Unsaved signature note".into(), size: 10.0, focus: false });
     h.state_mut().active = None;
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
     assert_eq!(ok(&mut h, &c, "ui.quit", json!({})), json!({"quitting":false,"needs_confirmation":true}));

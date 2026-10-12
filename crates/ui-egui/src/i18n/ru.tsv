@@ -218,6 +218,9 @@
 	Add or edit links	Добавить или изменить ссылки
 	Create links from URLs	Создать ссылки из URL
 	Remove all links	Удалить все ссылки
+	No links to remove	Нет ссылок для удаления
+	Removed 1 link	Удалена 1 ссылка
+	Removed {n} links	Удалено ссылок: {n}
 	Add Bates numbering…	Добавить нумерацию Бейтса…
 	Add image…	Добавить изображение…
 	Redact text and images	Скрыть текст и изображения
@@ -751,6 +754,12 @@
 	Flip Vertical	Отразить по вертикали
 	Replace Image…	Заменить изображение…
 	Save Image As…	Сохранить изображение как…
+	Copy Image	Копировать изображение
+	The image has been copied ({w} × {h} pixels)	Изображение скопировано ({w} × {h} пикселей)
+	Couldn't copy the image: {e}	Не удалось скопировать изображение: {e}
+	Copy Image in Original Format	Копировать изображение в исходном формате
+	The image has been copied as a {ext} file	Изображение скопировано как файл {ext}
+	The page has changed; select the image again	Страница изменилась; выберите изображение снова
 	Check for updates	Проверить обновления
 	No check has run yet.	Проверка ещё не выполнялась.
 	Checking for a newer version…	Проверка новой версии…
@@ -2029,6 +2038,7 @@
 	DPI sets the printed page size without resampling the image.	DPI задаёт размер печатной страницы без передискретизации изображения.
 	Create	Создать
 	Dynamic XFA form laid out from its template: {pages}, {fields}.	Динамическая форма XFA, сверстанная по шаблону: {pages}, {fields}.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Скрипты этой формы выключены: один из них выполнялся слишком долго. Чтобы запустить их снова, откройте документ заново.
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	Форма XFA: её поля и данные XFA синхронизированы, поэтому другие просмотрщики показывают то, что вы заполняете.
 	Switch to two-page view first to show the cover page	Сначала переключитесь в двухстраничный вид, чтобы показать титульную страницу
 	Page display: {layout}	Отображение страниц: {layout}
@@ -2171,6 +2181,9 @@ key	Space	Пробел
 scroll speed	Slow	Низкая
 scroll speed	Normal	Обычная
 scroll speed	Fast	Высокая
+	Animation effects	Эффекты анимации
+animation effects	On	Вкл
+animation effects	Off	Выкл
 	Enhance camera image	Улучшить снимок с камеры
 	Drag the corners onto the document's edges, then choose Enhance page.	Перетащите углы к краям документа, затем выберите «Улучшить страницу».
 	Enhance page	Улучшить страницу
@@ -2180,6 +2193,16 @@ scroll speed	Fast	Высокая
 	Original	Оригинал
 	Greyscale	Оттенки серого
 	Black and white	Чёрно-белый
+	Reading colours	Цвета для чтения
+	Replace document colours	Заменить цвета документа
+	Black on white	Чёрный на белом
+	White on black	Белый на чёрном
+	Yellow on black	Жёлтый на чёрном
+	Green on black	Зелёный на чёрном
+	Page background	Фон страницы
+	Only change the colour of black text or line art	Менять только цвет чёрного текста и линий
+	Change the colour of line art as well as text	Менять цвет и линий, а не только текста
+	Colours are remapped while rendering; the document itself never changes.	Цвета меняются при отрисовке; сам документ никогда не изменяется.
 	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	Драйвер этого принтера не принимает настройки двусторонней печати от других программ, поэтому действует его собственная настройка. Измените её в окне Свойства…
 	Browser's print dialog	Диалог печати браузера
 	Copies, two-sided printing and colour are chosen in the browser's print dialog.	Число копий, двустороннюю печать и цвет выбирают в диалоге печати браузера.
@@ -2216,6 +2239,14 @@ scroll speed	Fast	Высокая
 	Ink sensitivity	Чувствительность к чернилам
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	В рамке не найдена подпись. Наведите рамку на подпись или увеличьте чувствительность к чернилам.
 	Couldn't use the photo: {e}	Не удалось использовать фото: {e}
+
+# PDF tab context menu (#1233)
+	Close Tab	Закрыть вкладку
+	Reopen Closed Tab	Открыть закрытую вкладку
+	Reveal in Finder	Показать в Finder
+	Reveal in File Explorer	Показать в проводнике
+	Other colour…	Другой цвет…
+	Recent colours	Недавние цвета
 	Couldn't follow linked PDF: {reason}	Не удалось открыть связанный PDF: {reason}
 	The linked PDF opened, but its named destination was not applied.	Связанный PDF открыт, но его именованное назначение не применено.
 	The linked PDF opened, but its page destination was out of range.	Связанный PDF открыт, но страница назначения вне допустимого диапазона.

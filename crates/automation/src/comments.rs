@@ -477,6 +477,14 @@ impl Automation {
         if sensitivity.is_some() && !scan {
             return Err(ToolError::InvalidArgs("sensitivity is only for scan: true".into()));
         }
+        let requested_size = a.opt_num("font_size")?;
+        if requested_size.is_some() && !matches!(kind, "text" | "date") {
+            return Err(ToolError::InvalidArgs("font_size is only for type text or date".into()));
+        }
+        let size = requested_size.unwrap_or(10.0);
+        if !(4.0..=300.0).contains(&size) {
+            return Err(ToolError::InvalidArgs("font_size must be 4–300 pt".into()));
+        }
         if let Some(path) = a.opt_str("path")? {
             if !matches!(kind, "signature" | "initials") || a.opt_str("text")?.is_some() {
                 return Err(ToolError::InvalidArgs("path is only for an image signature or initials; pass either path or text".into()));
@@ -500,7 +508,6 @@ impl Automation {
             let edit = image.edit(page, &info, at, kind == "initials", &author).ok_or_else(|| ToolError::InvalidArgs("at must be finite".into()))?;
             return self.apply(a, edit);
         }
-        let size = 10.0;
         let text_at = |t: &str| {
             let w = (pdfcraft_engine::annot_text::text_width(t, size) + 8.0).clamp(20.0, 600.0);
             let h = size * 1.2 + 6.0;

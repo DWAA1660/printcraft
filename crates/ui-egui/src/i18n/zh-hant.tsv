@@ -395,6 +395,12 @@
 	Flip Vertical	垂直翻轉
 	Replace Image…	替換圖片…
 	Save Image As…	圖片另存為…
+	Copy Image	複製圖片
+	The image has been copied ({w} × {h} pixels)	圖片已複製（{w} × {h} 畫素）
+	Couldn't copy the image: {e}	無法複製圖片：{e}
+	Copy Image in Original Format	以原始格式複製圖片
+	The image has been copied as a {ext} file	圖片已複製為 {ext} 檔案
+	The page has changed; select the image again	頁面已變更；請重新選取圖片
 	Check for updates	檢驗更新
 	No check has run yet.	尚未執行檢驗。
 	Checking for a newer version…	正在檢驗新版本…
@@ -1123,6 +1129,9 @@
 	Redact pages…	遮蔽頁面…
 	Redaction properties…	遮蔽內容設定…
 	Remove all links	移除所有連結
+	No links to remove	沒有可移除的連結
+	Removed 1 link	已移除 1 個連結
+	Removed {n} links	已移除 {n} 個連結
 	Remove background	移除背景
 	Remove header & footer	移除頁首與頁尾
 	Remove hidden information…	移除隱藏資訊…
@@ -1679,6 +1688,7 @@
 	At least one signature has problems.	至少一個簽名存在問題。
 	This document is secured. Some changes are restricted by its security settings.	本文件已加密。其安全設定限制了部分更改。
 	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	這是動態 XFA 表單，PdfCraft 暫無法顯示。您看到的是檔案的佔位頁面。
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	此表單的指令碼已關閉，因為其中一個指令碼執行時間過長。重新開啟文件即可再次執行。
 	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	此表單還包含 XFA 資料，PdfCraft 暫不讀取。您可以填寫欄位，但 Acrobat 可能顯示 XFA 值。
 	This document contains {n} interactive form fields.	本文件包含 {n} 個互動式表單欄位。
 	This file was damaged and has been repaired. Saving keeps the repaired version.	此檔案已損壞並已修復。儲存將保留修復後的版本。
@@ -2132,6 +2142,9 @@ key	Space	空格
 scroll speed	Slow	慢
 scroll speed	Normal	正常
 scroll speed	Fast	快
+	Animation effects	動畫效果
+animation effects	On	開
+animation effects	Off	關
 	Table rows belong directly in a table or its head, body or foot. Fix the table's tags.	表格列應直接位於表格或其表頭、主體、表尾內。請修正表格標記。
 	Enhance camera image	增強相機影像
 	Drag the corners onto the document's edges, then choose Enhance page.	將四個角拖曳到文件邊緣，然後選擇「增強頁面」。
@@ -2176,6 +2189,24 @@ scroll speed	Fast	快
 	Ink sensitivity	墨跡靈敏度
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	框內找不到簽名。請將框移到簽名上，或提高墨跡靈敏度。
 	Couldn't use the photo: {e}	無法使用此相片：{e}
+
+# PDF tab context menu (#1233)
+	Close Tab	關閉分頁
+	Reopen Closed Tab	重新開啟已關閉的分頁
+	Reveal in Finder	在 Finder 中顯示
+	Reveal in File Explorer	在檔案總管中顯示
+	Other colour…	其他顏色…
+	Recent colours	最近使用的顏色
+	Reading colours	閱讀色彩
+	Replace document colours	取代文件色彩
+	Page background	頁面背景
+	Only change the colour of black text or line art	僅變更黑色文字或線條圖的色彩
+	Change the colour of line art as well as text	除文字外，也變更線條圖的色彩
+	Colours are remapped while rendering; the document itself never changes.	色彩僅在顯示時重新對應；文件本身不會變更。
+	Black on white	白底黑字
+	White on black	黑底白字
+	Yellow on black	黑底黃字
+	Green on black	黑底綠字
 	Couldn't follow linked PDF: {reason}	無法開啟連結的 PDF：{reason}
 	The linked PDF opened, but its named destination was not applied.	已開啟連結的 PDF，但未套用其命名目的地。
 	The linked PDF opened, but its page destination was out of range.	已開啟連結的 PDF，但其頁面目的地超出範圍。

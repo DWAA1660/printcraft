@@ -21,6 +21,7 @@ mod links;
 pub mod mcp;
 mod measure;
 mod printing;
+mod reading;
 mod redact;
 mod signing;
 mod tools;
@@ -715,6 +716,7 @@ impl Automation {
             "comment_set_status" => self.comment_set_status(&a)?,
             "sign_list" => self.sign_list(&a)?,
             "accessibility_check" => self.a11y_check(&a)?,
+            "accessibility_autotag_preview" => self.accessibility_autotag_preview(&a)?,
             "ocr_recognize" => self.ocr_recognize(&a)?,
             "js_run" => self.js_run(&a)?,
             "js_document_scripts" => self.js_document_scripts(&a)?,
@@ -727,6 +729,7 @@ impl Automation {
             "doc_compare" => self.doc_compare(&a)?,
             "action_list" => self.action_list()?,
             "pdfa_verify" => self.pdfa_verify(&a)?,
+            "print_readiness" => self.print_readiness(&a)?,
             "doc_export_office" => self.doc_export_office(&a)?,
             "pdfa_convert" => self.pdfa_convert(&a)?,
             "action_run" => self.action_run(&a)?,
@@ -783,6 +786,7 @@ impl Automation {
             "comment_mark" => self.comment_mark(&a)?,
             "comment_lock" => self.comment_lock(&a)?,
             "comments_hide" => self.comments_hide(&a)?,
+            "view_reading_colors" => self.view_reading_colors(&a)?,
             "comments_summarize" => self.comments_summarize(&a)?,
             "comment_edit" => self.comment_edit(&a)?,
             "comment_delete" => self.comment_delete(&a)?,
@@ -861,10 +865,13 @@ impl Automation {
             self.apply(a, Edit::FlattenFillSign)?;
         }
         let bytes = if full { self.session.save_full_bytes(id) } else { self.session.save_bytes(id) }.map_err(failed)?;
+        // A save that adds or removes encryption, or must not keep the old revision (Sanitize,
+        // redaction), is rewritten in full even when an incremental save was asked for.
+        let incremental = !full && bytes.starts_with(&self.doc(a)?.saved_bytes());
         write_atomic(&target, &bytes)?;
         let path = target.to_string_lossy().into_owned();
         self.session.mark_saved(id, bytes.clone(), Some(path.clone())).map_err(failed)?;
-        Ok(json!({ "path": path, "bytes": bytes.len(), "incremental": !full, "document": summary(self.doc(a)?) }))
+        Ok(json!({ "path": path, "bytes": bytes.len(), "incremental": incremental, "document": summary(self.doc(a)?) }))
     }
 
     fn doc_revisions(&mut self, a: &Args) -> Result<Value> {
@@ -1648,8 +1655,9 @@ impl Automation {
 
     fn renderer(&mut self, id: DocId) -> Result<&mut PageRenderer> {
         let doc = self.session.get(id).ok_or_else(|| failed("no such document"))?;
+        let colors = self.session.reading_colors(id).unwrap_or_default();
         let fresh = || {
-            let config = RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() };
+            let config = RenderConfig { password: doc.password.as_deref().map(Arc::from), reading_colors: colors, ..Default::default() };
             (doc.display.clone(), PageRenderer::new(doc.display.clone(), config))
         };
         let entry = self.renderers.entry(id).or_insert_with(fresh);
@@ -2094,6 +2102,9 @@ fn info(d: &Document) -> Value {
         // (laid out from the template by PdfCraft, see xfa_layout; placeholder pages when that failed).
         "xfa": i.xfa.map(|x| match x { pdfcraft_render::Xfa::Static => "static", pdfcraft_render::Xfa::Dynamic => "dynamic" }),
         "xfa_layout": d.xfa.as_ref().map(|x| json!({ "pages": x.pages, "fields": x.fields, "warnings": x.warnings })),
+        // A script of the form ran too long and was abandoned: its scripts no longer run in this
+        // document (calculations, buttons) until it is opened again.
+        "xfa_scripts_off": d.xfa_scripts_off(),
         // What was rewritten from, or could not be written to, the XFA data.
         "xfa_warnings": d.xfa_warnings,
         "security": security,

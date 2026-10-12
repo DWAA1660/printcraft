@@ -83,3 +83,65 @@ fn drawing_editing_and_deleting_links() {
     h.run_steps(3);
     assert!(links(&h).is_empty());
 }
+
+#[test]
+fn removing_all_links_and_undo() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.link"));
+    let (a, b) = (at(&h, 40.0, 300.0), at(&h, 160.0, 320.0));
+    drag(&mut h, a, b);
+    h.state_mut().link_draft.as_mut().unwrap().url = "https://example.org".into();
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(links(&h).len(), 1);
+
+    // Execute remove all links command
+    assert!(h.state_mut().execute("edit.remove_links"));
+    h.run_steps(3);
+    assert_eq!(links(&h).len(), 0);
+
+    // Undo restores the link
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert_eq!(links(&h).len(), 1);
+}
+
+fn right_click(h: &mut Harness<'static, PdfCraftApp>, p: Pos2) {
+    h.hover_at(p);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+}
+
+#[test]
+fn the_link_context_menu_shows_only_for_a_right_click_on_a_link() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.link"));
+    let (a, b) = (at(&h, 40.0, 100.0), at(&h, 160.0, 120.0));
+    drag(&mut h, a, b);
+    h.state_mut().link_draft.as_mut().unwrap().url = "https://example.org".into();
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let (on_link, away) = (at(&h, 100.0, 110.0), at(&h, 250.0, 200.0));
+    // Select the link with the Link tool, then right-click away from it: the menu there is
+    // not the link's.
+    h.hover_at(on_link);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: on_link, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: on_link, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+    assert!(h.state().views[0].links.selected.is_some());
+    right_click(&mut h, away);
+    assert!(h.query_by_label("Remove all links").is_none(), "a right-click away from the link got the link menu");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    // A right-click on the link gets it, with the Select tool too.
+    h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Select;
+    h.run_steps(2);
+    right_click(&mut h, on_link);
+    h.get_by_label("Remove all links").click();
+    h.run_steps(3);
+    assert!(links(&h).is_empty());
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Remove all links"));
+}

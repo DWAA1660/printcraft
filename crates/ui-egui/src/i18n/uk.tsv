@@ -223,6 +223,9 @@
 	Add or edit links	Додати або редагувати посилання
 	Create links from URLs	Створити посилання з URL
 	Remove all links	Видалити всі посилання
+	No links to remove	Немає посилань для вилучення
+	Removed 1 link	Вилучено 1 посилання
+	Removed {n} links	Вилучено посилань: {n}
 	Add Bates numbering…	Додати нумерацію Бейтса…
 	Add image…	Додати зображення…
 	Redact text and images	Вилучити текст і зображення
@@ -755,6 +758,12 @@
 	Flip Vertical	Віддзеркалити вертикально
 	Replace Image…	Замінити зображення…
 	Save Image As…	Зберегти зображення як…
+	Copy Image	Копіювати зображення
+	The image has been copied ({w} × {h} pixels)	Зображення скопійовано ({w} × {h} пікселів)
+	Couldn't copy the image: {e}	Не вдалося скопіювати зображення: {e}
+	Copy Image in Original Format	Копіювати зображення в оригінальному форматі
+	The image has been copied as a {ext} file	Зображення скопійовано як файл {ext}
+	The page has changed; select the image again	Сторінка змінилася; виберіть зображення ще раз
 	Check for updates	Перевірити оновлення
 	No check has run yet.	Перевірку ще не виконано.
 	Checking for a newer version…	Перевірка наявності новішої версії…
@@ -2026,6 +2035,7 @@
 	DPI sets the printed page size without resampling the image.	DPI задає розмір друкованої сторінки без зміни кількості пікселів зображення.
 	Create	Створити
 	Dynamic XFA form laid out from its template: {pages}, {fields}.	Динамічну форму XFA скомпоновано за її шаблоном: {pages}, {fields}.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Сценарії цієї форми вимкнено, бо один із них виконувався надто довго. Щоб запустити їх знову, відкрийте документ повторно.
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	Форма XFA: її поля й дані XFA синхронізуються, тому інші засоби перегляду показують введені вами дані.
 	Switch to two-page view first to show the cover page	Спочатку перемкніть на двосторінковий вигляд, щоб показати обкладинку
 	Page display: {layout}	Відображення сторінок: {layout}
@@ -2280,6 +2290,9 @@ key	Space	Пробіл
 scroll speed	Slow	Повільна
 scroll speed	Normal	Звичайна
 scroll speed	Fast	Швидка
+	Animation effects	Ефекти анімації
+animation effects	On	Увімкнено
+animation effects	Off	Вимкнено
 	Enhance camera image	Поліпшити знімок з камери
 	Drag the corners onto the document's edges, then choose Enhance page.	Перетягніть кути до країв документа, потім виберіть «Поліпшити сторінку».
 	Enhance page	Поліпшити сторінку
@@ -2289,6 +2302,16 @@ scroll speed	Fast	Швидка
 	Original	Оригінал
 	Greyscale	Відтінки сірого
 	Black and white	Чорно-білий
+	Reading colours	Кольори для читання
+	Replace document colours	Замінити кольори документа
+	Black on white	Чорний на білому
+	White on black	Білий на чорному
+	Yellow on black	Жовтий на чорному
+	Green on black	Зелений на чорному
+	Page background	Фон сторінки
+	Only change the colour of black text or line art	Змінювати лише колір чорного тексту та ліній
+	Change the colour of line art as well as text	Змінювати колір і ліній, а не лише тексту
+	Colours are remapped while rendering; the document itself never changes.	Кольори змінюються під час рендерення; сам документ ніколи не змінюється.
 	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	Драйвер цього принтера не приймає налаштування двобічного друку від інших програм, тому діє його власне налаштування. Змініть його у вікні Властивості…
 	Browser's print dialog	Діалог друку браузера
 	Copies, two-sided printing and colour are chosen in the browser's print dialog.	Кількість копій, двосторонній друк і колір вибирають у діалозі друку браузера.
@@ -2325,6 +2348,14 @@ scroll speed	Fast	Швидка
 	Ink sensitivity	Чутливість до чорнила
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	У рамці не знайдено підпису. Наведіть рамку на підпис або збільште чутливість до чорнила.
 	Couldn't use the photo: {e}	Не вдалося використати фото: {e}
+
+# PDF tab context menu (#1233)
+	Close Tab	Закрити вкладку
+	Reopen Closed Tab	Відкрити закриту вкладку
+	Reveal in Finder	Показати у Finder
+	Reveal in File Explorer	Показати у файловому провіднику
+	Other colour…	Інший колір…
+	Recent colours	Нещодавні кольори
 	Couldn't follow linked PDF: {reason}	Не вдалося відкрити пов’язаний PDF: {reason}
 	The linked PDF opened, but its named destination was not applied.	Пов’язаний PDF відкрито, але його іменоване призначення не застосовано.
 	The linked PDF opened, but its page destination was out of range.	Пов’язаний PDF відкрито, але сторінка призначення поза межами діапазону.

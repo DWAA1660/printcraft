@@ -13,18 +13,22 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod actions;
+pub mod autotag;
 pub mod camera;
 pub mod camera_clean;
 pub mod camera_edges;
 pub mod catalog;
 pub mod commands;
 pub mod compare;
+mod copy_image;
 pub mod dates;
 pub mod export;
 pub mod js;
 pub mod links;
 pub mod ocr;
 pub mod optimizer;
+pub mod printcheck;
+mod scan_colours;
 pub mod signature_image;
 pub mod signature_scan;
 pub mod text_fonts;
@@ -143,7 +147,7 @@ pub type SplitPart = (usize, usize, Arc<Vec<u8>>);
 use std::sync::Arc;
 
 use pdfcraft_cos::{SaveOptions, write_full, write_incremental};
-use pdfcraft_render::{DocInfo, Layer, LayerOp, OpenError, RenderConfig, RenderPool, inspect};
+use pdfcraft_render::{DocInfo, Layer, LayerOp, OpenError, ReadingColors, RenderConfig, RenderPool, inspect};
 
 /// Stable identifier of an open document within a session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -247,6 +251,47 @@ struct Editor {
     /// runs (content edits leave every annotation dictionary alone). Cleared on any refresh
     /// that may change annotations; see [`AppearanceCache`].
     appearances: AppearanceCache,
+    /// The text blocks last computed for one page, reused while the document is unchanged.
+    text_blocks: TextBlocksCache,
+}
+
+/// One page's text blocks ([`pdfcraft_edit::text_blocks`]) and the unmodified document state they
+/// were read from. Opening a paragraph and applying its edit both need them, and grouping a long
+/// page is not cheap. Only an unmodified document is cached: its identity changes on every edit,
+/// undo and save (each reopens the working file), so a stale entry never matches.
+#[derive(Default)]
+struct TextBlocksCache(std::sync::Mutex<Option<CachedTextBlocks>>);
+
+/// The document state, the page (0-based) and its text blocks.
+type CachedTextBlocks = (pdfcraft_cos::SourceIdentity, usize, Arc<Vec<pdfcraft_edit::TextBlock>>);
+
+impl Clone for TextBlocksCache {
+    fn clone(&self) -> Self {
+        // A poisoned cache only loses the cached blocks.
+        Self(std::sync::Mutex::new(self.0.lock().ok().and_then(|c| c.clone())))
+    }
+}
+
+impl Editor {
+    /// The text blocks on `page` (0-based), from the cache when the document hasn't changed.
+    fn text_blocks(&self, page: usize) -> Result<Arc<Vec<pdfcraft_edit::TextBlock>>, EditError> {
+        let source = (!self.cos.is_modified()).then(|| self.cos.source_identity());
+        if let Some(source) = &source
+            && let Ok(cache) = self.text_blocks.0.lock()
+            && let Some((s, p, blocks)) = cache.as_ref()
+            && s == source
+            && *p == page
+        {
+            return Ok(blocks.clone());
+        }
+        let blocks = Arc::new(pdfcraft_edit::text_blocks(&self.cos, page)?);
+        if let Some(source) = source
+            && let Ok(mut cache) = self.text_blocks.0.lock()
+        {
+            *cache = Some((source, page, blocks.clone()));
+        }
+        Ok(blocks)
+    }
 }
 
 pub struct Document {
@@ -291,6 +336,8 @@ pub struct Document {
     pub xfa: Option<XfaLayout>,
     /// The parsed template of a laid-out XFA form, for its scripts.
     xfa_template: Option<Arc<pdfcraft_xfa::model::Template>>,
+    /// A script of the XFA form ran away, so its scripts are off (see [`Document::xfa_scripts_off`]).
+    xfa_scripts_off: bool,
     /// A content-only refresh keeps `info` from before the edit; an edit may have added or
     /// embedded fonts, so the font list is read again on demand ([`Session::refresh_fonts`]).
     fonts_stale: bool,
@@ -382,6 +429,13 @@ impl Document {
         self.editor.as_ref().map(|e| a11y::check(&e.cos, options))
     }
 
+    /// A script of this XFA form ran past its time limit and was abandoned, so the form's
+    /// scripts no longer run in this document (reopening it runs them again). The script's
+    /// error is in the JavaScript output; this is the state, for a viewer to show.
+    pub fn xfa_scripts_off(&self) -> bool {
+        self.xfa_scripts_off
+    }
+
     /// PDF Optimizer ▸ Audit space usage.
     pub fn audit_space(&self) -> Vec<optimize::SpaceUse> {
         self.editor.as_ref().map(|e| optimize::audit_space(&e.cos, self.bytes.len() as u64)).unwrap_or_default()
@@ -431,7 +485,7 @@ impl Document {
 
     /// Edit a PDF ▸ Edit text: the paragraphs on `page` (0-based).
     pub fn text_blocks(&self, page: usize) -> Vec<pdfcraft_edit::TextBlock> {
-        self.editor.as_ref().and_then(|e| pdfcraft_edit::text_blocks(&e.cos, page).ok()).unwrap_or_default()
+        self.editor.as_ref().and_then(|e| e.text_blocks(page).ok()).map(|b| b.as_ref().clone()).unwrap_or_default()
     }
 
     /// Saved measurement annotations, calculated from their geometry and PDF scales, plus
@@ -683,6 +737,12 @@ impl Document {
     /// revision). Unsaved edits aren't a revision yet.
     pub fn revision_ends(&self) -> Vec<usize> {
         self.editor.as_ref().map(|e| e.cos.revision_ends()).unwrap_or_default()
+    }
+
+    /// The file as last opened or saved, without unsaved edits: what an incremental save appends
+    /// to.
+    pub fn saved_bytes(&self) -> Arc<Vec<u8>> {
+        self.editor.as_ref().map_or_else(|| self.bytes.clone(), |e| e.cos.bytes().clone())
     }
 
     /// Notes about damage repaired while opening (Document Properties ▸ Advanced, notices).
@@ -2984,6 +3044,7 @@ impl Session {
             d.xfa_template = if ran_away { None } else { xfa_template };
             d.js_output.append(script_output);
             if ran_away {
+                d.xfa_scripts_off = true;
                 d.js_output.errors.push(XFA_SCRIPTS_OFF.into());
             }
             note_warnings(&mut d.xfa_warnings, &xfa_warnings);
@@ -3008,7 +3069,17 @@ impl Session {
         let (mut editor, read_only_reason) = match cos {
             Ok(Ok(cos)) => {
                 let keys = Keys { render: render_password.clone(), reopen: password.map(str::to_owned) };
-                (Some(Editor { cos, undo: Vec::new(), redo: Vec::new(), keys, appearances: AppearanceCache::default() }), None)
+                (
+                    Some(Editor {
+                        cos,
+                        undo: Vec::new(),
+                        redo: Vec::new(),
+                        keys,
+                        appearances: AppearanceCache::default(),
+                        text_blocks: TextBlocksCache::default(),
+                    }),
+                    None,
+                )
             }
             Ok(Err(e)) => (None, Some(e.to_string())),
             Err(_) => (None, Some("the document structure could not be read for editing".into())),
@@ -3071,6 +3142,7 @@ impl Session {
             js_output: Default::default(),
             xfa,
             xfa_template: None,
+            xfa_scripts_off: false,
             fonts_stale: false,
             xfa_warnings: Vec::new(),
             edit_notices: Vec::new(),
@@ -3103,6 +3175,23 @@ impl Session {
         if let Some(p) = editor.cos.permissions() {
             check_permission(&edit, &p)?;
         }
+        // Rewriting an OCR word (invisible text over a scan) also hides the scanned word: cover it
+        // in the paper's colour and draw the new text in the ink's.
+        let edit = match edit {
+            Edit::EditTextBlock { page, block, text, mut style } => {
+                // Only invisible text is sampled; the blocks are usually cached from opening it.
+                if style.cover.is_none()
+                    && let Some(info) = doc.info.pages.get(page)
+                    && let Some(b) = editor.text_blocks(page).ok().and_then(|b| b.get(block).filter(|b| b.invisible).cloned())
+                    && let Some((paper, ink)) = guard(|| scan_colours::sample(&editor.cos, info, page, &b)).ok().flatten()
+                {
+                    style.cover = Some(paper);
+                    style.color = style.color.or(Some(ink));
+                }
+                Edit::EditTextBlock { page, block, text, style }
+            }
+            other => other,
+        };
         // Nothing to bake: leave undo history and the dirty flag alone.
         if matches!(&edit, Edit::FlattenFillSign) && !pdfcraft_annot::has_visible_fill_sign(&editor.cos) {
             return Ok(());
@@ -3237,6 +3326,7 @@ impl Session {
         doc.js_output.append(cx.xfa_out);
         if cx.xfa_ran_away {
             doc.xfa_template = None;
+            doc.xfa_scripts_off = true;
             doc.js_output.errors.push(XFA_SCRIPTS_OFF.into());
         }
         Ok(())
@@ -4096,6 +4186,24 @@ impl Session {
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
         doc.generation += 1;
         true
+    }
+
+    /// Set the document's reading colours (Acrobat's Replace Document Colors). Returns whether
+    /// anything changed; callers must drop cached rasters and text for the document.
+    pub fn set_reading_colors(&mut self, id: DocId, colors: ReadingColors) -> bool {
+        let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) else { return false };
+        if doc.config.reading_colors == colors {
+            return false;
+        }
+        doc.config.reading_colors = colors;
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+        doc.generation += 1;
+        true
+    }
+
+    /// The document's reading-colours setting; `None` when no such document is open.
+    pub fn reading_colors(&self, id: DocId) -> Option<ReadingColors> {
+        Some(self.get(id)?.config.reading_colors)
     }
 
     /// Acrobat's Summarize Comments ("Comments only" layout): a new PDF listing every comment

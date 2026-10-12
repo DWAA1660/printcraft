@@ -176,14 +176,20 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, state: &mut A11yState, doc: D
         return action;
     };
     let failed = report.count(Status::Failed);
+    let manual = report.count(Status::Manual);
+    let skipped = report.count(Status::Skipped);
     ui.horizontal(|ui| {
         ui.label(
-            egui::RichText::new(if failed == 0 {
+            egui::RichText::new(if failed == 0 && manual == 0 && skipped == 0 {
                 tl!("No issues found").to_string()
             } else if failed == 1 {
                 tl!("1 issue").to_string()
-            } else {
+            } else if failed > 1 {
                 crate::i18n::fmt(tl!("{n} issues"), &[("n", &failed.to_string())])
+            } else if manual > 0 {
+                format!("{}: {manual}", tl!("Needs manual check"))
+            } else {
+                format!("{}: {skipped}", tl!("Skipped"))
             })
             .color(t.text_muted),
         );
@@ -196,6 +202,9 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, state: &mut A11yState, doc: D
             }
         });
     });
+    if failed > 0 && manual > 0 {
+        ui.label(egui::RichText::new(format!("{}: {manual}", tl!("Needs manual check"))).small().color(t.text_muted));
+    }
     if let Some((_, previous)) = state.previous.as_ref().filter(|(d, _)| *d == doc) {
         egui::CollapsingHeader::new(tl!("Compare")).default_open(true).show(ui, |ui| {
             for status in [Status::Passed, Status::Failed, Status::Manual, Status::Skipped] {
@@ -360,20 +369,26 @@ impl PdfCraftApp {
             r.findings.clear();
         }
         let failed = report.count(Status::Failed);
+        let manual = report.count(Status::Manual);
+        let skipped = report.count(Status::Skipped);
         self.a11y.previous =
             if self.a11y.options.as_ref() == Some(&options) { self.a11y.report.take().filter(|(prior_id, _)| *prior_id == id) } else { None };
         self.a11y.options = Some(options);
         self.a11y.report = Some((id, report));
         self.right = Some(RightPanel::Accessibility);
-        self.notify(if failed == 0 {
+        self.notify(if failed == 0 && manual == 0 && skipped == 0 {
             tl!("The checker found no problems in this document.").to_string()
         } else if failed == 1 {
             tl!("The checker found 1 problem which may prevent the document from being fully accessible.").to_string()
-        } else {
+        } else if failed > 1 {
             crate::i18n::fmt(
                 tl!("The checker found {n} problems which may prevent the document from being fully accessible."),
                 &[("n", &failed.to_string())],
             )
+        } else if manual > 0 {
+            format!("{}: {manual}", tl!("Needs manual check"))
+        } else {
+            format!("{}: {skipped}", tl!("Skipped"))
         });
         if self.a11y_options.create_report {
             self.show_accessibility_report();

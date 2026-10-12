@@ -2147,6 +2147,9 @@
 	Add or edit links	Προσθήκη ή επεξεργασία συνδέσμων
 	Create links from URLs	Δημιουργία συνδέσμων από URL
 	Remove all links	Αφαίρεση όλων των συνδέσμων
+	No links to remove	Δεν υπάρχουν σύνδεσμοι για κατάργηση
+	Removed 1 link	Καταργήθηκε 1 σύνδεσμος
+	Removed {n} links	Σύνδεσμοι που καταργήθηκαν: {n}
 	Add Bates numbering…	Προσθήκη αρίθμησης Bates…
 	Add image…	Προσθήκη εικόνας…
 	Redact text and images	Οριστική απόκρυψη κειμένου και εικόνων
@@ -2270,6 +2273,9 @@ comment menu	Edit	Επεξεργασία
 scroll speed	Slow	Αργή
 scroll speed	Normal	Κανονική
 scroll speed	Fast	Γρήγορη
+	Animation effects	Εφέ κίνησης
+animation effects	On	Ενεργά
+animation effects	Off	Ανενεργά
 	Enhance camera image	Βελτίωση εικόνας κάμερας
 	Drag the corners onto the document's edges, then choose Enhance page.	Σύρετε τις γωνίες στις άκρες του εγγράφου και επιλέξτε Βελτίωση σελίδας.
 	Enhance page	Βελτίωση σελίδας
@@ -2318,8 +2324,27 @@ scroll speed	Fast	Γρήγορη
 	Ink sensitivity	Ευαισθησία μελανιού
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	Δεν βρέθηκε υπογραφή στο πλαίσιο. Μετακινήστε το πλαίσιο πάνω από την υπογραφή ή αυξήστε την ευαισθησία μελανιού.
 	Couldn't use the photo: {e}	Δεν ήταν δυνατή η χρήση της φωτογραφίας: {e}
+
+# PDF tab context menu (#1233)
+	Close Tab	Κλείσιμο καρτέλας
+	Reopen Closed Tab	Επαναφορά κλειστής καρτέλας
+	Reveal in Finder	Εμφάνιση στο Finder
+	Reveal in File Explorer	Εμφάνιση στη διαχείριση αρχείων
+	Other colour…	Άλλο χρώμα…
+	Recent colours	Πρόσφατα χρώματα
+	Reading colours	Χρώματα ανάγνωσης
+	Replace document colours	Αντικατάσταση χρωμάτων εγγράφου
+	Page background	Φόντο σελίδας
+	Only change the colour of black text or line art	Αλλαγή χρώματος μόνο για μαύρο κείμενο ή γραμμικά σχέδια
+	Change the colour of line art as well as text	Αλλαγή χρώματος και στα γραμμικά σχέδια, όχι μόνο στο κείμενο
+	Colours are remapped while rendering; the document itself never changes.	Τα χρώματα αντιστοιχίζονται εκ νέου κατά την απόδοση· το ίδιο το έγγραφο δεν αλλάζει ποτέ.
+	Black on white	Μαύρο σε λευκό
+	White on black	Λευκό σε μαύρο
+	Yellow on black	Κίτρινο σε μαύρο
+	Green on black	Πράσινο σε μαύρο
 	Couldn't follow linked PDF: {reason}	Δεν ήταν δυνατό να ανοίξει το συνδεδεμένο PDF: {reason}
 	The linked PDF opened, but its named destination was not applied.	Το συνδεδεμένο PDF άνοιξε, αλλά ο ονομασμένος προορισμός του δεν εφαρμόστηκε.
 	The linked PDF opened, but its page destination was out of range.	Το συνδεδεμένο PDF άνοιξε, αλλά ο προορισμός σελίδας του είναι εκτός εύρους.
 	Local cross-PDF links require the desktop app	Οι τοπικοί σύνδεσμοι μεταξύ PDF απαιτούν την εφαρμογή υπολογιστή
 	The existing action will be preserved.	Η υπάρχουσα ενέργεια θα διατηρηθεί.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Τα σενάρια αυτής της φόρμας είναι απενεργοποιημένα, επειδή ένα από αυτά εκτελούνταν για πολύ ώρα. Ανοίξτε ξανά το έγγραφο για να εκτελεστούν ξανά.

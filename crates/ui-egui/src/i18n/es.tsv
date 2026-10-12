@@ -221,6 +221,9 @@
 	Add or edit links	Añadir o editar enlaces
 	Create links from URLs	Crear enlaces a partir de URL
 	Remove all links	Quitar todos los enlaces
+	No links to remove	No hay vínculos que quitar
+	Removed 1 link	Se quitó 1 vínculo
+	Removed {n} links	Se quitaron {n} vínculos
 	Add Bates numbering…	Añadir numeración Bates…
 	Add image…	Añadir imagen…
 	Redact text and images	Censurar texto e imágenes
@@ -751,6 +754,12 @@
 	Flip Vertical	Voltear verticalmente
 	Replace Image…	Reemplazar imagen…
 	Save Image As…	Guardar imagen como…
+	Copy Image	Copiar imagen
+	The image has been copied ({w} × {h} pixels)	Se ha copiado la imagen ({w} × {h} píxeles)
+	Couldn't copy the image: {e}	No se pudo copiar la imagen: {e}
+	Copy Image in Original Format	Copiar imagen en formato original
+	The image has been copied as a {ext} file	Se ha copiado la imagen como archivo {ext}
+	The page has changed; select the image again	La página ha cambiado; vuelva a seleccionar la imagen
 	Check for updates	Buscar actualizaciones
 	No check has run yet.	Aún no se ha hecho ninguna comprobación.
 	Checking for a newer version…	Buscando una versión más reciente…
@@ -2043,6 +2052,7 @@ action wizard	Start	Iniciar
 	DPI sets the printed page size without resampling the image.	Los PPP determinan el tamaño de la página impresa sin remuestrear la imagen.
 	Create	Crear
 	Dynamic XFA form laid out from its template: {pages}, {fields}.	Formulario XFA dinámico maquetado a partir de su plantilla: {pages}, {fields}.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Los scripts de este formulario están desactivados porque uno tardó demasiado en ejecutarse. Vuelve a abrir el documento para ejecutarlos de nuevo.
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	Formulario XFA: sus campos y sus datos XFA se mantienen sincronizados, para que otros visores muestren lo que rellenes.
 @plural	{n} page|{n} pages	{n} página|{n} páginas
 @plural	{n} field|{n} fields	{n} campo|{n} campos
@@ -2387,6 +2397,9 @@ key	Space	Espacio
 scroll speed	Slow	Lenta
 scroll speed	Normal	Normal
 scroll speed	Fast	Rápida
+	Animation effects	Efectos de animación
+animation effects	On	Activados
+animation effects	Off	Desactivados
 	Enhance camera image	Mejorar foto de cámara
 	Drag the corners onto the document's edges, then choose Enhance page.	Arrastra las esquinas hasta los bordes del documento y elige Mejorar página.
 	Enhance page	Mejorar página
@@ -2432,6 +2445,24 @@ scroll speed	Fast	Rápida
 	Ink sensitivity	Sensibilidad de la tinta
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	No se encontró ninguna firma en el marco. Mueva el marco sobre la firma o aumente la sensibilidad de la tinta.
 	Couldn't use the photo: {e}	No se puede usar la foto: {e}
+
+# PDF tab context menu (#1233)
+	Close Tab	Cerrar pestaña
+	Reopen Closed Tab	Reabrir pestaña cerrada
+	Reveal in Finder	Mostrar en Finder
+	Reveal in File Explorer	Mostrar en el explorador de archivos
+	Other colour…	Otro color…
+	Recent colours	Colores recientes
+	Reading colours	Colores de lectura
+	Replace document colours	Reemplazar colores del documento
+	Page background	Fondo de página
+	Only change the colour of black text or line art	Cambiar solo el color del texto negro o los dibujos lineales
+	Change the colour of line art as well as text	Cambiar también el color de los dibujos lineales, no solo del texto
+	Colours are remapped while rendering; the document itself never changes.	Los colores se reasignan al mostrar la página; el documento en sí nunca cambia.
+	Black on white	Negro sobre blanco
+	White on black	Blanco sobre negro
+	Yellow on black	Amarillo sobre negro
+	Green on black	Verde sobre negro
 	Couldn't follow linked PDF: {reason}	No se pudo abrir el PDF vinculado: {reason}
 	The linked PDF opened, but its named destination was not applied.	El PDF vinculado se abrió, pero no se aplicó su destino con nombre.
 	The linked PDF opened, but its page destination was out of range.	El PDF vinculado se abrió, pero su página de destino está fuera de rango.

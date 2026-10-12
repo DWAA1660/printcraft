@@ -436,6 +436,12 @@
 	Flip Vertical	Обърни вертикално
 	Replace Image…	Замени изображението…
 	Save Image As…	Запиши изображението като…
+	Copy Image	Копирай изображението
+	The image has been copied ({w} × {h} pixels)	Изображението е копирано ({w} × {h} пиксела)
+	Couldn't copy the image: {e}	Изображението не можа да бъде копирано: {e}
+	Copy Image in Original Format	Копирай изображението в оригиналния формат
+	The image has been copied as a {ext} file	Изображението е копирано като файл {ext}
+	The page has changed; select the image again	Страницата е променена; изберете изображението отново
 	Check for updates	Провери за актуализации
 	No check has run yet.	Още не е извършвана проверка.
 	Checking for a newer version…	Проверка за по-нова версия…
@@ -1172,6 +1178,9 @@
 	Redact pages…	Заличи страници…
 	Redaction properties…	Свойства на заличаването…
 	Remove all links	Премахни всички връзки
+	No links to remove	Няма връзки за премахване
+	Removed 1 link	Премахната е 1 връзка
+	Removed {n} links	Премахнати връзки: {n}
 	Remove background	Премахни фона
 	Remove header & footer	Премахни горния и долния колонтитул
 	Remove hidden information…	Премахни скритата информация…
@@ -2083,6 +2092,7 @@
 	DPI sets the printed page size without resampling the image.	DPI определя размера на отпечатаната страница без преизчисляване на изображението.
 	Create	Създай
 	Dynamic XFA form laid out from its template: {pages}, {fields}.	Динамичен XFA формуляр, оформен по своя шаблон: {pages}, {fields}.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Скриптовете на този формуляр са изключени, защото един от тях се изпълняваше твърде дълго. Отворете документа отново, за да се изпълнят пак.
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	XFA формуляр: полетата и XFA данните му се поддържат синхронизирани, така че другите програми за преглед показват попълненото от вас.
 @plural	{n} page|{n} pages	{n} страница|{n} страници
 @plural	{n} field|{n} fields	{n} поле|{n} полета
@@ -2221,6 +2231,9 @@ key	Space	Интервал
 scroll speed	Slow	Ниска
 scroll speed	Normal	Нормална
 scroll speed	Fast	Висока
+	Animation effects	Анимационни ефекти
+animation effects	On	Включени
+animation effects	Off	Изключени
 	Enhance camera image	Подобри снимка от камера
 	Drag the corners onto the document's edges, then choose Enhance page.	Плъзнете ъглите до краищата на документа, след това изберете „Подобри страницата“.
 	Enhance page	Подобри страницата
@@ -2230,6 +2243,16 @@ scroll speed	Fast	Висока
 	Original	Оригинал
 	Greyscale	Нива на сивото
 	Black and white	Черно-бяло
+	Reading colours	Цветове за четене
+	Replace document colours	Замяна на цветовете на документа
+	Black on white	Черно на бяло
+	White on black	Бяло на черно
+	Yellow on black	Жълто на черно
+	Green on black	Зелено на черно
+	Page background	Фон на страницата
+	Only change the colour of black text or line art	Да се променя само цветът на черния текст и линиите
+	Change the colour of line art as well as text	Да се променя цветът и на линиите, не само на текста
+	Colours are remapped while rendering; the document itself never changes.	Цветовете се променят при изчертаването; самият документ никога не се променя.
 	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	Драйверът на този принтер не приема настройки за двустранен печат от други програми и прилага собствената си настройка. Променете я от Свойства…
 	Browser's print dialog	Диалог за печат на браузъра
 	Copies, two-sided printing and colour are chosen in the browser's print dialog.	Броят копия, двустранният печат и цветът се избират в диалога за печат на браузъра.
@@ -2266,6 +2289,14 @@ scroll speed	Fast	Висока
 	Ink sensitivity	Чувствителност към мастило
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	В рамката не е открит подпис. Преместете рамката върху подписа или увеличете чувствителността към мастило.
 	Couldn't use the photo: {e}	Снимката не може да се използва: {e}
+
+# PDF tab context menu (#1233)
+	Close Tab	Затваряне на раздела
+	Reopen Closed Tab	Отваряне на затворения раздел
+	Reveal in Finder	Показване във Finder
+	Reveal in File Explorer	Показване във файловия мениджър
+	Other colour…	Друг цвят…
+	Recent colours	Последни цветове
 	Couldn't follow linked PDF: {reason}	Свързаният PDF не можа да бъде отворен: {reason}
 	The linked PDF opened, but its named destination was not applied.	Свързаният PDF се отвори, но именуваната му цел не беше приложена.
 	The linked PDF opened, but its page destination was out of range.	Свързаният PDF се отвори, но целевата му страница е извън обхвата.

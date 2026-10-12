@@ -49,7 +49,7 @@ fn fixture() -> Vec<u8> {
 }
 
 fn remote_fixture(file: &str, destination: &str) -> Vec<u8> {
-    // Keep internal Windows device prefixes out of the synthetic PDF file specification.
+    // canonicalize() uses a Windows device prefix; a PDF file specification uses the ordinary drive path.
     #[cfg(windows)]
     let file = file.strip_prefix(r"\\?\").filter(|path| path.as_bytes().get(1) == Some(&b':')).unwrap_or(file);
     let file = file.replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)");
@@ -212,15 +212,15 @@ fn a_gotor_link_to_a_directory_or_device_is_refused_without_reading_it() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-ui-gotor-not-a-file-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("folder.pdf")).unwrap();
-    let targets = vec!["folder.pdf"];
+    // Only Unix adds a target (a device), so elsewhere the list is never changed.
+    #[cfg_attr(not(unix), allow(unused_mut))]
+    let mut targets = vec!["folder.pdf"];
     #[cfg(unix)]
-    let targets = {
-        let mut targets = targets;
+    {
         // /dev/zero never ends: reading it would exhaust memory.
         std::os::unix::fs::symlink("/dev/zero", dir.join("zero.pdf")).unwrap();
         targets.push("zero.pdf");
-        targets
-    };
+    }
     for target in targets {
         let mut h = remote_harness(Some(dir.join("source.pdf").to_string_lossy().into_owned()), target, "[0 /Fit]");
         click_remote_link(&mut h);

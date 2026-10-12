@@ -390,6 +390,12 @@
 	Flip Vertical	Inverter verticalmente
 	Replace Image…	Substituir imagem…
 	Save Image As…	Salvar imagem como…
+	Copy Image	Copiar imagem
+	The image has been copied ({w} × {h} pixels)	A imagem foi copiada ({w} × {h} pixels)
+	Couldn't copy the image: {e}	Não foi possível copiar a imagem: {e}
+	Copy Image in Original Format	Copiar imagem no formato original
+	The image has been copied as a {ext} file	A imagem foi copiada como arquivo {ext}
+	The page has changed; select the image again	A página mudou; selecione a imagem novamente
 	Check for updates	Verificar atualizações
 	No check has run yet.	Nenhuma verificação foi executada ainda.
 	Checking for a newer version…	Verificando se há uma versão mais recente…
@@ -1116,6 +1122,9 @@
 	Redact pages…	Ocultar páginas…
 	Redaction properties…	Propriedades da ocultação…
 	Remove all links	Remover todos os links
+	No links to remove	Não há links para remover
+	Removed 1 link	1 link removido
+	Removed {n} links	{n} links removidos
 	Remove background	Remover plano de fundo
 	Remove header & footer	Remover cabeçalho e rodapé
 	Remove hidden information…	Remover informações ocultas…
@@ -1945,6 +1954,7 @@
 	DPI sets the printed page size without resampling the image.	O DPI define o tamanho da página impressa sem reamostrar a imagem.
 	Create	Criar
 	Dynamic XFA form laid out from its template: {pages}, {fields}.	Formulário XFA dinâmico formatado a partir de seu modelo: {pages}, {fields}.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Os scripts deste formulário estão desativados porque um deles demorou demais para ser executado. Reabra o documento para executá-los novamente.
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	Formulário XFA: seus campos e seus dados XFA são mantidos sincronizados, para que outros leitores exibam o que você preencher.
 @plural	{n} page|{n} pages	{n} página|{n} páginas
 @plural	{n} field|{n} fields	{n} campo|{n} campos
@@ -2272,6 +2282,9 @@ calendar date	December	dezembro
 scroll speed	Slow	Lenta
 scroll speed	Normal	Normal
 scroll speed	Fast	Rápida
+	Animation effects	Efeitos de animação
+animation effects	On	Ativados
+animation effects	Off	Desativados
 	Enhance camera image	Aprimorar foto da câmera
 	Drag the corners onto the document's edges, then choose Enhance page.	Arraste os cantos até as bordas do documento e escolha Aprimorar página.
 	Enhance page	Aprimorar página
@@ -2281,6 +2294,16 @@ scroll speed	Fast	Rápida
 	Original	Original
 	Greyscale	Escala de cinza
 	Black and white	Preto e branco
+	Reading colours	Cores de leitura
+	Replace document colours	Substituir as cores do documento
+	Black on white	Preto no branco
+	White on black	Branco no preto
+	Yellow on black	Amarelo no preto
+	Green on black	Verde no preto
+	Page background	Fundo da página
+	Only change the colour of black text or line art	Alterar apenas a cor do texto preto e dos traços
+	Change the colour of line art as well as text	Alterar também a cor dos traços, além do texto
+	Colours are remapped while rendering; the document itself never changes.	As cores são remapeadas na renderização; o documento em si nunca muda.
 	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	O driver desta impressora não aceita configurações de frente e verso de outros programas, então vale a configuração dele. Altere em Propriedades…
 	Browser's print dialog	Caixa de diálogo de impressão do navegador
 	Copies, two-sided printing and colour are chosen in the browser's print dialog.	Cópias, impressão frente e verso e cor são escolhidas na caixa de diálogo de impressão do navegador.
@@ -2317,6 +2340,14 @@ scroll speed	Fast	Rápida
 	Ink sensitivity	Sensibilidade à tinta
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	Nenhuma assinatura encontrada no quadro. Mova o quadro sobre a assinatura ou aumente a sensibilidade à tinta.
 	Couldn't use the photo: {e}	Não foi possível usar a foto: {e}
+
+# PDF tab context menu (#1233)
+	Close Tab	Fechar aba
+	Reopen Closed Tab	Reabrir aba fechada
+	Reveal in Finder	Mostrar no Finder
+	Reveal in File Explorer	Mostrar no explorador de arquivos
+	Other colour…	Outra cor…
+	Recent colours	Cores recentes
 	Couldn't follow linked PDF: {reason}	Não foi possível abrir o PDF vinculado: {reason}
 	The linked PDF opened, but its named destination was not applied.	O PDF vinculado foi aberto, mas seu destino nomeado não foi aplicado.
 	The linked PDF opened, but its page destination was out of range.	O PDF vinculado foi aberto, mas sua página de destino está fora do intervalo.

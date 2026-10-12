@@ -198,6 +198,9 @@
 	Add or edit links	Links hinzufügen oder bearbeiten
 	Create links from URLs	Links aus URLs erstellen
 	Remove all links	Alle Links entfernen
+	No links to remove	Keine Links zum Entfernen
+	Removed 1 link	1 Link entfernt
+	Removed {n} links	{n} Links entfernt
 	Add Bates numbering…	Bates-Nummerierung hinzufügen…
 	Add image…	Bild hinzufügen…
 	Redact text and images	Text und Bilder schwärzen
@@ -735,6 +738,12 @@
 	Flip Vertical	Vertikal spiegeln
 	Replace Image…	Bild ersetzen…
 	Save Image As…	Bild speichern unter…
+	Copy Image	Bild kopieren
+	The image has been copied ({w} × {h} pixels)	Das Bild wurde kopiert ({w} × {h} Pixel)
+	Couldn't copy the image: {e}	Das Bild konnte nicht kopiert werden: {e}
+	Copy Image in Original Format	Bild im Originalformat kopieren
+	The image has been copied as a {ext} file	Das Bild wurde als {ext}-Datei kopiert
+	The page has changed; select the image again	Die Seite hat sich geändert; wählen Sie das Bild erneut aus
 	Check for updates	Nach Updates suchen
 	No check has run yet.	Es wurde noch nicht gesucht.
 	Checking for a newer version…	Suche nach einer neueren Version…
@@ -1964,6 +1973,7 @@
 	DPI sets the printed page size without resampling the image.	Die DPI bestimmt die gedruckte Seitengröße, ohne das Bild neu zu berechnen.
 	Create	Erstellen
 	Dynamic XFA form laid out from its template: {pages}, {fields}.	Dynamisches XFA-Formular, aus seiner Vorlage aufgebaut: {pages}, {fields}.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Die Skripte dieses Formulars sind ausgeschaltet, weil eines zu lange lief. Öffne das Dokument erneut, um sie wieder auszuführen.
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	XFA-Formular: Seine Felder und XFA-Daten werden synchron gehalten, damit andere Viewer anzeigen, was du ausfüllst.
 @plural	{n} page|{n} pages	{n} Seite|{n} Seiten
 @plural	{n} field|{n} fields	{n} Feld|{n} Felder
@@ -2259,6 +2269,9 @@ key	Space	Leertaste
 scroll speed	Slow	Langsam
 scroll speed	Normal	Normal
 scroll speed	Fast	Schnell
+	Animation effects	Animationseffekte
+animation effects	On	Ein
+animation effects	Off	Aus
 	Enhance camera image	Kamerafoto verbessern
 	Drag the corners onto the document's edges, then choose Enhance page.	Ziehen Sie die Ecken auf die Kanten des Dokuments und wählen Sie dann Seite verbessern.
 	Enhance page	Seite verbessern
@@ -2268,6 +2281,16 @@ scroll speed	Fast	Schnell
 	Original	Original
 	Greyscale	Graustufen
 	Black and white	Schwarzweiß
+	Reading colours	Lesefarben
+	Replace document colours	Dokumentfarben ersetzen
+	Black on white	Schwarz auf weiß
+	White on black	Weiß auf schwarz
+	Yellow on black	Gelb auf schwarz
+	Green on black	Grün auf schwarz
+	Page background	Seitenhintergrund
+	Only change the colour of black text or line art	Nur die Farbe von schwarzem Text oder Strichzeichnungen ändern
+	Change the colour of line art as well as text	Auch die Farbe von Strichzeichnungen ändern, nicht nur von Text
+	Colours are remapped while rendering; the document itself never changes.	Farben werden beim Rendern neu zugeordnet; das Dokument selbst bleibt unverändert.
 	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	Der Treiber dieses Druckers übernimmt keine Einstellungen für beidseitigen Druck von anderen Programmen, daher gilt seine eigene Einstellung. Ändern unter Eigenschaften…
 	Browser's print dialog	Druckdialog des Browsers
 	Copies, two-sided printing and colour are chosen in the browser's print dialog.	Exemplare, beidseitiger Druck und Farbe werden im Druckdialog des Browsers gewählt.
@@ -2304,6 +2327,14 @@ scroll speed	Fast	Schnell
 	Ink sensitivity	Tintenempfindlichkeit
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	Im Rahmen wurde keine Unterschrift gefunden. Ziehen Sie den Rahmen über die Unterschrift oder erhöhen Sie die Tintenempfindlichkeit.
 	Couldn't use the photo: {e}	Das Foto kann nicht verwendet werden: {e}
+
+# PDF tab context menu (#1233)
+	Close Tab	Tab schließen
+	Reopen Closed Tab	Geschlossenen Tab wieder öffnen
+	Reveal in Finder	Im Finder anzeigen
+	Reveal in File Explorer	Im Datei-Explorer anzeigen
+	Other colour…	Andere Farbe…
+	Recent colours	Zuletzt verwendete Farben
 	Couldn't follow linked PDF: {reason}	Verknüpfte PDF konnte nicht geöffnet werden: {reason}
 	The linked PDF opened, but its named destination was not applied.	Die verknüpfte PDF wurde geöffnet, aber ihr benanntes Ziel wurde nicht angewendet.
 	The linked PDF opened, but its page destination was out of range.	Die verknüpfte PDF wurde geöffnet, aber ihr Seitenziel liegt außerhalb des Bereichs.

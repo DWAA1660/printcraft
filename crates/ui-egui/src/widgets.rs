@@ -430,6 +430,7 @@ const PROGRESS_HEIGHT: &str = "progress-notice-height";
 
 /// Draw [`PdfCraftApp::progress_notice`]: the label, a bar that eases towards the fraction with
 /// a light sweeping across it, the percentage and Cancel. Returns true when Cancel was clicked.
+/// With animation effects off ([`crate::motion`]) the bar steps to the fraction and has no sweep.
 pub fn progress_notice(app: &PdfCraftApp, ctx: &egui::Context) -> bool {
     let Some(p) = &app.progress_notice else { return false };
     let t = Tokens::get(ctx);
@@ -441,7 +442,8 @@ pub fn progress_notice(app: &PdfCraftApp, ctx: &egui::Context) -> bool {
         (Color32::from_rgb(0x2A, 0x2A, 0x2F), Color32::WHITE)
     };
     let fraction = if p.fraction.is_finite() { p.fraction.clamp(0.0, 1.0) } else { 0.0 };
-    let shown = ctx.animate_value_with_time(egui::Id::new("progress-notice-bar"), fraction, 0.3);
+    let animated = crate::motion::animated(ctx);
+    let shown = ctx.animate_value_with_time(egui::Id::new("progress-notice-bar"), fraction, if animated { 0.3 } else { 0.0 });
     let now = ctx.input(|i| i.time);
     let mut cancel = false;
     let area = egui::Area::new(egui::Id::new("progress-notice"))
@@ -473,12 +475,14 @@ pub fn progress_notice(app: &PdfCraftApp, ctx: &egui::Context) -> bool {
                     painter.rect_filled(done, CornerRadius::same(3), t.accent);
                     // A soft light sweeping along the filled part says the job is alive between
                     // updates.
-                    let band = 48.0;
-                    let x = done.left() - band + ((now * 160.0) % f64::from(done.width() + band)) as f32;
-                    let clip = painter.with_clip_rect(done);
-                    for (i, a) in [0.10_f32, 0.22, 0.10].into_iter().enumerate() {
-                        let r = Rect::from_min_size(egui::pos2(x + i as f32 * band / 3.0, done.top()), vec2(band / 3.0, done.height()));
-                        clip.rect_filled(r, CornerRadius::ZERO, Color32::WHITE.gamma_multiply(a));
+                    if animated {
+                        let band = 48.0;
+                        let x = done.left() - band + ((now * 160.0) % f64::from(done.width() + band)) as f32;
+                        let clip = painter.with_clip_rect(done);
+                        for (i, a) in [0.10_f32, 0.22, 0.10].into_iter().enumerate() {
+                            let r = Rect::from_min_size(egui::pos2(x + i as f32 * band / 3.0, done.top()), vec2(band / 3.0, done.height()));
+                            clip.rect_filled(r, CornerRadius::ZERO, Color32::WHITE.gamma_multiply(a));
+                        }
                     }
                 }
                 if p.cancellable {

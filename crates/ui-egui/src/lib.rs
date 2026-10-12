@@ -28,6 +28,7 @@ mod appearance;
 pub mod canvas;
 mod chrome;
 mod combine_grid;
+mod image_pick;
 mod tags_ui;
 pub use combine_grid::ThumbState as CombineThumb;
 mod combine_ui;
@@ -83,6 +84,7 @@ mod home;
 mod icon_data;
 pub mod icons;
 pub mod last_session;
+pub mod motion;
 mod page_selection_ui;
 mod pageboxes;
 mod palette;
@@ -121,6 +123,7 @@ mod recovery;
 pub mod scroll_speed;
 #[cfg(not(target_arch = "wasm32"))]
 mod system_fonts;
+mod tab_context;
 pub mod theme;
 pub mod ui_scale;
 pub mod updates;
@@ -433,6 +436,7 @@ pub struct PdfCraftApp {
     pub(crate) pending_panel_reveals: Vec<docking::Panel>,
     pub session: Session,
     pub views: Vec<DocView>,
+    pub(crate) closed_tabs: Vec<String>,
     /// `None` shows the Home tab.
     pub active: Option<usize>,
     pub mode: Mode,
@@ -467,6 +471,9 @@ pub struct PdfCraftApp {
     /// Resolved colours, including the current OS theme when following the system.
     pub theme: ThemeKind,
     pub theme_preference: ThemePreference,
+    /// The reading-colours preference (Preferences ▸ Reading colours): applied to every open
+    /// document, and documents open with it (Acrobat's Replace Document Colors).
+    pub reading_colors: pdfcraft_render::ReadingColors,
     /// The Linux portal is enabled only by the native host, and starts on the first System choice.
     #[cfg(target_os = "linux")]
     desktop_theme: Option<pdfcraft_platform::desktop_theme::DesktopTheme>,
@@ -474,6 +481,10 @@ pub struct PdfCraftApp {
     desktop_theme_enabled: bool,
     /// How far a mouse-wheel notch scrolls.
     pub scroll_speed: scroll_speed::ScrollSpeed,
+    /// Preferences ▸ Animation effects: on, off, or as the system's animation setting says.
+    pub animation_effects: motion::AnimationEffects,
+    /// Whether the system asked for no animations, and how the desktop app asks it.
+    pub motion: motion::Motion,
     /// Interface language preference: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].
     pub language: String,
     /// Preferences ▸ Interface size as a factor, or `None` to follow [`Self::system_text_scale`].
@@ -485,6 +496,8 @@ pub struct PdfCraftApp {
     ui_scale_applied: Option<f32>,
     /// Preferences: bake Fill & Sign marks into the page when saving. Off, so a normal save stays editable.
     pub flatten_fill_sign_on_save: bool,
+    /// Point size for new Fill & Sign text and dates, kept across launches.
+    pub fill_text_size: f64,
     pub dialog: Option<Dialog>,
     /// How to ask for the latest release (the desktop app sets it; see `updates`).
     pub update_source: Option<updates::UpdateSource>,
@@ -629,6 +642,12 @@ pub struct PdfCraftApp {
     /// The last snapshot (width, height, RGBA); `system_clipboard` also puts it on the
     /// system clipboard (tests turn that off).
     pub last_snapshot: Option<(u32, u32, pdfcraft_render::Pixels)>,
+    /// The last image copied with Copy Image (width, height, straight RGBA), also put on the
+    /// system clipboard when `system_clipboard` is on.
+    pub last_copied_image: Option<(u32, u32, Vec<u8>)>,
+    /// The last image copied in its original format (file name, bytes), also put on the
+    /// system clipboard as a file when `system_clipboard` is on.
+    pub last_copied_file: Option<(String, Vec<u8>)>,
     pub system_clipboard: bool,
     /// Attach file: the file to attach instead of asking (tests, automation).
     pub attach_override: Option<(String, Vec<u8>)>,
@@ -776,6 +795,7 @@ impl PdfCraftApp {
         Self {
             session: Session::new(),
             views: Vec::new(),
+            closed_tabs: Vec::new(),
             active: None,
             mode: Mode::AllTools,
             default_mode: Mode::AllTools,
@@ -795,16 +815,20 @@ impl PdfCraftApp {
             comment_prefs: Default::default(),
             theme: ThemeKind::Light,
             theme_preference: ThemePreference::Light,
+            reading_colors: Default::default(),
             #[cfg(target_os = "linux")]
             desktop_theme: None,
             #[cfg(target_os = "linux")]
             desktop_theme_enabled: false,
             scroll_speed: scroll_speed::ScrollSpeed::default(),
+            animation_effects: motion::AnimationEffects::default(),
+            motion: motion::Motion::default(),
             language: i18n::AUTO.to_string(),
             ui_scale: None,
             system_text_scale: 1.0,
             ui_scale_applied: None,
             flatten_fill_sign_on_save: false,
+            fill_text_size: fill_sign::TEXT_SIZE,
             dialog: None,
             update_source: None,
             updates: updates::Updates::default(),
@@ -888,6 +912,8 @@ impl PdfCraftApp {
             page_clipboard: None,
             grid_drop: None,
             last_snapshot: None,
+            last_copied_image: None,
+            last_copied_file: None,
             system_clipboard: true,
             attach_override: None,
             duplicate_draft: None,
@@ -1036,6 +1062,9 @@ impl PdfCraftApp {
             Err(e) => return Err(e.to_string()),
         };
         self.password_prompt = None;
+        // The reading-colours preference is app-wide: a newly opened document starts with it.
+        // Idempotent: the engine returns `false` when the document has the setting already.
+        self.session.set_reading_colors(id, self.reading_colors);
         let doc = self.session.get(id).ok_or("the document could not be opened")?;
         let pages = doc.info.pages.len();
         // Acrobat opens straight to the Comments panel when a document has comments.
@@ -1416,6 +1445,13 @@ impl PdfCraftApp {
             return;
         }
         let id = self.views.remove(index).id;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(path) = self.session.get(id).and_then(|d| d.path.clone()) {
+            if self.closed_tabs.len() == 10 {
+                self.closed_tabs.remove(0);
+            }
+            self.closed_tabs.push(path);
+        }
         self.forget_recovery(id);
         self.session.close(id);
         self.active = match self.active {
@@ -1517,6 +1553,19 @@ impl PdfCraftApp {
             theme::apply(&ctx, self.theme);
         } else {
             self.theme = preference.resolve(None, ThemeKind::Light);
+        }
+    }
+
+    /// The app-wide reading-colours preference: sets it and applies it to every open document,
+    /// not just the active one (Preferences ▸ Reading colours, Acrobat's Replace Document
+    /// Colors). A document the change actually touches re-renders.
+    pub fn set_reading_colors(&mut self, colors: pdfcraft_render::ReadingColors) {
+        self.reading_colors = colors;
+        for i in 0..self.views.len() {
+            // Idempotent per document: the engine says whether anything changed.
+            if self.session.set_reading_colors(self.views[i].id, colors) {
+                self.views[i].invalidate_content();
+            }
         }
     }
 
@@ -1708,15 +1757,18 @@ impl PdfCraftApp {
             "pinned_folders": self.pinned.folders,
             "theme": self.theme_preference,
             "scroll_speed": self.scroll_speed,
+            "animation_effects": self.animation_effects,
             "default_mode": self.default_mode,
             "default_layout": canvas::display_token(self.view_defaults.layout, self.view_defaults.continuous),
             "default_zoom": self.view_defaults.zoom_name(),
             "highlight_fields": self.view_defaults.highlight_fields,
             "units": self.units,
             "language": self.language,
+            "reading_colors": self.reading_colors,
             // Null follows the system's text scaling.
             "ui_scale": self.ui_scale,
             "flatten_fill_sign": self.flatten_fill_sign_on_save,
+            "fill_text_size": self.fill_text_size,
             "date_format": self.session.date_format(),
             // Null follows the interface language.
             "date_language": self.session.date_language(),
@@ -1793,6 +1845,9 @@ impl PdfCraftApp {
         if let Ok(speed) = serde_json::from_value::<scroll_speed::ScrollSpeed>(v["scroll_speed"].clone()) {
             self.scroll_speed = speed;
         }
+        if let Ok(effects) = serde_json::from_value::<motion::AnimationEffects>(v["animation_effects"].clone()) {
+            self.animation_effects = effects;
+        }
         if let Ok(mode) = serde_json::from_value::<Mode>(v["default_mode"].clone()) {
             self.default_mode = mode;
         }
@@ -1816,6 +1871,14 @@ impl PdfCraftApp {
         }
         if let Some(on) = v["flatten_fill_sign"].as_bool() {
             self.flatten_fill_sign_on_save = on;
+        }
+        if let Some(size) = v["fill_text_size"].as_f64().and_then(fill_sign::valid_text_size) {
+            self.fill_text_size = size;
+        }
+        // Settings are untrusted: an unreadable value (a colour that isn't three bytes, say)
+        // fails to deserialize and keeps Off.
+        if let Ok(colors) = serde_json::from_value::<pdfcraft_render::ReadingColors>(v["reading_colors"].clone()) {
+            self.reading_colors = colors;
         }
         // Settings are untrusted: a size out of range follows the system instead.
         self.ui_scale = v["ui_scale"].as_f64().and_then(ui_scale::valid);
@@ -1918,6 +1981,9 @@ impl PdfCraftApp {
             }
             ("scroll_speed", _) => {
                 self.scroll_speed = scroll_speed::ScrollSpeed::parse(value).ok_or("scroll_speed must be slow, normal, or fast")?;
+            }
+            ("animation_effects", _) => {
+                self.animation_effects = motion::AnimationEffects::parse(value).ok_or("animation_effects must be system, on, or off")?;
             }
             ("panel", _) => {
                 self.right = match value {
@@ -2234,6 +2300,7 @@ impl PdfCraftApp {
             self.tool_keys(i, ctx);
             canvas::shortcuts(&mut self.views[i], ctx);
             self.copy_key(i, ctx);
+            self.image_pick_keys(i, ctx);
         }
     }
 }
@@ -2351,6 +2418,8 @@ impl eframe::App for PdfCraftApp {
         self.startup_superseded |= !self.views.is_empty() || self.combine_showing() || self.dialog.is_some() || self.password_prompt.is_some();
         // Also done in `raw_input_hook`, before input; here for hosts that don't call the hook.
         self.scroll_speed.set_line_speed(ctx);
+        // Before anything reads this frame's wheel input or draws, and with the line speed just set.
+        self.motion.begin_pass(ctx, self.animation_effects);
         // Before taking this frame's drop: the grid must be drawn once with the pointer where
         // the files were let go before the gap is read.
         self.finish_grid_drop(ctx);

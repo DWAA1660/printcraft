@@ -1554,6 +1554,18 @@ evidence = ["crates/ui-egui/tests/viewer.rs::marquee_zoom_and_snapshot"]
 notes = "copies the area at the current zoom to the clipboard as an image"
 
 [[feature]]
+id = "view.copy-image"
+title = "Select an image on the page and copy it"
+area = "B"
+tier = "P2"
+milestone = "M3"
+status = "partial"
+commands = []
+tools = []
+evidence = ["crates/ui-egui/tests/viewer.rs::a_clicked_picture_is_selected_and_copied_in_its_original_format", "crates/ui-egui/tests/viewer.rs::right_click_on_a_picture_copies_it_at_full_size", "crates/ui-egui/tests/viewer.rs::a_picture_inside_form_artwork_under_text_is_selected_and_copied", "crates/engine/src/tests.rs::copy_image_finds_a_picture_inside_form_artwork_under_text"]
+notes = "Select tool: a click selects a raster image (also inside Form artwork or under text) and ⌘C copies it as a file in its original format (JPEG as stored, else PNG); right-click ▸ Copy Image copies its pixels at full resolution. Missing: inline images (BI/ID/EI), JPEG 2000/JBIG2/CCITT images, multi-format clipboard (file and bitmap at once), the web build"
+
+[[feature]]
 id = "view.rulers"
 title = "Rulers"
 area = "B"
@@ -1974,8 +1986,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.text"]
 tools = ["page_add_text", "content_update"]
-evidence = ["crates/ui-egui/tests/content.rs::typing_moving_styling_and_deleting_added_content", "crates/ui-egui/tests/content.rs::clicking_elsewhere_keeps_the_text_and_starts_a_new_box", "crates/automation/tests/automation.rs::adding_content_through_tools", "crates/edit/src/tests.rs::added_text_and_images_are_page_content_that_stays_editable", "crates/engine/src/tests.rs::added_text_and_images_render_and_stay_editable", "crates/edit/src/tests.rs::added_arabic_text_is_shaped_in_display_order_and_stays_searchable", "crates/automation/tests/automation.rs::thai_text_through_tools_saves_reopens_extracts_and_renders", "crates/ui-egui/tests/content.rs::typing_thai_text_keeps_marks_and_commits_to_page"]
-notes = "page content, editable later (retype, move, restyle); standard fonts, Windows-1252 text. Arabic text is shaped with the craft-fonts Arab face (Type 3 outlines with ToUnicode) and laid out in bidirectional display order; it is drawn regular whatever the bold/italic setting, Hebrew and other right-to-left scripts are not covered, and typing in the box is still left to right (misc.rtl-ui). Thai Add Text uses the craft-fonts Thai face, with shaped clusters and ToUnicode; Thai is regular style, wrapping preserves clusters but is not dictionary-based, and forms/Fill and Sign are not covered by this change. Each click on the page keeps the box being typed and starts a new one; Done and Discard beside the box"
+evidence = ["crates/ui-egui/tests/content.rs::typing_moving_styling_and_deleting_added_content", "crates/ui-egui/tests/content.rs::clicking_elsewhere_keeps_the_text_and_starts_a_new_box", "crates/automation/tests/automation.rs::adding_content_through_tools", "crates/edit/src/tests.rs::added_text_and_images_are_page_content_that_stays_editable", "crates/engine/src/tests.rs::added_text_and_images_render_and_stay_editable", "crates/edit/src/tests.rs::added_arabic_text_is_shaped_in_display_order_and_stays_searchable", "crates/automation/tests/automation.rs::thai_text_through_tools_saves_reopens_extracts_and_renders", "crates/ui-egui/tests/content.rs::typing_thai_text_keeps_marks_and_commits_to_page", "crates/automation/tests/automation.rs::added_arabic_text_keeps_copy_search_and_editor_order_after_retyping_and_reopen"]
+notes = "page content, editable later (retype, move, restyle); standard fonts, Windows-1252 text. Arabic text is shaped with the craft-fonts Arab face (Type 3 outlines with ToUnicode) and laid out in bidirectional display order; per-line ActualText keeps copy, search and editor text in typing order through retyping and save/reopen; it is drawn regular whatever the bold/italic setting, Hebrew and other right-to-left scripts are not covered, and typing in the box is still left to right (misc.rtl-ui). Thai Add Text uses the craft-fonts Thai face, with shaped clusters and ToUnicode; Thai is regular style, wrapping preserves clusters but is not dictionary-based, and forms/Fill and Sign are not covered by this change. Each click on the page keeps the box being typed and starts a new one; Done and Discard beside the box"
 
 [[feature]]
 id = "edit.find-replace"
@@ -1998,8 +2010,8 @@ milestone = "M7"
 status = "partial"
 commands = []
 tools = ["text_lines", "text_paragraphs", "text_edit"]
-evidence = ["crates/edit/src/tests.rs::hebrew_lines_read_in_typing_order", "crates/edit/src/tests.rs::hebrew_edits_are_drawn_right_to_left_and_keep_their_right_edge", "crates/edit/src/tests.rs::hebrew_letters_the_page_font_lacks_use_the_hebrew_face", "crates/edit/src/bidi.rs::hebrew_sentences_numbers_latin_and_brackets_round_trip"]
-notes = "Hebrew: lines and paragraphs read in typing order and are written back in drawing order, right-aligned by default; letters the page's font lacks use the craft-fonts Noto Sans Hebrew face as Type 3 glyphs. Japanese uses its Type 3 fallback. Missing: Hebrew points (niqqud) in replacement text, writing Arabic (shaping), right-to-left typing in the edit box (misc.rtl-ui), lines a producer draws word by word from the right, vertical CJK. Also (#1116): bounded single-face existing-text engine coverage now exists (Arabic marks/ligatures/mixed bidi and explicit full-face Chinese subset completion), with private keyboard/save/reopen checks. General mixed-font/style contextual runs, bidi caret/selection, legacy programs and release font availability remain incomplete, so broader feature remains planned"
+evidence = ["crates/edit/src/tests.rs::hebrew_lines_read_in_typing_order", "crates/edit/src/tests.rs::hebrew_edits_are_drawn_right_to_left_and_keep_their_right_edge", "crates/edit/src/tests.rs::hebrew_letters_the_page_font_lacks_use_the_hebrew_face", "crates/edit/src/bidi.rs::hebrew_sentences_numbers_latin_and_brackets_round_trip", "crates/edit/src/tests.rs::arabic_actual_text_keeps_typing_order_when_opened_for_editing", "crates/automation/tests/automation.rs::arabic_actual_text_stays_logical_through_editor_tools_and_save_reopen", "crates/automation/tests/automation.rs::added_arabic_text_keeps_copy_search_and_editor_order_after_retyping_and_reopen"]
+notes = "Added Arabic copy/search keeps typing order through per-line ActualText. Arabic/Hebrew ActualText is preserved in typing order rather than reordered twice; font-independent tests cover marks, numbers, Latin, reopening and complete replacement. This does not add Arabic fallback fonts or bidi caret/selection. Hebrew: lines and paragraphs read in typing order and are written back in drawing order, right-aligned by default; letters the page's font lacks use the craft-fonts Noto Sans Hebrew face as Type 3 glyphs. Japanese uses its Type 3 fallback. Missing: Hebrew points (niqqud) in replacement text, writing Arabic (shaping), right-to-left typing in the edit box (misc.rtl-ui), lines a producer draws word by word from the right, vertical CJK. Also (#1116): bounded single-face existing-text engine coverage now exists (Arabic marks/ligatures/mixed bidi and explicit full-face Chinese subset completion), with private keyboard/save/reopen checks. General mixed-font/style contextual runs, bidi caret/selection, legacy programs and release font availability remain incomplete, so broader feature remains planned"
 
 [[feature]]
 id = "edit.rotated-text-editing"
@@ -2211,11 +2223,17 @@ title = "Remove all links"
 area = "C"
 tier = "P2"
 milestone = "M7"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["edit.remove_links"]
+tools = ["links_remove"]
+evidence = [
+    "crates/engine/src/tests.rs::links_from_urls_and_link_edits",
+    "crates/automation/tests/automation.rs::links_through_tools",
+    "crates/annot/src/tests.rs::links_are_added_edited_listed_and_removed",
+    "crates/ui-egui/tests/ui_group/pdf_links.rs::removing_all_links_and_undo",
+    "crates/ui-egui/tests/ui_group/pdf_links.rs::the_link_context_menu_shows_only_for_a_right_click_on_a_link",
+]
+notes = "removes all link annotations across the document or on specified pages (links_remove pages); a right-click on a link offers Properties, Delete and Remove all links; undoable, with a toast giving the count"
 
 [[feature]]
 id = "edit.action-goto"
@@ -3614,8 +3632,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["sign.fill.text"]
 tools = ["fill_sign_add"]
-evidence = ["crates/annot/src/tests.rs::fill_and_sign_items_are_drawn", "crates/ui-egui/tests/fill_sign.rs::text_marks_and_date"]
-notes = ""
+evidence = ["crates/annot/src/tests.rs::fill_and_sign_items_are_drawn", "crates/ui-egui/tests/fill_sign.rs::text_marks_and_date", "crates/ui-egui/tests/fill_sign.rs::fill_text_size_controls_new_text_and_survives_settings_restore", "crates/automation/tests/automation.rs::fill_sign_text_font_size_is_saved_and_validated"]
+notes = "Fill & Sign text and dates have a 4–300 pt size control in the active toolbar; new items use the chosen size, which persists across launches. fill_sign_add accepts font_size for text and dates."
 
 [[feature]]
 id = "comment.text-box"
@@ -5178,8 +5196,8 @@ milestone = "M12"
 status = "partial"
 commands = ["file.open"]
 tools = ["doc_open", "doc_info", "form_fields", "form_fill", "js_run"]
-evidence = ["crates/xfa/src/tests.rs::layout_places_captions_fields_and_sizes_containers_to_their_content", "crates/xfa/src/tests.rs::tables_break_across_pages_and_repeat_their_header_row", "crates/xfa/src/tests.rs::rendering_into_the_pdf_replaces_the_placeholder_page_and_adds_fields", "crates/engine/src/tests.rs::dynamic_xfa_forms_are_laid_out_on_open_filled_and_saved_incrementally", "crates/automation/tests/automation.rs::dynamic_xfa_forms_open_render_fill_and_save_through_tools", "crates/ui-egui/tests/ui_group/xfa.rs::a_dynamic_xfa_form_is_laid_out_and_filled", "crates/xfa/src/tests.rs::nested_width_less_subforms_lay_out_in_polynomial_time", "crates/js/src/tests.rs::instance_managers_add_remove_and_count", "crates/xfa/src/tests.rs::the_form_tree_carries_values_presence_instances_and_the_events", "crates/engine/src/tests.rs::xfa_scripts_initialize_calculate_validate_toggle_and_add_rows", "crates/automation/tests/automation.rs::xfa_scripts_run_for_buttons_and_field_changes_through_tools", "crates/ui-egui/tests/ui_group/xfa.rs::xfa_buttons_run_their_scripts_in_the_app", "crates/engine/src/tests.rs::hostile_xfa_open_scripts_are_merged_capped_kept_from_printing_and_noted", "crates/engine/src/tests.rs::runaway_xfa_calculations_at_open_end_quickly_with_a_report", "crates/xfa/src/tests.rs::the_live_form_of_nested_repeating_subforms_stops_at_its_node_budget", "crates/xfa/src/tests.rs::data_ops_of_one_event_are_one_datasets_rewrite", "crates/xfa/src/tests.rs::choice_lists_signatures_passwords_and_pictures_become_fields_and_images", "crates/xfa/src/tests.rs::choice_values_come_from_the_data_as_saved_values_and_several_for_lists", "crates/xfa/src/tests.rs::pictures_are_sized_from_their_headers_and_hostile_ones_are_refused_unallocated", "crates/engine/src/tests.rs::xfa_choice_lists_signature_and_picture_fields_open_fill_script_and_save", "crates/xfa/src/tests.rs::repeating_subforms_inside_positioned_content_get_their_instances", "crates/engine/src/tests.rs::xfa_rows_in_areas_are_laid_out_read_calculated_and_written_where_adobe_binds_them"]
-notes = "laid out from the template on open by the xfa crate (positioned, tb, lr-tb, table/row, page masters, breaks, repeated header rows, captions, rich text, JPEG/PNG/GIF images) into real pages and AcroForm fields (text, password, date with AFDate formats, check boxes, radio groups, drop-downs and list boxes with shown/saved item pairs and multi-select, signature fields, image fields showing their picture (pictures decoded once per document, at most 20 million pixels, and reused across re-layouts), buttons with reset/print/save/URL), filled from the datasets packet (including rows another viewer added), saved as an incremental revision with the values merged into the datasets so Adobe's viewers show them; doc_info reports xfa_layout. XFA JavaScript and FormCalc (form.xfa-formcalc) run in the js crate's XFA object model (xfa.form, SOM resolution, rawValue, presence, access, instance managers, xfa.host, xfa.layout, xfa.event): initialize and calculate on open, exit, validate and calculate after a field changes, click for buttons (through js_run and the app), with rows added and removed, subforms shown and hidden, and the form laid out again, all as one undo step and kept in the file. Hostile scripts are bounded per event (merged and capped effects, messages and console lines, lower loop limits and a time budget on open and calculate, one datasets rewrite per event, print/save/links/focus from clicks only, a runaway script abandoned and the form's scripts turned off) and what open-time scripts changed is noted. Missing: loops inside nested calls are only stopped by abandoning their thread, and script memory is not capped; the change event per keystroke; xfa.template, connections and data descriptions; a hidden instance of a repeating subform hides them all; choosing a new picture for an image field; barcodes are drawn as their text, not bars; keep rules; metrics are approximate and Acrobat fidelity is eyeballed on real forms, not measured (#60)"
+evidence = ["crates/xfa/src/tests.rs::layout_places_captions_fields_and_sizes_containers_to_their_content", "crates/xfa/src/tests.rs::tables_break_across_pages_and_repeat_their_header_row", "crates/xfa/src/tests.rs::rendering_into_the_pdf_replaces_the_placeholder_page_and_adds_fields", "crates/engine/src/tests.rs::dynamic_xfa_forms_are_laid_out_on_open_filled_and_saved_incrementally", "crates/automation/tests/automation.rs::dynamic_xfa_forms_open_render_fill_and_save_through_tools", "crates/ui-egui/tests/ui_group/xfa.rs::a_dynamic_xfa_form_is_laid_out_and_filled", "crates/xfa/src/tests.rs::nested_width_less_subforms_lay_out_in_polynomial_time", "crates/js/src/tests.rs::instance_managers_add_remove_and_count", "crates/xfa/src/tests.rs::the_form_tree_carries_values_presence_instances_and_the_events", "crates/engine/src/tests.rs::xfa_scripts_initialize_calculate_validate_toggle_and_add_rows", "crates/automation/tests/automation.rs::xfa_scripts_run_for_buttons_and_field_changes_through_tools", "crates/ui-egui/tests/ui_group/xfa.rs::xfa_buttons_run_their_scripts_in_the_app", "crates/engine/src/tests.rs::hostile_xfa_open_scripts_are_merged_capped_kept_from_printing_and_noted", "crates/engine/src/tests.rs::runaway_xfa_calculations_at_open_end_quickly_with_a_report", "crates/ui-egui/tests/ui_group/xfa.rs::a_form_whose_scripts_were_turned_off_at_open_says_so", "crates/ui-egui/tests/ui_group/xfa.rs::scripts_turned_off_by_a_click_bring_a_closed_notice_bar_back", "crates/automation/tests/automation.rs::doc_info_says_when_a_runaway_script_turned_the_forms_scripts_off", "crates/xfa/src/tests.rs::the_live_form_of_nested_repeating_subforms_stops_at_its_node_budget", "crates/xfa/src/tests.rs::data_ops_of_one_event_are_one_datasets_rewrite", "crates/xfa/src/tests.rs::choice_lists_signatures_passwords_and_pictures_become_fields_and_images", "crates/xfa/src/tests.rs::choice_values_come_from_the_data_as_saved_values_and_several_for_lists", "crates/xfa/src/tests.rs::pictures_are_sized_from_their_headers_and_hostile_ones_are_refused_unallocated", "crates/engine/src/tests.rs::xfa_choice_lists_signature_and_picture_fields_open_fill_script_and_save", "crates/xfa/src/tests.rs::repeating_subforms_inside_positioned_content_get_their_instances", "crates/engine/src/tests.rs::xfa_rows_in_areas_are_laid_out_read_calculated_and_written_where_adobe_binds_them"]
+notes = "laid out from the template on open by the xfa crate (positioned, tb, lr-tb, table/row, page masters, breaks, repeated header rows, captions, rich text, JPEG/PNG/GIF images) into real pages and AcroForm fields (text, password, date with AFDate formats, check boxes, radio groups, drop-downs and list boxes with shown/saved item pairs and multi-select, signature fields, image fields showing their picture (pictures decoded once per document, at most 20 million pixels, and reused across re-layouts), buttons with reset/print/save/URL), filled from the datasets packet (including rows another viewer added), saved as an incremental revision with the values merged into the datasets so Adobe's viewers show them; doc_info reports xfa_layout. XFA JavaScript and FormCalc (form.xfa-formcalc) run in the js crate's XFA object model (xfa.form, SOM resolution, rawValue, presence, access, instance managers, xfa.host, xfa.layout, xfa.event): initialize and calculate on open, exit, validate and calculate after a field changes, click for buttons (through js_run and the app), with rows added and removed, subforms shown and hidden, and the form laid out again, all as one undo step and kept in the file. All the scripts of one event run on one thread, each in a fresh context on the form as the engine holds it then (nothing shared between scripts; the live form kept up to date in place for values, rebuilt only when the structure changed), so hundreds of calculations run within the open budget. Hostile scripts are bounded per event (merged and capped effects, messages and console lines, lower loop limits and a time budget on open and calculate, one datasets rewrite per event, print/save/links/focus from clicks only, a runaway script abandoned and the form's scripts turned off, which the app says in a toast and on the notice bar, with a button to the JavaScript console, and doc_info reports as xfa_scripts_off) and what open-time scripts changed is noted. Missing: loops inside nested calls are only stopped by abandoning their thread, and script memory is not capped; the change event per keystroke; xfa.template, connections and data descriptions; a hidden instance of a repeating subform hides them all; choosing a new picture for an image field; barcodes are drawn as their text, not bars; keep rules; metrics are approximate and Acrobat fidelity is eyeballed on real forms, not measured (#60)"
 
 [[feature]]
 id = "form.xfa-formcalc"
@@ -6495,11 +6513,11 @@ title = "Editable text and images output"
 area = "I"
 tier = "P1"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["edit.edit_text"]
+tools = ["text_edit"]
+evidence = ["crates/engine/tests/ocr_edit.rs::editing_an_ocr_word_covers_the_scan_and_shows_the_new_text", "crates/engine/tests/ocr_edit.rs::an_explicit_colour_is_kept_for_the_new_text", "crates/engine/tests/ocr_edit.rs::ocr_words_group_into_phrases_that_edit_in_place", "crates/engine/tests/ocr_edit.rs::a_longer_ocr_phrase_grows_rightwards", "crates/engine/tests/ocr_edit.rs::a_rewritten_ocr_phrase_keeps_its_word_widths", "crates/ui-egui/tests/ocr.rs::an_ocr_word_opens_for_editing_and_stays_open"]
+notes = "On demand, per edit: in Edit text & images, recognised text (the invisible OCR layer over a scan) is grouped into phrases (words across a word space; a wider gap such as a table cell, and each scanned line, stay separate) and opens for editing on a click. Applying draws the new text visibly in the scan's sampled ink colour (or the chosen one) and first covers the old words with the paper colour sampled around them, so the scanned word no longer shows; the phrase keeps each word's position and width and grows rightwards instead of wrapping. Still missing: Acrobat's Recognize Text output that converts a whole page to editable text at once, matching the scanned typeface (the layer's Helvetica is used), and covering on a textured or patterned background (one flat colour is used)."
 
 [[feature]]
 id = "ocr.ocr-downsample"
@@ -8390,8 +8408,8 @@ milestone = "M12"
 status = "shipped"
 commands = ["a11y.check"]
 tools = ["accessibility_check"]
-evidence = ["crates/a11y/src/tests.rs::an_untagged_document_fails_the_document_rules", "crates/a11y/src/tests.rs::a_well_tagged_document_passes", "crates/a11y/src/tests.rs::structure_findings_identify_indirect_elements_without_guessing_inline_objects", "crates/a11y/src/tests.rs::figures_are_listed_with_their_alt_text_and_place", "crates/a11y/src/tests.rs::annotation_findings_only_locate_valid_rectangles", "crates/automation/tests/automation.rs::accessibility_check_locates_field_description_on_page", "crates/ui-egui/tests/accessibility.rs::checking_fixing_skipping_and_reporting", "crates/ui-egui/tests/accessibility.rs::checker_shows_a_figure_finding_on_its_page", "crates/automation/tests/automation.rs::accessibility_check_report_and_fixes_through_tools"]
-notes = "full check: options dialog (report, page range, 32 rules by category, 31 on by default), results panel by category with Passed / Failed / Needs manual check / Skipped and findings that go to their page. Locatable figure, annotation and form-widget findings flash their bounds on the page; accessibility_check exposes those bounds in PDF user space. Other findings navigate to their page. Structure findings expose the indirect tag object number and generation through accessibility_check, when available, for precise follow-up in the Tags Panel."
+evidence = ["crates/a11y/src/tests.rs::an_untagged_document_fails_the_document_rules", "crates/a11y/src/tests.rs::a_well_tagged_document_passes", "crates/a11y/src/tests.rs::structure_findings_identify_indirect_elements_without_guessing_inline_objects", "crates/a11y/src/tests.rs::figures_are_listed_with_their_alt_text_and_place", "crates/a11y/src/tests.rs::annotation_findings_only_locate_valid_rectangles", "crates/automation/tests/automation.rs::accessibility_check_locates_field_description_on_page", "crates/ui-egui/tests/accessibility.rs::checking_fixing_skipping_and_reporting", "crates/ui-egui/tests/accessibility.rs::checker_shows_a_figure_finding_on_its_page", "crates/ui-egui/tests/accessibility.rs::checker_summary_does_not_hide_manual_review", "crates/automation/tests/automation.rs::accessibility_check_report_and_fixes_through_tools"]
+notes = "full check: options dialog (report, page range, 32 rules by category, 31 on by default), results panel by category with Passed / Failed / Needs manual check / Skipped and findings that go to their page. A zero-failure check reports manual or skipped rules rather than claiming no issues. Locatable figure, annotation and form-widget findings flash their bounds on the page; accessibility_check exposes those bounds in PDF user space. Other findings navigate to their page. Structure findings expose the indirect tag object number and generation through accessibility_check, when available, for precise follow-up in the Tags Panel."
 
 [[feature]]
 id = "a11y.checker-report"
@@ -8403,7 +8421,7 @@ status = "shipped"
 commands = ["a11y.report"]
 tools = ["accessibility_report", "accessibility_review_record", "accessibility_review_html"]
 evidence = ["crates/a11y/src/tests.rs::rules_have_ids_and_the_report_lists_them", "crates/ui-egui/tests/accessibility.rs::checking_fixing_skipping_and_reporting", "crates/automation/tests/automation.rs::accessibility_check_report_and_fixes_through_tools", "crates/automation/tests/automation.rs::accessibility_review_record_compares_two_versions_without_changing_them", "crates/automation/src/a11y.rs::document_names_are_escaped_in_review_html"]
-notes = "HTML checker report: summary counts and a table per category with descriptions and findings. Headless comparison of two open versions exports the same before-and-after evidence as JSON or accessible, self-contained HTML with hashes, rule changes, and remaining review items."
+notes = "HTML checker report: summary counts and a table per category with descriptions and findings. The headline shows manual or skipped rules when there are no automated failures. Headless comparison of two open versions exports the same before-and-after evidence as JSON or accessible, self-contained HTML with hashes, rule changes, and remaining review items."
 
 [[feature]]
 id = "a11y.checker-fix"
@@ -8807,11 +8825,11 @@ title = "Automatically tag a document"
 area = "M"
 tier = "P1"
 milestone = "M12"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["accessibility_autotag_preview"]
+evidence = ["crates/automation/tests/automation.rs::autotag_preview_proposes_text_without_changing_the_pdf"]
+notes = "Preview proposes paragraph or heading roles for bounded visible text blocks on one page and flags them for review. It does not write tags, mark content, build a parent tree or classify images, tables, lists and annotations."
 
 [[feature]]
 id = "a11y.autotag-fields"
@@ -9059,11 +9077,11 @@ title = "Replace page colours (high contrast)"
 area = "M"
 tier = "P2"
 milestone = "M12"
-status = "planned"
+status = "shipped"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["view_reading_colors"]
+evidence = ["crates/automation/tests/automation.rs::reading_colors_through_tools", "crates/render/src/raster.rs::reading_colors_map_solid_paints_and_leave_images", "crates/render/src/raster.rs::reading_colors_tiles_match_full_render", "crates/render/src/raster.rs::print_preview_requests_render_with_reading_colors_off", "crates/ui-egui/tests/reading_colors.rs::reading_colours_preference_round_trips", "crates/ui-egui/tests/reading_colors.rs::reading_colours_seed_on_open"]
+notes = "View only, off by default: Preferences ▸ Reading colours holds the app-wide preference, seeded into every document as it opens (including created ones), and view_reading_colors reads and sets it per document (Acrobat's Replace Document Colors). Solid text paints and, by default, line-art paints (including stencil-mask image paints) are remapped by luminance — each lerps between the preset's text and background colour by how dark or light the original paint is — while images, shadings and tiling patterns pass through untouched. Presets: black on white, white on black, yellow on black, green on black, or a custom #RRGGBB pair; only_black limits the mapping to near-black paints (a 10% luminance threshold — our choice; Acrobat's was not observed). Display only: the document is not changed and print and export are unaffected; print previews and view snapshots render with the document's true colours (a preview matches the uncoloured printout, and a snapshot is an export surface), so reading colours apply to the reading view only. Closes #897 (duplicate #488)."
 
 [[feature]]
 id = "a11y.reflow-tagged"

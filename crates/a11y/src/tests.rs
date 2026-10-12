@@ -421,6 +421,13 @@ fn rules_have_ids_and_the_report_lists_them() {
     let other = report_html(&report, "a<b>.pdf", "2026-10-02", "es", &|w| format!("«{w}»"));
     assert!(other.contains("<html lang=\"es\">") && other.contains("<h3>«Headings»</h3>") && other.contains("a&lt;b&gt;.pdf"));
     assert!(!other.contains(">Headings<"), "an English heading is left in the report: {other}");
+    let manual_only = Report { results: vec![RuleResult { rule: Rule::LogicalReadingOrder, status: Status::Manual, findings: Vec::new() }] };
+    let manual_html = report_html(&manual_only, "review.pdf", "2026-10-02", "en", &in_english);
+    assert!(manual_html.contains("<p>Needs manual check: 1</p>"));
+    assert!(!manual_html.contains("no problems"));
+    let all_passed = Report { results: vec![RuleResult { rule: Rule::LogicalReadingOrder, status: Status::Passed, findings: Vec::new() }] };
+    let passed_html = report_html(&all_passed, "review.pdf", "2026-10-02", "en", &in_english);
+    assert!(passed_html.contains("<p>The checker found no problems in this document.</p>"), "{passed_html}");
 }
 
 fn figures_doc() -> Document {

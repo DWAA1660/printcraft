@@ -256,6 +256,80 @@ fn precise_touchpad_wheel_scrolls_one_to_one() {
     assert!(drift.abs() < 2.0, "no easing tail after the swipe: drifted {drift}");
 }
 
+/// The 40 frames from one wheel notch on, with the system asking for no animations (Windows'
+/// Animation effects turned off) or not, and Preferences ▸ Animation effects as given: how far
+/// page 1 has moved up in each frame, or with ⌘/Ctrl held, the view's zoom.
+fn frames_after_a_notch(system_reduced: bool, animation_effects: &str, zooming: bool) -> Vec<f32> {
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "100")]);
+    h.state_mut().motion.reduced = system_reduced;
+    h.state_mut().set_option("animation_effects", animation_effects).unwrap();
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(2);
+    let before = rect(&h, 0).expect("page 1 on screen").min.y;
+    let (delta, modifiers) = if zooming { (egui::vec2(0.0, 1.0), Modifiers::COMMAND) } else { (egui::vec2(0.0, -1.0), Modifiers::NONE) };
+    h.event(egui::Event::MouseWheel { unit: MouseWheelUnit::Line, delta, phase: TouchPhase::Move, modifiers });
+    (0..40)
+        .map(|_| {
+            h.step();
+            if zooming { h.state().views[0].zoom } else { before - rect(&h, 0).expect("page 1 still laid out").min.y }
+        })
+        .collect()
+}
+
+/// The system's answer and the Animation effects choice, for each way to have them off and
+/// each way to have them on.
+const AT_ONCE: [(bool, &str); 3] = [(true, "system"), (false, "off"), (true, "off")];
+const EASED: [(bool, &str); 3] = [(false, "system"), (false, "on"), (true, "on")];
+
+#[test]
+fn a_wheel_notch_scrolls_at_once_with_animation_effects_off() {
+    // Eased, egui spreads a notch over about a quarter of a second. At once, the page moves the
+    // notch's whole distance in one frame.
+    let notch = pdfcraft_ui_egui::scroll_speed::ScrollSpeed::default().line_points();
+    for (system_reduced, effects) in AT_ONCE {
+        let moved = frames_after_a_notch(system_reduced, effects, false);
+        // The frame the notch arrives in scrolls; the next one draws the page where it stays.
+        assert!(
+            moved[2..].iter().all(|y| (y - notch).abs() < 0.5),
+            "{effects}, system reduced {system_reduced}: one notch is {notch} points, all at once: {moved:?}"
+        );
+    }
+    for (system_reduced, effects) in EASED {
+        let moved = frames_after_a_notch(system_reduced, effects, false);
+        assert!(moved[2] < notch * 0.75, "{effects}, system reduced {system_reduced}: egui eases the notch: {moved:?}");
+        assert!(
+            (moved[39] - notch).abs() < 1.0,
+            "{effects}, system reduced {system_reduced}: easing changes how long a notch takes, not how far it goes: {moved:?}"
+        );
+    }
+}
+
+#[test]
+fn the_wheel_zooms_a_whole_step_at_once_with_animation_effects_off() {
+    // ⌘/Ctrl with the wheel: egui eases the zoom as it eases scrolling.
+    let step = frames_after_a_notch(true, "system", true)[0];
+    assert!(step > 1.1, "the notch zoomed in: {step}");
+    for (system_reduced, effects) in AT_ONCE {
+        let zooms = frames_after_a_notch(system_reduced, effects, true);
+        assert!(
+            zooms.iter().all(|zoom| *zoom == step),
+            "{effects}, system reduced {system_reduced}: the whole step in the frame the notch arrives, and no more after it: {zooms:?}"
+        );
+    }
+    for (system_reduced, effects) in EASED {
+        let zooms = frames_after_a_notch(system_reduced, effects, true);
+        assert!(
+            zooms[0] > 1.0 && zooms[0] < 1.0 + (step - 1.0) * 0.75,
+            "{effects}, system reduced {system_reduced}: egui eases the notch: {zooms:?}"
+        );
+        assert!(
+            (zooms[39] / step - 1.0).abs() < 0.01,
+            "{effects}, system reduced {system_reduced}: easing changes how long a zoom step takes, not how far it goes: {zooms:?}"
+        );
+    }
+}
+
 #[test]
 fn page_display_commands_switch_layouts() {
     let mut h = harness(&[]);

@@ -188,8 +188,15 @@ impl Automation {
     }
 
     pub(crate) fn links_remove(&mut self, a: &Args) -> Result<Value> {
-        let before = self.doc(a)?.links.len();
-        let mut out = self.apply(a, Edit::RemoveLinks { pages: None })?;
+        let pages = match a.opt_ints("pages")? {
+            Some(_) => Some(self.pages(a, "pages")?),
+            None => None,
+        };
+        let before = match &pages {
+            Some(ps) => self.doc(a)?.links.iter().filter(|l| ps.contains(&l.page)).count(),
+            None => self.doc(a)?.links.len(),
+        };
+        let mut out = self.apply(a, Edit::RemoveLinks { pages })?;
         out["removed"] = json!(before);
         Ok(out)
     }

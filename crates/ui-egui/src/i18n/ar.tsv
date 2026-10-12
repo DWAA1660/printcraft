@@ -225,6 +225,9 @@
 	Add or edit links	إضافة روابط أو تحريرها
 	Create links from URLs	إنشاء روابط من عناوين URL
 	Remove all links	إزالة كل الروابط
+	No links to remove	لا توجد روابط لإزالتها
+	Removed 1 link	تمت إزالة رابط واحد
+	Removed {n} links	الروابط التي أزيلت: {n}
 	Add Bates numbering…	إضافة ترقيم بيتس…
 	Add image…	إضافة صورة…
 	Redact text and images	حجب النص والصور
@@ -757,6 +760,12 @@
 	Flip Vertical	قلب عمودي
 	Replace Image…	استبدال الصورة…
 	Save Image As…	حفظ الصورة باسم…
+	Copy Image	نسخ الصورة
+	The image has been copied ({w} × {h} pixels)	نُسخت الصورة ({w} × {h} بكسل)
+	Couldn't copy the image: {e}	تعذّر نسخ الصورة: {e}
+	Copy Image in Original Format	نسخ الصورة بتنسيقها الأصلي
+	The image has been copied as a {ext} file	نُسخت الصورة كملف {ext}
+	The page has changed; select the image again	تغيّرت الصفحة؛ حدّد الصورة مرة أخرى
 	Check for updates	التحقق من التحديثات
 	No check has run yet.	لم يُجرَ أي تحقق بعد.
 	Checking for a newer version…	جارٍ التحقق من وجود إصدار أحدث…
@@ -2028,6 +2037,7 @@
 	DPI sets the printed page size without resampling the image.	قيمة DPI تحدد حجم الصفحة المطبوعة دون إعادة تشكيل الصورة.
 	Create	إنشاء
 	Dynamic XFA form laid out from its template: {pages}, {fields}.	نموذج XFA ديناميكي رُتِّب من قالبه: {pages}، {fields}.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	سكربتات هذا النموذج متوقفة لأن أحدها استغرق وقتًا طويلًا جدًا. أعد فتح المستند لتشغيلها من جديد.
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	نموذج XFA: حقوله وبيانات XFA فيه تبقى متطابقة، فتعرض العارضات الأخرى ما تعبئه.
 	Switch to two-page view first to show the cover page	انتقل أولًا إلى عرض الصفحتين لإظهار صفحة الغلاف
 	Page display: {layout}	عرض الصفحات: {layout}
@@ -2279,6 +2289,9 @@ key	Space	مسافة
 scroll speed	Slow	بطيئة
 scroll speed	Normal	عادية
 scroll speed	Fast	سريعة
+	Animation effects	تأثيرات الحركة
+animation effects	On	مفعّلة
+animation effects	Off	معطّلة
 	Enhance camera image	تحسين صورة الكاميرا
 	Drag the corners onto the document's edges, then choose Enhance page.	اسحب الزوايا إلى حواف المستند، ثم اختر تحسين الصفحة.
 	Enhance page	تحسين الصفحة
@@ -2288,6 +2301,16 @@ scroll speed	Fast	سريعة
 	Original	الأصل
 	Greyscale	تدرج رمادي
 	Black and white	أبيض وأسود
+	Reading colours	ألوان القراءة
+	Replace document colours	استبدال ألوان المستند
+	Black on white	أسود على أبيض
+	White on black	أبيض على أسود
+	Yellow on black	أصفر على أسود
+	Green on black	أخضر على أسود
+	Page background	خلفية الصفحة
+	Only change the colour of black text or line art	تغيير لون النص الأسود والخطوط فقط
+	Change the colour of line art as well as text	تغيير لون الخطوط أيضًا، وليس النص فقط
+	Colours are remapped while rendering; the document itself never changes.	تُستبدل الألوان عند الرسم؛ المستند نفسه لا يتغير أبدًا.
 	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	لا يقبل برنامج تشغيل هذه الطابعة إعدادات الطباعة على الوجهين من البرامج الأخرى، لذا يُطبَّق إعداده الخاص. غيّره من خصائص…
 	Browser's print dialog	مربع حوار الطباعة في المتصفح
 	Copies, two-sided printing and colour are chosen in the browser's print dialog.	يُختار عدد النسخ والطباعة على الوجهين والألوان في مربع حوار الطباعة في المتصفح.
@@ -2324,6 +2347,14 @@ scroll speed	Fast	سريعة
 	Ink sensitivity	حساسية الحبر
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	لم يُعثر على توقيع داخل الإطار. حرّك الإطار فوق التوقيع أو ارفع حساسية الحبر.
 	Couldn't use the photo: {e}	تعذّر استخدام الصورة: {e}
+
+# PDF tab context menu (#1233)
+	Close Tab	إغلاق علامة التبويب
+	Reopen Closed Tab	إعادة فتح علامة التبويب المغلقة
+	Reveal in Finder	إظهار في Finder
+	Reveal in File Explorer	إظهار في مستكشف الملفات
+	Other colour…	لون آخر…
+	Recent colours	الألوان الأخيرة
 	Couldn't follow linked PDF: {reason}	تعذّر فتح ملف PDF المرتبط: {reason}
 	The linked PDF opened, but its named destination was not applied.	فُتح ملف PDF المرتبط، لكن لم تُطبَّق وجهته المسماة.
 	The linked PDF opened, but its page destination was out of range.	فُتح ملف PDF المرتبط، لكن وجهة الصفحة خارج النطاق.

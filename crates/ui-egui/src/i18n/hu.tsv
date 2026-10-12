@@ -196,6 +196,9 @@
 	Add or edit links	Hivatkozások hozzáadása vagy szerkesztése
 	Create links from URLs	Hivatkozások létrehozása URL-ekből
 	Remove all links	Összes hivatkozás eltávolítása
+	No links to remove	Nincs eltávolítható hivatkozás
+	Removed 1 link	1 hivatkozás eltávolítva
+	Removed {n} links	{n} hivatkozás eltávolítva
 	Add Bates numbering…	Bates-számozás hozzáadása…
 	Add image…	Kép hozzáadása…
 	Redact text and images	Szöveg és képek kitakarása
@@ -728,6 +731,12 @@
 	Flip Vertical	Függőleges tükrözés
 	Replace Image…	Kép cseréje…
 	Save Image As…	Kép mentése másként…
+	Copy Image	Kép másolása
+	The image has been copied ({w} × {h} pixels)	A kép a vágólapra került ({w} × {h} képpont)
+	Couldn't copy the image: {e}	A képet nem sikerült másolni: {e}
+	Copy Image in Original Format	Kép másolása eredeti formátumban
+	The image has been copied as a {ext} file	A kép {ext}-fájlként a vágólapra került
+	The page has changed; select the image again	Az oldal megváltozott; jelölje ki újra a képet
 	Check for updates	Frissítések keresése
 	No check has run yet.	Még nem futott ellenőrzés.
 	Checking for a newer version…	Újabb verzió keresése…
@@ -1949,6 +1958,7 @@
 	DPI sets the printed page size without resampling the image.	A DPI a nyomtatott oldalméretet állítja be, a kép újramintázása nélkül.
 	Create	Létrehozás
 	Dynamic XFA form laid out from its template: {pages}, {fields}.	Dinamikus XFA-űrlap, a sablonjából felépítve: {pages}, {fields}.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Az űrlap szkriptjei ki vannak kapcsolva, mert az egyik túl sokáig futott. Nyisd meg újra a dokumentumot, hogy ismét fussanak.
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	XFA-űrlap: a mezői és az XFA-adatai együtt maradnak, így más megjelenítők azt mutatják, amit beírsz.
 @plural	{n} page|{n} pages	{n} oldal|{n} oldal
 @plural	{n} field|{n} fields	{n} mező|{n} mező
@@ -2257,6 +2267,9 @@ key	Space	Szóköz
 scroll speed	Slow	Lassú
 scroll speed	Normal	Normál
 scroll speed	Fast	Gyors
+	Animation effects	Animációs effektusok
+animation effects	On	Be
+animation effects	Off	Ki
 	Enhance camera image	Kamerakép javítása
 	Drag the corners onto the document's edges, then choose Enhance page.	Húzza a sarkokat a dokumentum széleire, majd válassza az Oldal javítása lehetőséget.
 	Enhance page	Oldal javítása
@@ -2266,6 +2279,16 @@ scroll speed	Fast	Gyors
 	Original	Eredeti
 	Greyscale	Szürkeárnyalatos
 	Black and white	Fekete-fehér
+	Reading colours	Olvasási színek
+	Replace document colours	Dokumentumszínek cseréje
+	Black on white	Fekete fehéren
+	White on black	Fehér feketén
+	Yellow on black	Sárga feketén
+	Green on black	Zöld feketén
+	Page background	Oldal háttere
+	Only change the colour of black text or line art	Csak a fekete szöveg és a vonalak színének módosítása
+	Change the colour of line art as well as text	A vonalak színének módosítása a szöveg mellett
+	Colours are remapped while rendering; the document itself never changes.	A színek a kirajcoláskor módosulnak; maga a dokumentum sosem változik.
 	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	A nyomtató illesztőprogramja nem fogadja el más programoktól a kétoldalas nyomtatás beállítását, ezért a saját beállítása érvényes. Módosítás: Tulajdonságok…
 	Browser's print dialog	A böngésző nyomtatási párbeszédablaka
 	Copies, two-sided printing and colour are chosen in the browser's print dialog.	A példányszámot, a kétoldalas nyomtatást és a színt a böngésző nyomtatási párbeszédablakában lehet megadni.
@@ -2302,6 +2325,14 @@ scroll speed	Fast	Gyors
 	Ink sensitivity	Tintaérzékenység
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	A keretben nem található aláírás. Húzza a keretet az aláírásra, vagy növelje a tintaérzékenységet.
 	Couldn't use the photo: {e}	A fénykép nem használható: {e}
+
+# PDF tab context menu (#1233)
+	Close Tab	Lap bezárása
+	Reopen Closed Tab	Bezárt lap újranyitása
+	Reveal in Finder	Megjelenítés a Finderben
+	Reveal in File Explorer	Megjelenítés a fájlkezelőben
+	Other colour…	Egyéb szín…
+	Recent colours	Legutóbbi színek
 	Couldn't follow linked PDF: {reason}	A hivatkozott PDF nem nyitható meg: {reason}
 	The linked PDF opened, but its named destination was not applied.	A hivatkozott PDF megnyílt, de a nevesített cél nem lett alkalmazva.
 	The linked PDF opened, but its page destination was out of range.	A hivatkozott PDF megnyílt, de a céloldal a tartományon kívül esik.

@@ -221,6 +221,9 @@
 	Add or edit links	Dodaj lub edytuj łącza
 	Create links from URLs	Utwórz łącza z adresów URL
 	Remove all links	Usuń wszystkie łącza
+	No links to remove	Brak łączy do usunięcia
+	Removed 1 link	Usunięto 1 łącze
+	Removed {n} links	Usunięte łącza: {n}
 	Add Bates numbering…	Dodaj numerację Batesa…
 	Add image…	Dodaj obraz…
 	Redact text and images	Utajnij tekst i obrazy
@@ -750,6 +753,12 @@
 	Flip Vertical	Odbij w pionie
 	Replace Image…	Zastąp obraz…
 	Save Image As…	Zapisz obraz jako…
+	Copy Image	Kopiuj obraz
+	The image has been copied ({w} × {h} pixels)	Obraz został skopiowany ({w} × {h} pikseli)
+	Couldn't copy the image: {e}	Nie można skopiować obrazu: {e}
+	Copy Image in Original Format	Kopiuj obraz w oryginalnym formacie
+	The image has been copied as a {ext} file	Obraz został skopiowany jako plik {ext}
+	The page has changed; select the image again	Strona się zmieniła; zaznacz obraz ponownie
 	Check for updates	Sprawdź aktualizacje
 	No check has run yet.	Nie sprawdzono jeszcze aktualizacji.
 	Checking for a newer version…	Sprawdzanie dostępności nowszej wersji…
@@ -2239,6 +2248,9 @@ key	Space	Spacja
 scroll speed	Slow	Wolna
 scroll speed	Normal	Normalna
 scroll speed	Fast	Szybka
+	Animation effects	Efekty animacji
+animation effects	On	Włączone
+animation effects	Off	Wyłączone
 	Enhance camera image	Popraw zdjęcie z aparatu
 	Drag the corners onto the document's edges, then choose Enhance page.	Przeciągnij narożniki na krawędzie dokumentu, a następnie wybierz Popraw stronę.
 	Enhance page	Popraw stronę
@@ -2282,8 +2294,27 @@ scroll speed	Fast	Szybka
 	Ink sensitivity	Czułość na atrament
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	W ramce nie znaleziono podpisu. Przesuń ramkę na podpis lub zwiększ czułość na atrament.
 	Couldn't use the photo: {e}	Nie można użyć zdjęcia: {e}
+
+# PDF tab context menu (#1233)
+	Close Tab	Zamknij kartę
+	Reopen Closed Tab	Otwórz ponownie zamkniętą kartę
+	Reveal in Finder	Pokaż w Finderze
+	Reveal in File Explorer	Pokaż w Eksploratorze plików
+	Other colour…	Inny kolor…
+	Recent colours	Ostatnie kolory
+	Reading colours	Kolory do czytania
+	Replace document colours	Zastąp kolory dokumentu
+	Page background	Tło strony
+	Only change the colour of black text or line art	Zmieniaj kolor tylko czarnego tekstu lub grafiki liniowej
+	Change the colour of line art as well as text	Zmieniaj kolor grafiki liniowej, a nie tylko tekstu
+	Colours are remapped while rendering; the document itself never changes.	Kolory są zmieniane podczas renderowania; sam dokument nigdy się nie zmienia.
+	Black on white	Czarny na białym
+	White on black	Biały na czarnym
+	Yellow on black	Żółty na czarnym
+	Green on black	Zielony na czarnym
 	Couldn't follow linked PDF: {reason}	Nie można otworzyć połączonego pliku PDF: {reason}
 	The linked PDF opened, but its named destination was not applied.	Połączony plik PDF został otwarty, ale jego nazwany cel nie został zastosowany.
 	The linked PDF opened, but its page destination was out of range.	Połączony plik PDF został otwarty, ale jego strona docelowa jest poza zakresem.
 	Local cross-PDF links require the desktop app	Lokalne łącza między plikami PDF wymagają aplikacji komputerowej
 	The existing action will be preserved.	Istniejąca akcja zostanie zachowana.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Skrypty tego formularza są wyłączone, ponieważ jeden z nich działał zbyt długo. Otwórz dokument ponownie, aby znów je uruchomić.

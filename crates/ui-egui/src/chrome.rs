@@ -88,6 +88,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     data.insert_temp(id, state);
                     changed
                 });
+                let mut action = None;
                 let mut close = None;
                 ui.scope(|ui| {
                     ui.style_mut().always_scroll_the_only_direction = true;
@@ -119,12 +120,34 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 if changed && app.active == Some(i) && !app.combine_showing() {
                                     response.scroll_to_me(Some(Align::Center));
                                 }
+                                let id = app.views[i].id;
+                                let reveal = cfg!(not(target_arch = "wasm32")) && doc.path.is_some();
+                                response.context_menu(|ui| {
+                                    if ui.button(tl!("Close Tab")).clicked() {
+                                        action = Some(crate::tab_context::Action::Close(id));
+                                        ui.close();
+                                    }
+                                    if ui.add_enabled(!app.closed_tabs.is_empty(), egui::Button::new(tl!("Reopen Closed Tab"))).clicked() {
+                                        action = Some(crate::tab_context::Action::Reopen);
+                                        ui.close();
+                                    }
+                                    let label = if cfg!(target_os = "macos") { tl!("Reveal in Finder") } else { tl!("Reveal in File Explorer") };
+                                    if ui.add_enabled(reveal, egui::Button::new(label)).clicked() {
+                                        action = Some(crate::tab_context::Action::Reveal(id));
+                                        ui.close();
+                                    }
+                                });
                                 if response.clicked() {
                                     app.active = Some(i);
                                 }
                             }
-                            if let Some(i) = close {
-                                app.request_close_tab(i);
+                            if let Some(i) = close
+                                && let Some(view) = app.views.get(i)
+                            {
+                                action.get_or_insert(crate::tab_context::Action::Close(view.id));
+                            }
+                            if let Some(action) = action {
+                                app.tab_action(action);
                             }
                             if app.combine_tab.open {
                                 // After the document tabs; its index can't clash with theirs.

@@ -17,6 +17,10 @@ pub struct LinkView {
     /// A link rectangle being drawn: (page, start).
     pub drag: Option<(usize, Pos2)>,
     pub selected: Option<(usize, usize)>,
+    /// The link the last right-click on a page hit (page, index), if any: the canvas
+    /// context menu shows the link items only for it, so a right-click elsewhere (on a
+    /// comment, say) keeps its own menu even while a link stays selected.
+    pub context: Option<(usize, usize)>,
     /// Ask the app to open Link Properties for a new rect (page, user rect) or an existing
     /// link (page, index).
     pub open_new: Option<(usize, [f64; 4])>,
@@ -41,7 +45,7 @@ pub struct LinkDraft {
     pub style: LinkStyle,
 }
 
-fn screen_rect(xf: &PageXform, info: &DocInfo, page: usize, r: [f64; 4]) -> Rect {
+pub(crate) fn screen_rect(xf: &PageXform, info: &DocInfo, page: usize, r: [f64; 4]) -> Rect {
     xf.user_rect(info, page, [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32])
 }
 
@@ -80,6 +84,13 @@ pub(crate) fn page_input(
     let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return false };
     let hit = links.iter().filter(|l| l.page == page).find(|l| screen_rect(xf, info, page, l.rect).expand(2.0).contains(p));
     ui.ctx().set_cursor_icon(if hit.is_some() { egui::CursorIcon::PointingHand } else { egui::CursorIcon::Crosshair });
+    if resp.secondary_clicked()
+        && let Some(l) = hit
+    {
+        lv.selected = Some((page, l.index));
+        lv.context = Some((page, l.index));
+        return true;
+    }
     if resp.clicked() || resp.double_clicked() {
         let now = ui.input(|i| i.time);
         // A second click on the same link soon after the first is a double-click.
@@ -185,6 +196,23 @@ impl PdfCraftApp {
                 self.notify_tr("Created 1 link");
             } else {
                 self.notify_fmt("Created {n} links", &[("n", &n.to_string())]);
+            }
+        }
+    }
+
+    /// Remove every link in the active document.
+    pub fn remove_all_links(&mut self) {
+        let Some((_, id)) = self.active_ids() else { return };
+        let count = self.session.get(id).map_or(0, |d| d.links.len());
+        if count == 0 {
+            self.notify_tr("No links to remove");
+            return;
+        }
+        if self.apply_edit(Edit::RemoveLinks { pages: None }) {
+            if count == 1 {
+                self.notify_tr("Removed 1 link");
+            } else {
+                self.notify_fmt("Removed {n} links", &[("n", &count.to_string())]);
             }
         }
     }

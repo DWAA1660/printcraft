@@ -198,6 +198,9 @@
 	Add or edit links	Ajouter ou modifier des liens
 	Create links from URLs	Créer des liens à partir des URL
 	Remove all links	Retirer tous les liens
+	No links to remove	Aucun lien à retirer
+	Removed 1 link	1 lien retiré
+	Removed {n} links	Liens retirés : {n}
 	Add Bates numbering…	Ajouter une numérotation Bates…
 	Add image…	Ajouter une image…
 	Redact text and images	Biffer du texte et des images
@@ -731,6 +734,12 @@
 	Flip Vertical	Retourner verticalement
 	Replace Image…	Remplacer l'image…
 	Save Image As…	Enregistrer l'image sous…
+	Copy Image	Copier l'image
+	The image has been copied ({w} × {h} pixels)	L'image a été copiée ({w} × {h} pixels)
+	Couldn't copy the image: {e}	Impossible de copier l'image : {e}
+	Copy Image in Original Format	Copier l'image au format d'origine
+	The image has been copied as a {ext} file	L'image a été copiée en tant que fichier {ext}
+	The page has changed; select the image again	La page a changé ; sélectionnez de nouveau l'image
 	Check for updates	Rechercher des mises à jour
 	No check has run yet.	Aucune vérification n'a encore été faite.
 	Checking for a newer version…	Recherche d'une version plus récente…
@@ -1959,6 +1968,7 @@
 	DPI sets the printed page size without resampling the image.	Les PPP déterminent la taille de la page imprimée sans rééchantillonner l'image.
 	Create	Créer
 	Dynamic XFA form laid out from its template: {pages}, {fields}.	Formulaire XFA dynamique mis en page à partir de son modèle : {pages}, {fields}.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Les scripts de ce formulaire sont désactivés, car l'un d'eux s'est exécuté trop longtemps. Rouvrez le document pour les exécuter à nouveau.
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	Formulaire XFA : ses champs et ses données XFA restent synchronisés, afin que les autres visionneuses affichent ce que vous remplissez.
 @plural	{n} page|{n} pages	{n} page|{n} pages
 @plural	{n} field|{n} fields	{n} champ|{n} champs
@@ -2258,6 +2268,9 @@ key	Space	Espace
 scroll speed	Slow	Lente
 scroll speed	Normal	Normale
 scroll speed	Fast	Rapide
+	Animation effects	Effets d'animation
+animation effects	On	Activés
+animation effects	Off	Désactivés
 	Enhance camera image	Améliorer la photo d'un document
 	Drag the corners onto the document's edges, then choose Enhance page.	Faites glisser les coins sur les bords du document, puis choisissez Améliorer la page.
 	Enhance page	Améliorer la page
@@ -2267,6 +2280,16 @@ scroll speed	Fast	Rapide
 	Original	Original
 	Greyscale	Niveaux de gris
 	Black and white	Noir et blanc
+	Reading colours	Couleurs de lecture
+	Replace document colours	Remplacer les couleurs du document
+	Black on white	Noir sur blanc
+	White on black	Blanc sur noir
+	Yellow on black	Jaune sur noir
+	Green on black	Vert sur noir
+	Page background	Arrière-plan de la page
+	Only change the colour of black text or line art	Ne changer que la couleur du texte noir et des traits
+	Change the colour of line art as well as text	Changer aussi la couleur des traits, en plus du texte
+	Colours are remapped while rendering; the document itself never changes.	Les couleurs sont réaffectées au rendu ; le document lui-même ne change jamais.
 	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	Le pilote de cette imprimante n'accepte pas les réglages recto verso des autres programmes ; son propre réglage s'applique. Modifiez-le dans Propriétés…
 	Browser's print dialog	Boîte de dialogue d'impression du navigateur
 	Copies, two-sided printing and colour are chosen in the browser's print dialog.	Le nombre de copies, l'impression recto verso et la couleur se choisissent dans la boîte de dialogue d'impression du navigateur.
@@ -2303,6 +2326,14 @@ scroll speed	Fast	Rapide
 	Ink sensitivity	Sensibilité à l’encre
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	Aucune signature trouvée dans le cadre. Placez le cadre sur la signature ou augmentez la sensibilité à l’encre.
 	Couldn't use the photo: {e}	Impossible d’utiliser la photo : {e}
+
+# PDF tab context menu (#1233)
+	Close Tab	Fermer l’onglet
+	Reopen Closed Tab	Rouvrir l’onglet fermé
+	Reveal in Finder	Afficher dans le Finder
+	Reveal in File Explorer	Afficher dans l’explorateur de fichiers
+	Other colour…	Autre couleur…
+	Recent colours	Couleurs récentes
 	Couldn't follow linked PDF: {reason}	Impossible de suivre le PDF lié : {reason}
 	The linked PDF opened, but its named destination was not applied.	Le PDF lié s'est ouvert, mais sa destination nommée n'a pas été appliquée.
 	The linked PDF opened, but its page destination was out of range.	Le PDF lié s'est ouvert, mais sa page de destination est hors limites.

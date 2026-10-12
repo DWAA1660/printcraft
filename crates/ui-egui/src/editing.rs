@@ -49,7 +49,7 @@ impl PdfCraftApp {
                 } else if let Some(form_before) = form_before
                     && doc.info.pages.len() == page_count_before
                     && doc.xfa.is_some() == had_xfa
-                    && !doc.xfa.is_some()
+                    && doc.xfa.is_none()
                     && is_form_edit(&edit)
                 {
                     let mut changed_pages = std::collections::BTreeSet::new();
@@ -508,7 +508,7 @@ impl PdfCraftApp {
             return true;
         }
         let author = self.comment_prefs.author.clone();
-        let edit = crate::fill_sign::typed(tb.page, tb.at, &text, &author);
+        let edit = crate::fill_sign::typed(tb.page, tb.at, &text, tb.size, &author);
         if self.apply_edit(edit) {
             if let Some(view) = self.views.get_mut(i) {
                 view.fill_text = None;

@@ -92,6 +92,31 @@ fn checking_fixing_skipping_and_reporting() {
     assert!(html.contains("Accessibility Report") && html.contains("Skipped"));
 }
 
+#[test]
+fn checker_summary_does_not_hide_manual_review() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("notes.pdf", None, FIXTURE.to_vec()).unwrap();
+        app
+    });
+    h.run_steps(3);
+    h.state_mut().run_accessibility_check();
+    let report = &mut h.state_mut().a11y.report.as_mut().unwrap().1;
+    for result in &mut report.results {
+        result.status = Status::Passed;
+        result.findings.clear();
+    }
+    report.results[0].status = Status::Manual;
+    h.run_steps(2);
+    h.get_by_label("Needs manual check: 1");
+    assert!(h.query_by_label("No issues found").is_none());
+    // Every rule passing keeps the plain success wording.
+    h.state_mut().a11y.report.as_mut().unwrap().1.results[0].status = Status::Passed;
+    h.run_steps(2);
+    h.get_by_label("No issues found");
+}
+
 /// Two tagged figures: an image without alternate text and a bar (role-mapped Photo) with.
 const FIGURES: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >> endobj

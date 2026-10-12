@@ -342,6 +342,9 @@ key	Space	Mezerník
 	Add or edit links	Přidat nebo upravit odkazy
 	Create links from URLs	Vytvořit odkazy z adres URL
 	Remove all links	Odebrat všechny odkazy
+	No links to remove	Nejsou žádné odkazy k odebrání
+	Removed 1 link	Odebrán 1 odkaz
+	Removed {n} links	Odebrané odkazy: {n}
 	Add Bates numbering…	Přidat Batesovo číslování…
 	Add image…	Přidat obrázek…
 	Redact text and images	Začernit text a obrázky
@@ -832,6 +835,12 @@ key	Space	Mezerník
 	Flip Vertical	Převrátit svisle
 	Replace Image…	Nahradit obrázek…
 	Save Image As…	Uložit obrázek jako…
+	Copy Image	Kopírovat obrázek
+	The image has been copied ({w} × {h} pixels)	Obrázek byl zkopírován ({w} × {h} pixelů)
+	Couldn't copy the image: {e}	Obrázek nelze zkopírovat: {e}
+	Copy Image in Original Format	Kopírovat obrázek v původním formátu
+	The image has been copied as a {ext} file	Obrázek byl zkopírován jako soubor {ext}
+	The page has changed; select the image again	Stránka se změnila; vyberte obrázek znovu
 	Check for updates	Zkontrolovat aktualizace
 	No check has run yet.	Kontrola zatím neproběhla.
 	Checking for a newer version…	Hledání novější verze…
@@ -2077,6 +2086,7 @@ key	Space	Mezerník
 	DPI sets the printed page size without resampling the image.	DPI určuje velikost tištěné stránky bez převzorkování obrázku.
 	Create	Vytvořit
 	Dynamic XFA form laid out from its template: {pages}, {fields}.	Dynamický formulář XFA rozvržený podle šablony: {pages}, {fields}.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Skripty tohoto formuláře jsou vypnuté, protože jeden z nich běžel příliš dlouho. Chcete-li je znovu spustit, otevřete dokument znovu.
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	Formulář XFA: jeho pole a data XFA se udržují ve shodě, takže ostatní prohlížeče zobrazí, co vyplníte.
 	Switch to two-page view first to show the cover page	Titulní stránku zobrazíte, až přepnete na dvoustránkové zobrazení
 @plural	{n} page|{n} pages	{n} stránka|{n} stránky|{n} stránek
@@ -2309,6 +2319,9 @@ certificate	Subject	Subjekt
 scroll speed	Slow	Pomalá
 scroll speed	Normal	Normální
 scroll speed	Fast	Rychlá
+	Animation effects	Animační efekty
+animation effects	On	Zapnuto
+animation effects	Off	Vypnuto
 
 # Counts that take plural forms: optimized images, discarded items, bytes, pixels and deleted fields.
 @plural	{n} image optimized|{n} images optimized	{n} obrázek optimalizován|{n} obrázky optimalizovány|{n} obrázků optimalizováno
@@ -2339,6 +2352,16 @@ scroll speed	Fast	Rychlá
 	Original	Originál
 	Greyscale	Stupně šedi
 	Black and white	Černobílé
+	Reading colours	Barvy pro čtení
+	Replace document colours	Nahradit barvy dokumentu
+	Black on white	Černá na bílém
+	White on black	Bílá na černém
+	Yellow on black	Žlutá na černém
+	Green on black	Zelená na černém
+	Page background	Pozadí stránky
+	Only change the colour of black text or line art	Změnit jen barvu černého textu a čar
+	Change the colour of line art as well as text	Změnit barvu i čar, ne jen textu
+	Colours are remapped while rendering; the document itself never changes.	Barvy se mění při vykreslování; samotný dokument se nikdy nemění.
 	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	Ovladač této tiskárny nepřijímá nastavení oboustranného tisku z jiných programů, proto platí jeho vlastní nastavení. Změňte ho ve Vlastnosti…
 	This field's font can't draw “{c}” ({code}), so PdfCraft shows ? in its place. The value is saved, and other PDF viewers redraw the field from it.	Písmo tohoto pole neumí zobrazit „{c}“ ({code}), proto PdfCraft místo něj ukazuje ?. Hodnota se uloží a jiné prohlížeče PDF pole podle ní překreslí.
 	The fonts PdfCraft writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.	Písma, kterými PdfCraft píše, neumí zobrazit „{c}“ ({code}), proto se ve všech prohlížečích PDF zobrazí jako ?. Text se uloží.
@@ -2377,6 +2400,14 @@ scroll speed	Fast	Rychlá
 	Ink sensitivity	Citlivost na inkoust
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	V rámečku nebyl nalezen žádný podpis. Přesuňte rámeček na podpis nebo zvyšte citlivost na inkoust.
 	Couldn't use the photo: {e}	Fotografii nelze použít: {e}
+
+# PDF tab context menu (#1233)
+	Close Tab	Zavřít kartu
+	Reopen Closed Tab	Znovu otevřít zavřenou kartu
+	Reveal in Finder	Zobrazit ve Finderu
+	Reveal in File Explorer	Zobrazit v Průzkumníku souborů
+	Other colour…	Jiná barva…
+	Recent colours	Nedávné barvy
 	Couldn't follow linked PDF: {reason}	Odkazovaný PDF nelze otevřít: {reason}
 	The linked PDF opened, but its named destination was not applied.	Odkazovaný PDF se otevřel, ale jeho pojmenovaný cíl nebyl použit.
 	The linked PDF opened, but its page destination was out of range.	Odkazovaný PDF se otevřel, ale cílová stránka je mimo rozsah.

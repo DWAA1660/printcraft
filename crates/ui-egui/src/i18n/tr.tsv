@@ -183,6 +183,9 @@
 	Add or edit links	Bağlantı ekle veya düzenle
 	Create links from URLs	URL'lerden bağlantı oluştur
 	Remove all links	Tüm bağlantıları kaldır
+	No links to remove	Kaldırılacak bağlantı yok
+	Removed 1 link	1 bağlantı kaldırıldı
+	Removed {n} links	{n} bağlantı kaldırıldı
 	Add Bates numbering…	Bates numaralandırması ekle…
 	Add image…	Resim ekle…
 	Redact text and images	Metin ve resimleri karart
@@ -713,6 +716,12 @@
 	Flip Vertical	Dikey Çevir
 	Replace Image…	Resmi Değiştir…
 	Save Image As…	Resmi Farklı Kaydet…
+	Copy Image	Resmi Kopyala
+	The image has been copied ({w} × {h} pixels)	Resim kopyalandı ({w} × {h} piksel)
+	Couldn't copy the image: {e}	Resim kopyalanamadı: {e}
+	Copy Image in Original Format	Resmi Özgün Biçimde Kopyala
+	The image has been copied as a {ext} file	Resim {ext} dosyası olarak kopyalandı
+	The page has changed; select the image again	Sayfa değişti; resmi yeniden seçin
 	Check for updates	Güncellemeleri denetle
 	No check has run yet.	Henüz denetim yapılmadı.
 	Checking for a newer version…	Daha yeni bir sürüm denetleniyor…
@@ -1926,6 +1935,7 @@
 	DPI sets the printed page size without resampling the image.	DPI, resmi yeniden örneklemeden yazdırılan sayfa boyutunu ayarlar.
 	Create	Oluştur
 	Dynamic XFA form laid out from its template: {pages}, {fields}.	Şablonundan oluşturulmuş dinamik XFA formu: {pages}, {fields}.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Bu formun komut dosyaları kapatıldı, çünkü biri çok uzun süre çalıştı. Yeniden çalıştırmak için belgeyi yeniden açın.
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	XFA formu: Diğer görüntüleyicilerin doldurduklarınızı göstermesi için alanları ve XFA verileri eşitlenir.
 @plural	{n} page|{n} pages	{n} sayfa
 @plural	{n} field|{n} fields	{n} alan
@@ -2251,6 +2261,9 @@ key	Space	Boşluk
 scroll speed	Slow	Yavaş
 scroll speed	Normal	Orta
 scroll speed	Fast	Hızlı
+	Animation effects	Animasyon efektleri
+animation effects	On	Açık
+animation effects	Off	Kapalı
 	Enhance camera image	Kamera görüntüsünü iyileştir
 	Drag the corners onto the document's edges, then choose Enhance page.	Köşeleri belgenin kenarlarına sürükleyin, ardından Sayfayı iyileştir'i seçin.
 	Enhance page	Sayfayı iyileştir
@@ -2299,6 +2312,24 @@ scroll speed	Fast	Hızlı
 	Ink sensitivity	Mürekkep hassasiyeti
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	Çerçevede imza bulunamadı. Çerçeveyi imzanın üzerine taşıyın veya mürekkep hassasiyetini artırın.
 	Couldn't use the photo: {e}	Fotoğraf kullanılamadı: {e}
+
+# PDF tab context menu (#1233)
+	Close Tab	Sekmeyi kapat
+	Reopen Closed Tab	Kapatılan sekmeyi yeniden aç
+	Reveal in Finder	Finder’da göster
+	Reveal in File Explorer	Dosya Gezgini’nde göster
+	Other colour…	Diğer renk…
+	Recent colours	Son kullanılan renkler
+	Reading colours	Okuma renkleri
+	Replace document colours	Belge renklerini değiştir
+	Black on white	Beyaz üzerinde siyah
+	White on black	Siyah üzerinde beyaz
+	Yellow on black	Siyah üzerinde sarı
+	Green on black	Siyah üzerinde yeşil
+	Page background	Sayfa arka planı
+	Only change the colour of black text or line art	Yalnızca siyah metin veya çizgi sanatının rengini değiştir
+	Change the colour of line art as well as text	Metnin yanı sıra çizgi sanatının rengini de değiştir
+	Colours are remapped while rendering; the document itself never changes.	Renkler görüntülenirken yeniden eşlenir; belgenin kendisi asla değişmez.
 	Couldn't follow linked PDF: {reason}	Bağlantılı PDF açılamadı: {reason}
 	The linked PDF opened, but its named destination was not applied.	Bağlantılı PDF açıldı, ancak adlandırılmış hedefi uygulanmadı.
 	The linked PDF opened, but its page destination was out of range.	Bağlantılı PDF açıldı, ancak sayfa hedefi aralık dışında.

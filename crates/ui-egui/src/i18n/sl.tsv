@@ -654,6 +654,7 @@
 	Duplicate…	Podvoji…
 	Dynamic	Dinamično
 	Dynamic XFA form laid out from its template: {pages}, {fields}.	Dinamični obrazec XFA, razporejen iz predloge: {pages}, {fields}.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Skripti tega obrazca so izklopljeni, ker se je eden izvajal predolgo. Če jih želite znova zagnati, znova odprite dokument.
 	E-Sign	E-podpis
 	Each field needs a tooltip that says what to enter. Add one in Field Properties > General > Tooltip.	Vsako polje potrebuje namig, ki pove, kaj vnesti. Dodajte ga v Lastnosti polja > Splošno > Namig.
 	Each file holds as many of the {n} pages as fit.	Vsaka datoteka vsebuje toliko od {n} strani, kot jih gre vanjo.
@@ -1429,6 +1430,9 @@
 	Reliable character encoding is provided	Zagotovljeno je zanesljivo kodiranje znakov
 	Remove	Odstrani
 	Remove all links	Odstrani vse povezave
+	No links to remove	Ni povezav za odstranitev
+	Removed 1 link	Odstranjena je 1 povezava
+	Removed {n} links	Odstranjene povezave: {n}
 	Remove background	Odstrani ozadje
 	Remove checkmark	Odstrani kljukico
 	Remove from Recent	Odstrani iz nedavnih
@@ -1532,6 +1536,12 @@
 	Save & Close	Shrani in zapri
 	Save (M4)	Shrani (M4)
 	Save Image As…	Shrani sliko kot…
+	Copy Image	Kopiraj sliko
+	The image has been copied ({w} × {h} pixels)	Slika je kopirana ({w} × {h} slikovnih pik)
+	Couldn't copy the image: {e}	Slike ni bilo mogoče kopirati: {e}
+	Copy Image in Original Format	Kopiraj sliko v izvirni obliki
+	The image has been copied as a {ext} file	Slika je kopirana kot datoteka {ext}
+	The page has changed; select the image again	Stran se je spremenila; znova izberite sliko
 	Save as PDF	Shrani kot PDF
 	Save as PDF/A	Shrani kot PDF/A
 	Save as PDF/A-1b	Shrani kot PDF/A-1b
@@ -2260,6 +2270,9 @@ key	Space	Preslednica
 scroll speed	Slow	Počasi
 scroll speed	Normal	Običajno
 scroll speed	Fast	Hitro
+	Animation effects	Učinki animacije
+animation effects	On	Vklopljeni
+animation effects	Off	Izklopljeni
 	Enhance camera image	Izboljšaj fotografijo s kamere
 	Drag the corners onto the document's edges, then choose Enhance page.	Povlecite vogale na robove dokumenta, nato izberite Izboljšaj stran.
 	Enhance page	Izboljšaj stran
@@ -2269,6 +2282,16 @@ scroll speed	Fast	Hitro
 	Original	Izvirnik
 	Greyscale	Sivine
 	Black and white	Črno-belo
+	Reading colours	Barve za branje
+	Replace document colours	Zamenjaj barve dokumenta
+	Black on white	Črno na belem
+	White on black	Belo na črnem
+	Yellow on black	Rumeno na črnem
+	Green on black	Zeleno na črnem
+	Page background	Ozadje strani
+	Only change the colour of black text or line art	Spremeni samo barvo črnega besedila in črt
+	Change the colour of line art as well as text	Spremeni barvo tudi črt, ne samo besedila
+	Colours are remapped while rendering; the document itself never changes.	Barve se spremenijo pri izrisovanju; sam dokument se nikoli ne spremeni.
 	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	Gonilnik tega tiskalnika ne sprejema nastavitev obojestranskega tiskanja iz drugih programov, zato velja njegova lastna nastavitev. Spremenite jo v Lastnosti…
 	This field's font can't draw “{c}” ({code}), so PdfCraft shows ? in its place. The value is saved, and other PDF viewers redraw the field from it.	Pisava tega polja ne more prikazati »{c}« ({code}), zato PdfCraft namesto njega prikaže ?. Vrednost se shrani, drugi pregledovalniki PDF pa polje znova narišejo iz nje.
 	The fonts PdfCraft writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.	Pisave, s katerimi piše PdfCraft, ne morejo prikazati »{c}« ({code}), zato se v vseh pregledovalnikih PDF prikaže kot ?. Besedilo se shrani.
@@ -2308,6 +2331,14 @@ scroll speed	Fast	Hitro
 	Ink sensitivity	Občutljivost za črnilo
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	V okvirju ni bilo najdenega podpisa. Premaknite okvir nad podpis ali povečajte občutljivost za črnilo.
 	Couldn't use the photo: {e}	Fotografije ni bilo mogoče uporabiti: {e}
+
+# PDF tab context menu (#1233)
+	Close Tab	Zapri zavihek
+	Reopen Closed Tab	Znova odpri zaprti zavihek
+	Reveal in Finder	Prikaži v Finderju
+	Reveal in File Explorer	Prikaži v upravljalniku datotek
+	Other colour…	Druga barva…
+	Recent colours	Nedavne barve
 	Couldn't follow linked PDF: {reason}	Povezanega PDF-ja ni bilo mogoče odpreti: {reason}
 	The linked PDF opened, but its named destination was not applied.	Povezani PDF se je odprl, vendar njegov poimenovani cilj ni bil uporabljen.
 	The linked PDF opened, but its page destination was out of range.	Povezani PDF se je odprl, vendar je ciljna stran zunaj obsega.

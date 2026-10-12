@@ -145,6 +145,30 @@ fn clicking_elsewhere_with_add_text_keeps_the_typed_text() {
 }
 
 #[test]
+fn fill_text_size_controls_new_text_and_survives_settings_restore() {
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.text");
+    h.run_steps(2);
+    h.get_by_label("Font size:");
+    h.state_mut().fill_text_size = 24.0;
+    click(&mut h, 50.0, 250.0);
+    assert_eq!(h.state().views[0].fill_text.as_ref().map(|t| t.size), Some(24.0));
+    h.event(egui::Event::Text("Larger text".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let annotation =
+        h.state().session.get(h.state().views[0].id).unwrap().info.annotations.iter().find(|a| a.contents.as_deref() == Some("Larger text")).unwrap();
+    assert!(annotation.rect[3] - annotation.rect[1] > 24.0, "24 pt text has a larger annotation: {annotation:?}");
+    let settings = h.state().persist();
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&settings);
+    assert_eq!(restored.fill_text_size, 24.0);
+    restored.restore(r#"{"fill_text_size":1000000}"#);
+    assert_eq!(restored.fill_text_size, 24.0, "invalid settings do not change the size");
+}
+
+#[test]
 fn the_type_box_grows_as_text_is_typed() {
     let mut h = harness();
     h.state_mut().execute("sign.fill.text");
@@ -947,7 +971,7 @@ fn saving_flattens_fill_and_sign_only_when_the_preference_is_on() {
     app.open_bytes("form.pdf", None, FIXTURE.to_vec()).unwrap();
     let id = app.views[0].id;
     app.session.apply(id, mark).unwrap();
-    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 200.0], text: "Typed".into(), focus: false });
+    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 200.0], text: "Typed".into(), size: 10.0, focus: false });
     let kept = dir.join("kept.pdf");
     app.save_override = Some(kept.to_string_lossy().into_owned());
     assert!(app.save_active(SaveTarget::InPlace));
@@ -958,7 +982,7 @@ fn saving_flattens_fill_and_sign_only_when_the_preference_is_on() {
     assert!(texts.iter().any(|t| t == "Typed"), "an open type box is saved: {texts:?}");
     assert_eq!(reopened.session.get(reopened.views[0].id).unwrap().info.annotations.len(), 2, "the check mark stays too");
 
-    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 160.0], text: "More".into(), focus: false });
+    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 160.0], text: "More".into(), size: 10.0, focus: false });
     app.flatten_fill_sign_on_save = true;
     let flat = dir.join("flat.pdf");
     app.save_override = Some(flat.to_string_lossy().into_owned());

@@ -222,6 +222,9 @@
 	Add or edit links	Aggiungi o modifica collegamenti
 	Create links from URLs	Crea collegamenti dagli URL
 	Remove all links	Rimuovi tutti i collegamenti
+	No links to remove	Nessun collegamento da rimuovere
+	Removed 1 link	1 collegamento rimosso
+	Removed {n} links	{n} collegamenti rimossi
 	Add Bates numbering…	Aggiungi numerazione Bates…
 	Add image…	Aggiungi immagine…
 	Redact text and images	Oscura testo e immagini
@@ -754,6 +757,12 @@
 	Flip Vertical	Capovolgi verticalmente
 	Replace Image…	Sostituisci immagine…
 	Save Image As…	Salva immagine con nome…
+	Copy Image	Copia immagine
+	The image has been copied ({w} × {h} pixels)	L'immagine è stata copiata ({w} × {h} pixel)
+	Couldn't copy the image: {e}	Impossibile copiare l'immagine: {e}
+	Copy Image in Original Format	Copia immagine nel formato originale
+	The image has been copied as a {ext} file	L'immagine è stata copiata come file {ext}
+	The page has changed; select the image again	La pagina è cambiata; seleziona di nuovo l'immagine
 	Check for updates	Verifica aggiornamenti
 	No check has run yet.	Nessuna verifica eseguita finora.
 	Checking for a newer version…	Ricerca di una versione più recente…
@@ -2052,6 +2061,7 @@
 	DPI sets the printed page size without resampling the image.	I DPI determinano la dimensione della pagina stampata senza ricampionare l'immagine.
 	Create	Crea
 	Dynamic XFA form laid out from its template: {pages}, {fields}.	Modulo XFA dinamico impaginato dal suo modello: {pages}, {fields}.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Gli script di questo modulo sono disattivati perché uno è rimasto in esecuzione troppo a lungo. Riapri il documento per eseguirli di nuovo.
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	Modulo XFA: i suoi campi e i dati XFA restano allineati, così gli altri visualizzatori mostrano ciò che compili.
 	Default page display	Visualizzazione pagina predefinita
 	Default zoom	Ingrandimento predefinito
@@ -2267,6 +2277,9 @@ key	Space	Spazio
 scroll speed	Slow	Lenta
 scroll speed	Normal	Normale
 scroll speed	Fast	Veloce
+	Animation effects	Effetti di animazione
+animation effects	On	Attivati
+animation effects	Off	Disattivati
 	Enhance camera image	Migliora foto della fotocamera
 	Drag the corners onto the document's edges, then choose Enhance page.	Trascina gli angoli sui bordi del documento, poi scegli Migliora la pagina.
 	Enhance page	Migliora la pagina
@@ -2276,6 +2289,16 @@ scroll speed	Fast	Veloce
 	Original	Originale
 	Greyscale	Scala di grigi
 	Black and white	Bianco e nero
+	Reading colours	Colori di lettura
+	Replace document colours	Sostituisci i colori del documento
+	Black on white	Nero su bianco
+	White on black	Bianco su nero
+	Yellow on black	Giallo su nero
+	Green on black	Verde su nero
+	Page background	Sfondo della pagina
+	Only change the colour of black text or line art	Modifica solo il colore del testo nero e dei tratti
+	Change the colour of line art as well as text	Modifica il colore anche dei tratti, oltre al testo
+	Colours are remapped while rendering; the document itself never changes.	I colori vengono riassociati durante il rendering; il documento in sé non cambia mai.
 	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	Il driver di questa stampante non accetta le impostazioni fronte-retro da altri programmi, quindi vale la sua impostazione. Modificala in Proprietà…
 	Browser's print dialog	Finestra di stampa del browser
 	Copies, two-sided printing and colour are chosen in the browser's print dialog.	Copie, stampa fronte/retro e colore si scelgono nella finestra di stampa del browser.
@@ -2312,6 +2335,14 @@ scroll speed	Fast	Veloce
 	Ink sensitivity	Sensibilità all’inchiostro
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	Nessuna firma trovata nella cornice. Sposta la cornice sulla firma o aumenta la sensibilità all’inchiostro.
 	Couldn't use the photo: {e}	Impossibile usare la foto: {e}
+
+# PDF tab context menu (#1233)
+	Close Tab	Chiudi scheda
+	Reopen Closed Tab	Riapri scheda chiusa
+	Reveal in Finder	Mostra nel Finder
+	Reveal in File Explorer	Mostra in Esplora file
+	Other colour…	Altro colore…
+	Recent colours	Colori recenti
 	Couldn't follow linked PDF: {reason}	Impossibile aprire il PDF collegato: {reason}
 	The linked PDF opened, but its named destination was not applied.	Il PDF collegato è stato aperto, ma la sua destinazione con nome non è stata applicata.
 	The linked PDF opened, but its page destination was out of range.	Il PDF collegato è stato aperto, ma la pagina di destinazione è fuori intervallo.

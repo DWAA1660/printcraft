@@ -202,6 +202,9 @@ comment menu	Edit	సవరించు
 	Add or edit links	లింక్‌లను జోడించు లేదా సవరించు
 	Create links from URLs	URLల నుండి లింక్‌లను సృష్టించు
 	Remove all links	అన్ని లింక్‌లను తీసివేయి
+	No links to remove	తీసివేయడానికి లింక్‌లు లేవు
+	Removed 1 link	1 లింక్ తీసివేయబడింది
+	Removed {n} links	తీసివేసిన లింక్‌లు: {n}
 	Add Bates numbering…	బేట్స్ నంబరింగ్ జోడించు…
 	Add image…	చిత్రాన్ని జోడించు…
 	Redact text and images	టెక్స్ట్‌ను, చిత్రాలను రెడాక్ట్ చేయి
@@ -732,6 +735,12 @@ comment menu	Edit	సవరించు
 	Flip Vertical	నిలువుగా తిరగేయి
 	Replace Image…	చిత్రాన్ని భర్తీ చేయి…
 	Save Image As…	చిత్రాన్ని ఫైల్‌గా సేవ్ చేయి…
+	Copy Image	చిత్రాన్ని కాపీ చేయి
+	The image has been copied ({w} × {h} pixels)	చిత్రం కాపీ చేయబడింది ({w} × {h} పిక్సెల్‌లు)
+	Couldn't copy the image: {e}	చిత్రాన్ని కాపీ చేయడం సాధ్యం కాలేదు: {e}
+	Copy Image in Original Format	చిత్రాన్ని అసలు ఫార్మాట్‌లో కాపీ చేయి
+	The image has been copied as a {ext} file	చిత్రం {ext} ఫైల్‌గా కాపీ చేయబడింది
+	The page has changed; select the image again	పేజీ మారింది; చిత్రాన్ని మళ్లీ ఎంచుకోండి
 	Check for updates	అప్‌డేట్‌ల కోసం తనిఖీ చేయి
 	No check has run yet.	ఇంకా తనిఖీ జరగలేదు.
 	Checking for a newer version…	కొత్త వెర్షన్ కోసం తనిఖీ చేస్తోంది…
@@ -2173,6 +2182,9 @@ key	Space	స్పేస్
 scroll speed	Slow	నెమ్మదిగా
 scroll speed	Normal	సాధారణం
 scroll speed	Fast	వేగంగా
+	Animation effects	యానిమేషన్ ప్రభావాలు
+animation effects	On	ఆన్
+animation effects	Off	ఆఫ్
 	Enhance camera image	కెమెరా చిత్రాన్ని మెరుగుపరచు
 	Drag the corners onto the document's edges, then choose Enhance page.	మూలలను పత్రం అంచుల వరకు లాగి, ఆపై పేజీని మెరుగుపరచు ఎంచుకోండి.
 	Enhance page	పేజీని మెరుగుపరచు
@@ -2215,8 +2227,27 @@ scroll speed	Fast	వేగంగా
 	Ink sensitivity	ఇంక్ సున్నితత్వం
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	ఫ్రేమ్‌లో సంతకం కనబడలేదు. ఫ్రేమ్‌ను సంతకం మీదకు జరపండి లేదా ఇంక్ సున్నితత్వాన్ని పెంచండి.
 	Couldn't use the photo: {e}	ఫోటోను ఉపయోగించలేకపోయాం: {e}
+
+# PDF tab context menu (#1233)
+	Close Tab	ట్యాబ్‌ను మూసివేయి
+	Reopen Closed Tab	మూసివేసిన ట్యాబ్‌ను మళ్లీ తెరువు
+	Reveal in Finder	Finderలో చూపు
+	Reveal in File Explorer	ఫైల్ ఎక్స్‌ప్లోరర్‌లో చూపు
+	Other colour…	ఇతర రంగు…
+	Recent colours	ఇటీవలి రంగులు
+	Reading colours	చదవడానికి రంగులు
+	Replace document colours	పత్రం రంగులను మార్చు
+	Page background	పేజీ నేపథ్యం
+	Only change the colour of black text or line art	నలుపు వచనం లేదా రేఖా చిత్రాల రంగును మాత్రమే మార్చు
+	Change the colour of line art as well as text	వచనంతో పాటు రేఖా చిత్రాల రంగును కూడా మార్చు
+	Colours are remapped while rendering; the document itself never changes.	రెండర్ చేసేటప్పుడు రంగులు మార్చబడతాయి; పత్రం మాత్రం ఎప్పుడూ మారదు.
+	Black on white	తెలుపుపై నలుపు
+	White on black	నలుపుపై తెలుపు
+	Yellow on black	నలుపుపై పసుపు
+	Green on black	నలుపుపై ఆకుపచ్చ
 	Couldn't follow linked PDF: {reason}	లింక్ చేసిన PDFను తెరవలేకపోయాం: {reason}
 	The linked PDF opened, but its named destination was not applied.	లింక్ చేసిన PDF తెరుచుకుంది, కానీ దాని పేరున్న గమ్యం వర్తించలేదు.
 	The linked PDF opened, but its page destination was out of range.	లింక్ చేసిన PDF తెరుచుకుంది, కానీ దాని పేజీ గమ్యం పరిధికి వెలుపల ఉంది.
 	Local cross-PDF links require the desktop app	PDFల మధ్య స్థానిక లింక్‌లకు డెస్క్‌టాప్ యాప్ అవసరం
 	The existing action will be preserved.	ఉన్న చర్య అలాగే ఉంచబడుతుంది.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	ఒక స్క్రిప్ట్ చాలా సేపు నడిచినందున ఈ ఫారమ్ స్క్రిప్ట్‌లు ఆపివేయబడ్డాయి. వాటిని మళ్లీ నడపడానికి పత్రాన్ని మళ్లీ తెరవండి.
