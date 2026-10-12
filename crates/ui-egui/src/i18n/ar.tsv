@@ -29,6 +29,9 @@
 	Preferences	التفضيلات
 	Preferences…	التفضيلات…
 	Interface language	لغة الواجهة
+	Interface size	حجم الواجهة
+	Auto ({percent}%)	تلقائي ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	يتبع الوضع التلقائي حجم النص في النظام. تُعرض الصفحات دائمًا بالدقة الكاملة للشاشة.
 	Identity	الهوية
 	Name on new comments	الاسم على التعليقات الجديدة
 	Open…	فتح…
@@ -74,6 +77,7 @@
 	Fit visible	ملاءمة المرئي
 	Marquee zoom	تكبير بالتحديد
 	Take a snapshot	التقاط لقطة
+	Column select	تحديد عمود
 	Full screen mode	وضع ملء الشاشة
 	Read mode	وضع القراءة
 	Switch light / dark theme	التبديل بين السمة الفاتحة والداكنة
@@ -107,12 +111,18 @@
 	Open a PDF ({key})	فتح ملف PDF ({key})
 	Dark gray theme	سمة رمادية داكنة
 	Light theme	سمة فاتحة
+	Appearance mode	وضع المظهر
+	Light	فاتح
+	Dark	داكن
+	Active	نشط
+	Dark theme	سمة داكنة
+	Appearance settings…	إعدادات المظهر…
 	All tools	كل الأدوات
 	Read	قراءة
 	Convert	تحويل
 	E-Sign	توقيع إلكتروني
 	Print ({key})	طباعة ({key})
-	Save (M4)	حفظ (M4)
+	Save ({key})	حفظ ({key})
 	Document properties ({key})	خصائص المستند ({key})
 	Find tools and commands	البحث عن الأدوات والأوامر
 	Fit to height	ملاءمة الارتفاع
@@ -278,6 +288,7 @@
 	Security properties…	خصائص الأمان…
 	Organize pages	تنظيم الصفحات
 	New bookmark	إشارة مرجعية جديدة
+	New bookmarks from structure	إشارات مرجعية جديدة من البنية
 	Rotate pages clockwise	تدوير الصفحات مع عقارب الساعة
 	Rotate pages counterclockwise	تدوير الصفحات عكس عقارب الساعة
 	Delete pages	حذف الصفحات
@@ -694,7 +705,7 @@
 	Centre	توسيط
 	Align right	محاذاة لليمين
 	Justify	ضبط
-	Standard fonts; text outside Windows-1252 isn't supported yet.	خطوط قياسية؛ النص خارج Windows-1252 غير مدعوم بعد.
+	Thai and Arabic use regular fallback fonts when available.	تستخدم التايلاندية والعربية خطوطًا بديلة بالنمط العادي عند توفرها.
 	Edit image	تحرير الصورة
 	Rotate counterclockwise	تدوير عكس عقارب الساعة
 	Rotate clockwise	تدوير مع عقارب الساعة
@@ -780,6 +791,7 @@
 	Rotation	التدوير
 	Appear behind page	الظهور خلف الصفحة
 	Appear on top of page	الظهور فوق الصفحة
+	Offset from centre	الإزاحة عن المركز
 	From colour	من لون
 	Page Range Options	خيارات نطاق الصفحات
 	Preview: page {p} of {n}	معاينة: صفحة {p} من {n}
@@ -844,6 +856,10 @@
 	The signature will be invisible.	سيكون التوقيع غير مرئي.
 	Distinguished name	الاسم المميز
 	Labels	التسميات
+	Graphic	رسم
+	Signer's name	اسم الموقّع
+	Fill & Sign signature	توقيع «تعبئة وتوقيع»
+	Choose image…	اختيار صورة…
 	Permitted actions after certifying	الإجراءات المسموح بها بعد التصديق
 	No changes allowed	لا يُسمح بأي تغييرات
 	Annotations, form fill-in, and digital signatures	التعليقات وتعبئة النماذج والتوقيعات الرقمية
@@ -1093,7 +1109,13 @@
 	Dates	التواريخ
 	Text in images isn't found; recognise text (OCR) first.	النص داخل الصور لا يُعثر عليه؛ استخدم التعرف على النص (OCR) أولًا.
 	No matches.	لا توجد تطابقات.
+	Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth.	بعض الإشارات المرجعية غير معروضة هنا: تعرض اللوحة عددًا محدودًا منها، وبعمق تداخل محدود.
 	{n} match(es) marked for redaction.	عُلِّم {n} تطابق للحجب.
+	Multiple words or phrases	كلمات أو عبارات متعددة
+	One word or phrase per line	كلمة أو عبارة واحدة في كل سطر
+	Import list…	استيراد قائمة…
+	{n} word(s) or phrase(s)	{n} كلمة أو عبارة
+	{name} is too large for a word list (at most 1 MB).	{name} أكبر من أن يكون قائمة كلمات (1 ميغابايت على الأكثر).
 	Redaction Tool Properties	خصائص أداة الحجب
 	Redacted area fill colour:	لون تعبئة المنطقة المحجوبة:
 	Use overlay text	استخدام نص تراكب
@@ -1490,6 +1512,8 @@
 	Right Edge	الحافة اليمنى
 	Language	اللغة
 	Saved {place}: {before} → {after} ({pct}% smaller){detail}	تم الحفظ {place}: {before} → {after} (أصغر بنسبة {pct}%){detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	هذا الملف صغير بالفعل قدر الإمكان ({size}). لم تُحفظ أي نسخة.
+	Saved {place}: {before} → {after} (not smaller){detail}	تم الحفظ {place}: {before} → {after} (ليس أصغر){detail}
 	Couldn't save the image: {e}	تعذّر حفظ الصورة: {e}
 	Adding images arrives on the web with file pickers for images	إضافة الصور ستتوفر على الويب مع منتقيات ملفات الصور
 	Replacing images on page {p} arrives on the web with image pickers ({i})	استبدال الصور في الصفحة {p} سيتوفر على الويب مع منتقيات الصور ({i})
@@ -1553,6 +1577,8 @@
 	{file} is too large for a stamp (at most {n} MB)	{file} أكبر من أن يكون ختمًا ({n} ميغابايت على الأكثر)
 	Sent to {printer}	أُرسل إلى {printer}
 	Sent to {printer}: {msg}	أُرسل إلى {printer}: {msg}
+	Looking for printers…	جارٍ البحث عن الطابعات…
+	Sending to {printer}…	جارٍ الإرسال إلى {printer}…
 	Choose a folder for the searchable files	اختر مجلدًا للملفات القابلة للبحث
 	Files are combined from top to bottom. Leave Pages empty to take every page.	تُدمج الملفات من الأعلى إلى الأسفل. اترك «الصفحات» فارغًا لأخذ كل الصفحات.
 	Unlock…	إلغاء القفل…
@@ -1570,16 +1596,16 @@
 	Opened, but its security settings don't allow combining. Enter the permissions password.	فُتح، لكن إعدادات أمانه لا تسمح بالدمج. أدخل كلمة مرور الأذونات.
 	Unlocked: the combined file won't be password-protected	أُلغي القفل: الملف المدموج لن يكون محميًا بكلمة مرور
 	Unlocked {n} of {m} files	أُلغي قفل {n} من {m} ملفات
-	Drop PDFs or folders here, or choose them.	أفلت ملفات PDF أو مجلدات هنا، أو اخترها.
+	Drop PDFs, images, text files or folders here, or choose them.	أفلت ملفات PDF أو الصور أو الملفات النصية أو المجلدات هنا، أو اخترها.
 	Add folder…	إضافة مجلد…
 	Add folder and subfolders…	إضافة مجلد ومجلداته الفرعية…
 	More ways to add files	طرق أخرى لإضافة الملفات
-	Every PDF in the folder	كل ملفات PDF في المجلد
-	Every PDF in the folder and the folders inside it	كل ملفات PDF في المجلد والمجلدات التي بداخله
+	Every PDF, image and text file in the folder	كل ملفات PDF والصور والملفات النصية في المجلد
+	Every PDF, image and text file in the folder and the folders inside it	كل ملفات PDF والصور والملفات النصية في المجلد والمجلدات التي بداخله
 	Add folder	إضافة مجلد
 	Add folder and subfolders	إضافة مجلد ومجلداته الفرعية
-	No PDFs found in {folder}	لم يُعثر على ملفات PDF في {folder}
-	Added the first {n} PDFs in {folder}	أُضيفت أول {n} ملفات PDF في {folder}
+	No PDFs, images or text files found in {folder}	لم يُعثر على ملفات PDF أو صور أو ملفات نصية في {folder}
+	Added the first {n} files in {folder}	أُضيفت أول {n} ملفات في {folder}
 	Click to sort, drag to move the column. Drag its edge to resize it.	انقر للفرز، واسحب لنقل العمود. اسحب حافته لتغيير حجمه.
 	Reset columns	إعادة ضبط الأعمدة
 	Remove {n} files	إزالة {n} ملفات
@@ -1597,7 +1623,7 @@
 	{n} files need attention	{n} ملفات تحتاج إلى انتباه
 	{name} can't be combined: {why}	لا يمكن دمج {name}: {why}
 	Check the pages of {name}: {why}	تحقق من صفحات {name}: {why}
-	Add the PDFs to combine	أضف ملفات PDF المراد دمجها
+	Add the files to combine	أضف الملفات المراد دمجها
 	File name	اسم الملف
 	Warnings	التحذيرات
 	Drag to reorder	اسحب لإعادة الترتيب
@@ -1610,6 +1636,10 @@
 	Password-protected	محمي بكلمة مرور
 	Its security settings don't allow copying pages	إعدادات أمانه لا تسمح بنسخ الصفحات
 	Can't be read: {e}	تتعذر قراءته: {e}
+	Leave out files that can't be read?	هل تريد استبعاد الملفات التي تتعذر قراءتها؟
+	These files can't be read, so they won't be in the combined PDF:	تتعذر قراءة هذه الملفات، لذا لن تكون في ملف PDF المدمج:
+	Combine the rest	دمج الباقي
+	and {n} more	و{n} أخرى
 	Includes unsaved changes	يتضمن تغييرات غير محفوظة
 	Pages of {name} to combine, e.g. 1-3, 6	صفحات {name} المراد دمجها، مثلًا 1-3, 6
 	Remove {name}	إزالة {name}
@@ -1683,8 +1713,14 @@
 	watermark	علامة مائية
 	background	خلفية
 	This document isn't password-protected	هذا المستند غير محمي بكلمة مرور
-	Only the document's owner can change its security (open it with the permissions password)	مالك المستند وحده يستطيع تغيير أمانه (افتحه بكلمة مرور الأذونات)
+	Enter permissions password…	أدخل كلمة مرور الأذونات…
+	Permissions password	كلمة مرور الأذونات
+	“{name}” has security restrictions. Enter its permissions password to lift them.	«{name}» عليه قيود أمان. أدخل كلمة مرور الأذونات الخاصة به لرفعها.
+	Restrictions lifted	رُفعت القيود
+	Couldn't unlock {name}: {e}	تعذّر إلغاء قفل {name}: {e}
+	This document has no restrictions to lift	لا توجد في هذا المستند قيود لرفعها
 	The document's security settings don't allow this change	إعدادات أمان المستند لا تسمح بهذا التغيير
+	The document's security settings don't allow copying text and images	إعدادات أمان المستند لا تسمح بنسخ النصوص والصور
 	Open a document first	افتح مستندًا أولًا
 	Security will be removed when you save	سيُزال الأمان عند الحفظ
 	Click text or an image to edit it	انقر على نص أو صورة لتحريرها
@@ -2115,7 +2151,10 @@ calendar date	December	ديسمبر
 	Reverse open arrow	سهم مفتوح معكوس
 	Reverse closed arrow	سهم مغلق معكوس
 	Slash	شرطة مائلة
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	لا تستطيع خطوط نص PDF عرض «{c}» ({code}). اختر نصًا مدعومًا.
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	الخطوط القياسية لا تستطيع رسم «{c}» ({code}). حاليًا يمكن إضافة محارف أوروبا الغربية فقط كنص.
+	This field's font can't draw “{c}” ({code}), so PdfCraft shows ? in its place. The value is saved, and other PDF viewers redraw the field from it.	خط هذا الحقل لا يستطيع رسم «{c}» ({code})، لذا يعرض PdfCraft علامة ? مكانه. القيمة محفوظة، وتعيد برامج عرض PDF الأخرى رسم الحقل منها.
+	The fonts PdfCraft writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.	الخطوط التي يكتب بها PdfCraft لا تستطيع رسم «{c}» ({code})، لذا يظهر بشكل ? في كل برامج عرض PDF. النص محفوظ.
 	Larger pages	صفحات أكبر
 	Smaller pages	صفحات أصغر
 	Reset page size	إعادة ضبط حجم الصفحة
@@ -2157,3 +2196,97 @@ certificate	Subject	صاحب الشهادة
 	A selected field has no widget on any page, so the fields can't be edited together.	أحد الحقول المحددة ليس له عنصر واجهة في أي صفحة، لذا لا يمكن تحرير الحقول معًا.
 	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	التعرف على النص غير مثبت: نماذجه مفقودة (شغّل `cargo xtask models`، أو اضبط PDFCRAFT_MODELS).
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} بدقة {dpi} dpi، وهي أكبر دقة يمكن رسمها بها)
+	Margins	الهوامش
+	For page sizes and margins.	لأحجام الصفحات والهوامش.
+
+# Multi-object selection and movement (#844)
+@plural	{n} object selected|{n} objects selected	تم تحديد {n} عنصر|تم تحديد {n} عنصر|تم تحديد {n} عنصرين|تم تحديد {n} عناصر|تم تحديد {n} عنصرًا|تم تحديد {n} عنصر
+	Drag the selection to move it. Esc clears the selection.	اسحب التحديد لنقله. يمسح Esc التحديد.
+	Shift-click to select several objects. Drag empty space to select an area.	انقر مع الضغط على Shift لتحديد عدة عناصر. اسحب في مساحة فارغة لتحديد منطقة.
+	Select at most 1000 objects at a time.	حدد 1000 عنصر كحد أقصى في المرة الواحدة.
+	Finish or discard the text being edited before selecting several objects.	أكمل تحرير النص أو تجاهله قبل تحديد عدة عناصر.
+	Move object	نقل عنصر
+	Move objects	نقل عناصر
+	Vertical text cannot be moved with this selection.	لا يمكن نقل النص العمودي مع هذا التحديد.
+	Text used as a clipping path cannot be moved with this selection.	لا يمكن نقل النص المستخدم كمسار قص مع هذا التحديد.
+	These objects could not be moved. Select them again and try a smaller move.	تعذر نقل هذه العناصر. حددها مجددًا وحاول نقلها بمسافة أقل.
+	This page contains objects that cannot be selected together.	تحتوي هذه الصفحة على عناصر لا يمكن تحديدها معًا.
+	Fill colour	لون التعبئة
+	No fill	بلا تعبئة
+	Fill colour: none	لون التعبئة: بلا
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	مسافة
+	Grid view	عرض الشبكة
+	List view	عرض القائمة
+	Files are combined in the order shown. Drag them to change it.	تُدمج الملفات بالترتيب المعروض. اسحبها لتغيير الترتيب.
+	Preview unavailable: {e}	المعاينة غير متاحة: {e}
+	Pages: {k} of {n}	الصفحات: {k} من {n}
+	Check the pages	تحقق من الصفحات
+	Switch to List view to change the pages it takes.	انتقل إلى عرض القائمة لتغيير الصفحات التي يأخذها.
+	Expand all	توسيع الكل
+	Collapse all	طي الكل
+	Remove page	إزالة الصفحة
+	Remove {n} pages	إزالة {n} صفحات
+
+# Shared panel docking
+	Reset panel layout	إعادة تعيين تخطيط اللوحات
+	Float panel	تعويم اللوحة
+	Move to group	نقل إلى مجموعة
+	Panels	اللوحات
+	Resize panels	تغيير حجم اللوحات
+	Resize panel window	تغيير حجم نافذة اللوحة
+
+# Architectural print controls (follow-up to #599).
+	PDF page: {size}	صفحة PDF: {size}
+	Match page at 100%	مطابقة الورق للصفحة بنسبة 100%
+	PDF scale: {scale}%	مقياس PDF: {scale}%
+	Printer paper and scaling may differ. Check driver settings.	قد يختلف ورق الطابعة ومقياس الطباعة. تحقق من إعدادات برنامج التشغيل.
+	Drawing scale changes. Use Actual size for full-scale plans.	يتغير مقياس الرسم. استخدم الحجم الفعلي لطباعة المخططات بمقياسها الأصلي.
+	Reload documents when their files change on disk	إعادة تحميل المستندات عند تغيّر ملفاتها على القرص
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	تغيّر هذا الملف على القرص. أعد تحميله لعرض النسخة الجديدة؛ ستفقد تغييراتك غير المحفوظة.
+	Reload	إعادة تحميل
+	Couldn't reload {name}: {e}	تعذّرت إعادة تحميل {name}: {e}
+	Select page {label}	تحديد الصفحة {label}
+	Rotate page {label} counterclockwise	تدوير الصفحة {label} عكس اتجاه عقارب الساعة
+	Rotate page {label} clockwise	تدوير الصفحة {label} باتجاه عقارب الساعة
+	Delete page {label}	حذف الصفحة {label}
+	Mouse wheel scroll speed	سرعة التمرير بعجلة الماوس
+scroll speed	Slow	بطيئة
+scroll speed	Normal	عادية
+scroll speed	Fast	سريعة
+	Enhance camera image	تحسين صورة الكاميرا
+	Drag the corners onto the document's edges, then choose Enhance page.	اسحب الزوايا إلى حواف المستند، ثم اختر تحسين الصفحة.
+	Enhance page	تحسين الصفحة
+	Done adding text	إنهاء إضافة النص
+	Discard this text (Esc)	تجاهل هذا النص (Esc)
+	Clean-up	تنظيف
+	Original	الأصل
+	Greyscale	تدرج رمادي
+	Black and white	أبيض وأسود
+
+# Signature verification and explicit CCA trust
+	Verification	التحقق
+	Intact	سليم
+	Altered	معدّل
+	Trusted	موثوق
+	Untrusted	غير موثوق
+	Not revoked	غير ملغاة
+	Not recorded	غير مسجل
+	Trusted timestamp	طابع زمني موثوق
+	Signer claim	تصريح الموقّع
+	Permitted	مسموح
+	Not permitted	غير مسموح
+	Trust CCA India roots…	الوثوق بشهادات CCA India الجذرية…
+	These roots will be saved as trusted certificates and apply to all matching signers.	ستُحفظ هذه الشهادات الجذرية كشهادات موثوقة وستنطبق على جميع الموقّعين المطابقين.
+	Integrity	السلامة
+	Certificate	الشهادة
+	Revocation	الإلغاء
+	Changes after signing	التغييرات بعد التوقيع
+	Recommended next steps	الخطوات التالية الموصى بها

@@ -90,8 +90,13 @@ pub fn count(info: &DocInfo) -> usize {
 }
 
 fn matches(a: &Annotation, q: &str) -> bool {
-    let q = q.to_lowercase();
-    [a.author.as_deref(), a.contents.as_deref(), Some(kind_label(a))].into_iter().flatten().any(|s| s.to_lowercase().contains(&q))
+    any_contains([a.author.as_deref(), a.contents.as_deref(), Some(kind_label(a))].into_iter().flatten(), q)
+}
+
+/// Whether one of `fields` contains `q` in any case, Turkish dotted and dotless i included.
+fn any_contains<'a>(fields: impl IntoIterator<Item = &'a str>, q: &str) -> bool {
+    let q = pdfcraft_render::text::fold_case(q);
+    fields.into_iter().any(|s| pdfcraft_render::text::fold_case(s).contains(&q))
 }
 
 /// Draw the panel body. Returns an edit to apply (posting, replying, deleting…).
@@ -104,10 +109,11 @@ pub(crate) fn show(
     allowed: bool,
     nav: &mut Option<Nav>,
 ) -> Option<Edit> {
+    crate::widgets::begin_dialog(ui);
     let mut edit = None;
     // Search (the header's magnifier toggles it).
     if let Some(q) = view.comments.search.as_mut() {
-        let r = ui.add(egui::TextEdit::singleline(q).hint_text(tl!("Search comments")).desired_width(f32::INFINITY).id_salt("comment-search"));
+        let r = ui.add(crate::widgets::line(q).hint_text(tl!("Search comments")).desired_width(f32::INFINITY).id_salt("comment-search"));
         if view.comments.search_focus {
             r.request_focus();
             view.comments.search_focus = false;
@@ -117,11 +123,7 @@ pub(crate) fn show(
     // "Add a comment": a sticky note on the current page, near its top-right corner.
     if allowed {
         let r = ui.add(
-            egui::TextEdit::singleline(&mut view.comments.add_box)
-                .hint_text(tl!("Add a comment"))
-                .desired_width(f32::INFINITY)
-                .margin(egui::Margin::symmetric(8, 6))
-                .id_salt("comment-add-box"),
+            crate::widgets::line(&mut view.comments.add_box).hint_text(tl!("Add a comment")).desired_width(f32::INFINITY).id_salt("comment-add-box"),
         );
         if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !view.comments.add_box.trim().is_empty() {
             let page = view.current.min(info.pages.len().saturating_sub(1));
@@ -291,7 +293,7 @@ fn card(
             egui::Frame::NONE.inner_margin(egui::Margin { left: 34, right: 0, top: 4, bottom: 0 }).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 if editing && let Some((_, _, text)) = view.comments.editing.as_mut() {
-                    let r = ui.add(egui::TextEdit::multiline(text).desired_rows(2).desired_width(f32::INFINITY).id_salt(("comment-edit", key)));
+                    let r = ui.add(crate::widgets::block(text).desired_rows(2).desired_width(f32::INFINITY).id_salt(("comment-edit", key)));
                     if !r.has_focus() && !ui.memory(|m| m.focused().is_some()) {
                         r.request_focus();
                     }
@@ -357,7 +359,7 @@ fn card(
                     // around the button can't fit every language's "Post" exactly, and any overflow
                     // would widen the resizable panel again on every repaint.
                     let r = ui.add(
-                        egui::TextEdit::singleline(&mut view.comments.reply)
+                        crate::widgets::line(&mut view.comments.reply)
                             .hint_text(tl!("Add a reply"))
                             .desired_width(f32::INFINITY)
                             .id_salt(("comment-reply", key)),
@@ -587,4 +589,18 @@ pub(crate) fn header_controls(ui: &mut egui::Ui, info: &DocInfo, view: &mut DocV
         }
     });
     command
+}
+
+#[cfg(test)]
+mod filter {
+    use super::any_contains;
+
+    #[test]
+    fn comments_match_in_any_case_with_turkish_i() {
+        assert!(any_contains(["Ayşe Yılmaz", "Lütfen İMZALAYIN"], "imzalayın"));
+        assert!(any_contains(["Ayşe Yılmaz"], "YILMAZ"));
+        assert!(any_contains(["IRMAK"], "ırmak"));
+        assert!(any_contains(["Note"], "NOTE"));
+        assert!(!any_contains(["Ayşe Yılmaz"], "mehmet"));
+    }
 }

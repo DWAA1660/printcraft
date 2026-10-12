@@ -16,22 +16,16 @@ fn hue(g: &ToolGroup) -> Color32 {
 
 pub fn left_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    egui::Panel::left("tool_panel")
-        .resizable(false)
-        .exact_size(272.0)
-        .frame(
-            egui::Frame::NONE
-                .fill(t.panel)
-                .inner_margin(egui::Margin { left: 14, right: 10, top: 12, bottom: 10 })
-                .stroke(Stroke::new(1.0, t.divider)),
-        )
-        .show(ui, |ui| match app.left {
+    egui::Frame::NONE.fill(t.panel).inner_margin(egui::Margin { left: 14, right: 10, top: 12, bottom: 10 }).stroke(Stroke::new(1.0, t.divider)).show(
+        ui,
+        |ui| match app.left {
             LeftPanel::AllTools => all_tools(app, ui, &t),
             LeftPanel::Tool(id) => match catalog::group(id) {
                 Some(g) => tool_detail(app, ui, &t, g),
                 None => app.left = LeftPanel::AllTools,
             },
-        });
+        },
+    );
 }
 
 fn panel_header(ui: &mut egui::Ui, t: &Tokens, title: &str, back: bool) -> (bool, bool) {
@@ -41,12 +35,14 @@ fn panel_header(ui: &mut egui::Ui, t: &Tokens, title: &str, back: bool) -> (bool
         if back && icons::button(ui, "chevron-left", 26.0, false, tl!("Back to all tools")).clicked() {
             go_back = true;
         }
-        ui.label(egui::RichText::new(tl!(title)).font(theme::semibold(15.5)).color(t.text));
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if icons::button(ui, "x", 26.0, false, tl!("Close panel")).clicked() {
-                close = true;
-            }
-        });
+        // Reserve space for Close before laying out the translated title. Long tool names
+        // must never expand the fixed-width sidebar or push the Close control off-screen.
+        let title_width = (ui.available_width() - 26.0 - ui.spacing().item_spacing.x).max(1.0);
+        ui.add_sized([title_width, 26.0], egui::Label::new(egui::RichText::new(tl!(title)).font(theme::semibold(15.5)).color(t.text)).truncate())
+            .on_hover_text(tl!(title));
+        if icons::button(ui, "x", 26.0, false, tl!("Close panel")).clicked() {
+            close = true;
+        }
     });
     ui.add_space(6.0);
     (go_back, close)
@@ -61,15 +57,33 @@ fn all_tools(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         let shown = if app.all_tools_expanded { TOOL_GROUPS.len() } else { COLLAPSED_TOOLS.min(TOOL_GROUPS.len()) };
         for g in &TOOL_GROUPS[..shown] {
             if tool_row(ui, t, g).clicked() {
-                app.left = LeftPanel::Tool(g.id);
+                app.select_tool(g.id);
             }
         }
         ui.add_space(4.0);
         let more = if app.all_tools_expanded { "View less" } else { "View more" };
-        if ui.add(egui::Label::new(egui::RichText::new(tl!(more)).color(t.accent_text).font(theme::medium(13.0))).sense(Sense::click())).clicked() {
+        if ui
+            .add(
+                egui::Label::new(egui::RichText::new(tl!(more)).color(t.accent_text).font(theme::medium(13.0)))
+                    .selectable(false)
+                    .sense(Sense::click()),
+            )
+            .clicked()
+        {
             app.all_tools_expanded = !app.all_tools_expanded;
         }
     });
+}
+
+/// Draw a one-line row label without painting into the status chip or beyond the sidebar.
+/// Accessibility retains the complete name through the row's WidgetInfo.
+fn row_label(ui: &mut egui::Ui, text: &str, font: egui::FontId, color: Color32, left_center: egui::Pos2, max_width: f32) -> bool {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, color);
+    job.wrap = egui::text::TextWrapping { max_width: max_width.max(1.0), max_rows: 1, break_anywhere: true, ..Default::default() };
+    let galley = ui.fonts_mut(|f| f.layout_job(job));
+    let elided = galley.elided;
+    ui.painter().galley(left_center - vec2(0.0, galley.size().y / 2.0), galley, color);
+    elided
 }
 
 fn tool_row(ui: &mut egui::Ui, t: &Tokens, g: &ToolGroup) -> egui::Response {
@@ -79,7 +93,16 @@ fn tool_row(ui: &mut egui::Ui, t: &Tokens, g: &ToolGroup) -> egui::Response {
         ui.painter().rect_filled(rect, CornerRadius::same(6), t.hover);
     }
     icons::paint(ui, Rect::from_min_size(rect.min + vec2(6.0, 7.0), vec2(20.0, 20.0)), g.icon, 19.0, hue(g));
-    ui.painter().text(rect.left_center() + vec2(36.0, 0.0), Align2::LEFT_CENTER, tl!(g.label), theme::regular(13.5), t.text);
+    let right_reserved = match (g.badge, g.availability) {
+        (Some(b), _) => ui.fonts_mut(|f| f.layout_no_wrap(tl!(b).to_owned(), theme::semibold(9.5), Color32::WHITE).size().x) + 26.0,
+        (None, Availability::Planned(m)) if resp.hovered() => {
+            let hint = format!("{} · {m}", tl!("Planned"));
+            ui.fonts_mut(|f| f.layout_no_wrap(hint, theme::medium(10.5), t.text_faint).size().x) + 18.0
+        }
+        _ => 8.0,
+    };
+    let clipped =
+        row_label(ui, tl!(g.label), theme::regular(13.5), t.text, rect.left_center() + vec2(36.0, 0.0), rect.width() - 36.0 - right_reserved);
     match (g.badge, g.availability) {
         (Some(b), _) => {
             let font = theme::semibold(9.5);
@@ -106,6 +129,7 @@ fn tool_row(ui: &mut egui::Ui, t: &Tokens, g: &ToolGroup) -> egui::Response {
         Availability::Planned(m) => format!("{} {m} — {}", tl!("Planned for milestone"), tl!("open to see what it will include")),
         Availability::Provider => tl!("Optional: needs an AI provider you configure").into(),
     };
+    let tip = if clipped { format!("{} — {tip}", tl!(g.label)) } else { tip };
     resp.on_hover_text(tip)
 }
 
@@ -153,6 +177,16 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
     }
     // Edit a PDF shows Format text at the top while text is selected or being added.
     if g.id == "edit" {
+        if app.quick_tool == crate::QuickTool::EditText {
+            let count = app.active_ids().map_or(0, |(i, _)| app.views[i].objects.count());
+            if count > 0 {
+                ui.label(crate::i18n::trn(crate::i18n::current(), count as u64, "{n} object selected", "{n} objects selected"));
+                ui.label(tl!("Drag the selection to move it. Esc clears the selection."));
+            } else {
+                ui.label(tl!("Shift-click to select several objects. Drag empty space to select an area."));
+            }
+            ui.add_space(6.0);
+        }
         format_section(app, ui, t);
     }
     let mut run = None;
@@ -181,18 +215,19 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
                     17.0,
                     if ready { hue(g) } else { t.text_faint },
                 );
-                ui.painter().text(rect.left_center() + vec2(34.0, 0.0), Align2::LEFT_CENTER, tl!(item.label), theme::regular(13.0), fg);
                 let (chip, fill, cfg) = match item.availability {
                     Availability::Ready => (tl!("Ready"), Color32::from_rgb(0xDD, 0xF3, 0xE4), Color32::from_rgb(0x1E, 0x7B, 0x43)),
                     Availability::Planned(m) => (m, t.pressed, t.text_muted),
                     Availability::Provider => ("AI", t.pressed, t.text_muted),
                 };
                 let font = theme::semibold(9.5);
-                let w = ui.fonts_mut(|f| f.layout_no_wrap(tl!(chip).to_string(), font.clone(), cfg).size().x);
+                let chip_label = tl!(chip).to_string();
+                let w = crate::widgets::text_width(ui, &chip_label, &font);
                 let r = Rect::from_center_size(rect.right_center() - vec2(w / 2.0 + 10.0, 0.0), vec2(w + 10.0, 16.0));
+                row_label(ui, tl!(item.label), theme::regular(13.0), fg, rect.left_center() + vec2(34.0, 0.0), r.left() - rect.left() - 42.0);
                 ui.painter().rect_filled(r, CornerRadius::same(4), fill);
-                ui.painter().text(r.center(), Align2::CENTER_CENTER, tl!(chip), font, cfg);
-                if resp.on_hover_text(item.command).clicked() {
+                ui.painter().text(r.center(), Align2::CENTER_CENTER, chip_label, font, cfg);
+                if resp.on_hover_text(format!("{} — {}", tl!(item.label), item.command)).clicked() {
                     run = Some(item.command);
                 }
             }
@@ -266,23 +301,31 @@ fn stamp_palette(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                         chip.left_bottom() + vec2(tip, 0.0),
                     ];
                     ui.painter().add(egui::Shape::convex_polygon(pts, col, Stroke::NONE));
-                    ui.painter().text(
+                    let label = kind.label();
+                    let font = theme::semibold(11.0);
+                    let shown = crate::widgets::fit_line(label, (chip.width() - 10.0).max(0.0), |s| crate::widgets::text_width(ui, s, &font));
+                    ui.painter().with_clip_rect(chip.shrink(3.0)).text(
                         chip.center() + vec2(tip / 2.0, 0.0),
                         Align2::CENTER_CENTER,
-                        kind.label(),
-                        theme::semibold(11.0),
+                        shown,
+                        font,
                         Color32::WHITE,
                     );
                 } else {
                     ui.painter().rect(chip, CornerRadius::same(5), col.gamma_multiply(0.1), Stroke::new(1.5, col), egui::StrokeKind::Inside);
                     let y = if group == StampGroup::Dynamic { chip.center().y - 4.0 } else { chip.center().y };
-                    ui.painter().text(egui::pos2(chip.center().x, y), Align2::CENTER_CENTER, kind.label(), theme::semibold(11.0), col);
+                    let font = theme::semibold(11.0);
+                    let shown = crate::widgets::fit_line(kind.label(), (chip.width() - 10.0).max(0.0), |s| crate::widgets::text_width(ui, s, &font));
+                    ui.painter().with_clip_rect(chip.shrink(3.0)).text(egui::pos2(chip.center().x, y), Align2::CENTER_CENTER, shown, font, col);
                     if group == StampGroup::Dynamic {
-                        ui.painter().text(
+                        let by = "By name at time, date";
+                        let by_font = theme::regular(7.5);
+                        let by_shown = crate::widgets::fit_line(by, (chip.width() - 8.0).max(0.0), |s| crate::widgets::text_width(ui, s, &by_font));
+                        ui.painter().with_clip_rect(chip.shrink(2.0)).text(
                             egui::pos2(chip.center().x, chip.bottom() - 6.0),
                             Align2::CENTER_CENTER,
-                            "By name at time, date",
-                            theme::regular(7.5),
+                            by_shown,
+                            by_font,
                             col,
                         );
                     }
@@ -414,16 +457,10 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         let comment_allowed = doc.allows_annotation();
         // A dialog or the palette owns the keyboard: the panel leaves Escape to it.
         let modal = app.dialog.is_some() || app.palette_open;
-        egui::Panel::right("right_panel")
-            .resizable(true)
-            .default_size(330.0)
-            .size_range(260.0..=520.0)
-            .frame(
-                egui::Frame::NONE
-                    .fill(t.panel)
-                    .inner_margin(egui::Margin { left: 14, right: 12, top: 12, bottom: 8 })
-                    .stroke(Stroke::new(1.0, t.divider)),
-            )
+        egui::Frame::NONE
+            .fill(t.panel)
+            .inner_margin(egui::Margin { left: 14, right: 12, top: 12, bottom: 8 })
+            .stroke(Stroke::new(1.0, t.divider))
             .show(ui, |ui| {
                 let (title, count) = match panel {
                     RightPanel::Comments => ("Comments", Some(crate::comments_panel::count(info))),
@@ -464,18 +501,24 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             };
                             view.comments.search_focus = true;
                         }
-                        if panel == RightPanel::Bookmarks && !info.outline.is_empty() {
+                        if panel == RightPanel::Bookmarks && (bm_editable || !info.outline.is_empty()) {
                             let more = icons::button(ui, "ellipsis", 26.0, false, tl!("Bookmark options"));
                             egui::Popup::menu(&more).show(|ui| {
                                 ui.set_min_width(200.0);
-                                for (levels, label) in [
-                                    (usize::MAX, tl!("Expand all bookmarks")),
-                                    (1, tl!("Expand top-level bookmarks")),
-                                    (0, tl!("Collapse all bookmarks")),
-                                ] {
-                                    if ui.button(label).clicked() {
-                                        bm_expand = Some(levels);
-                                        ui.close();
+                                if bm_editable && ui.button(tl!("New bookmarks from structure")).clicked() {
+                                    bm_action = Some(BmAction::FromStructure);
+                                    ui.close();
+                                }
+                                if !info.outline.is_empty() {
+                                    for (levels, label) in [
+                                        (usize::MAX, tl!("Expand all bookmarks")),
+                                        (1, tl!("Expand top-level bookmarks")),
+                                        (0, tl!("Collapse all bookmarks")),
+                                    ] {
+                                        if ui.button(label).clicked() {
+                                            bm_expand = Some(levels);
+                                            ui.close();
+                                        }
                                     }
                                 }
                             });
@@ -510,7 +553,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     ui.data_mut(|d| d.insert_temp(search_id, bookmark_query.clone()));
                     ui.add_space(6.0);
                 }
-                let bookmark_query = bookmark_query.trim().to_lowercase();
+                let bookmark_query = pdfcraft_render::text::fold_case(bookmark_query.trim());
                 let mut bookmark_matches =
                     if panel == RightPanel::Bookmarks { outline_matches(&info.outline, &bookmark_query) } else { std::collections::HashSet::new() };
                 // A new bookmark must stay nameable even when its initial title doesn't match.
@@ -547,6 +590,9 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         for (i, item) in info.outline.iter().enumerate() {
                             outline_item(ui, &t, info, item, &[i], info.outline.len(), &mut ctx);
                         }
+                        if info.outline_more {
+                            ui.label(tl!("Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth."));
+                        }
                     }
                     RightPanel::Pages => pages(ui, &t, info, view, modal, bm_editable, &mut nav),
                     RightPanel::Fields => field_properties = fields(ui, &t, info, &doc.form, preparing, &mut view.prepare, &mut nav, &mut panel_edit),
@@ -568,7 +614,14 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 t.icon,
                             );
                             let fg = if l.visible { t.text } else { t.text_faint };
-                            ui.painter().text(rect.left_center() + vec2(32.0, 0.0), Align2::LEFT_CENTER, &l.name, theme::regular(13.0), fg);
+                            crate::widgets::paint_left(
+                                ui,
+                                rect.left_center() + vec2(32.0, 0.0),
+                                &l.name,
+                                theme::regular(13.0),
+                                fg,
+                                (rect.width() - 40.0).max(0.0),
+                            );
                             if resp.on_hover_text(if l.visible { tl!("Hide layer") } else { tl!("Show layer") }).clicked() {
                                 toggle_layer = Some((li, !l.visible));
                             }
@@ -723,9 +776,12 @@ pub enum BmAction {
     Indent(Vec<usize>),
     /// Move it out to follow its parent.
     Outdent(Vec<usize>),
+    /// Bookmarks from the tagged headings, under a new first "Untitled" bookmark.
+    FromStructure,
 }
 
 /// Matching titles plus their ancestors, keeping document paths rather than filtered indexes.
+/// `query` is folded with [`pdfcraft_render::text::fold_case`], as titles are here.
 fn outline_matches(items: &[OutlineItem], query: &str) -> std::collections::HashSet<Vec<usize>> {
     let mut matches = std::collections::HashSet::new();
     if query.is_empty() {
@@ -733,7 +789,7 @@ fn outline_matches(items: &[OutlineItem], query: &str) -> std::collections::Hash
     }
     let mut pending: Vec<_> = items.iter().enumerate().map(|(i, item)| (vec![i], item)).collect();
     while let Some((path, item)) = pending.pop() {
-        if item.title.to_lowercase().contains(query) {
+        if pdfcraft_render::text::fold_case(&item.title).contains(query) {
             let mut ancestor = path.clone();
             while !ancestor.is_empty() {
                 matches.insert(ancestor.clone());
@@ -806,7 +862,8 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
         let mut cancel = false;
         ui.horizontal(|ui| {
             ui.add_space(x_text);
-            let edit = egui::TextEdit::singleline(text).desired_width(ui.available_width() - 8.0).id(id.with("rename"));
+            crate::widgets::begin_dialog(ui);
+            let edit = crate::widgets::line(text).desired_width(ui.available_width() - 8.0).id(id.with("rename"));
             let resp = ui.add(edit);
             if !resp.has_focus() && !resp.lost_focus() {
                 resp.request_focus();
@@ -1167,10 +1224,16 @@ fn fields(
                 ui.painter().rect_filled(rect, CornerRadius::same(6), if selected { t.pressed } else { t.hover });
             }
             icons::paint(ui, Rect::from_min_size(rect.min + vec2(8.0, 7.0), vec2(16.0, 16.0)), icon, 15.0, Color32::from_rgb(0x8E, 0x4E, 0xE6));
-            ui.painter().text(rect.left_center() + vec2(32.0, 0.0), Align2::LEFT_CENTER, &f.name, theme::regular(13.0), t.text);
-            if let Some(v) = &f.value {
-                let v: String = if v.chars().count() > 18 { format!("{}…", v.chars().take(17).collect::<String>()) } else { v.clone() };
-                ui.painter().text(rect.right_center() - vec2(8.0, 0.0), Align2::RIGHT_CENTER, v, theme::regular(11.5), t.text_faint);
+            let value =
+                f.value.as_ref().map(|v| if v.chars().count() > 18 { format!("{}…", v.chars().take(17).collect::<String>()) } else { v.clone() });
+            let value_font = theme::regular(11.5);
+            let value_w = value.as_ref().map(|v| crate::widgets::text_width(ui, v, &value_font)).unwrap_or(0.0);
+            let arrows = if preparing && f.page.is_some() { 56.0 } else { 0.0 };
+            let max_w = (rect.width() - 32.0 - value_w - arrows - 16.0).max(0.0);
+            crate::widgets::paint_left(ui, rect.left_center() + vec2(32.0, 0.0), &f.name, theme::regular(13.0), t.text, max_w);
+            if let Some(v) = value {
+                let x = if arrows > 0.0 { 64.0 } else { 8.0 };
+                ui.painter().text(rect.right_center() - vec2(x, 0.0), Align2::RIGHT_CENTER, v, value_font, t.text_faint);
             }
             let kind = format!("{:?}", f.kind);
             let mut tip = crate::i18n::fmt(tl!("{kind} field"), &[("kind", tl!(&kind))]);
@@ -1224,8 +1287,13 @@ pub fn human_size(n: usize) -> String {
     match n {
         n if n >= 1 << 20 => format!("{:.1} MB", n as f64 / (1u64 << 20) as f64),
         n if n >= 1 << 10 => format!("{:.1} KB", n as f64 / (1u64 << 10) as f64),
-        n => format!("{n} bytes"),
+        n => byte_count(n),
     }
+}
+
+/// An exact size in bytes, with the count's own plural form.
+pub fn byte_count(n: usize) -> String {
+    crate::i18n::trn(crate::i18n::current(), n as u64, "{n} byte", "{n} bytes")
 }
 
 #[cfg(test)]
@@ -1307,5 +1375,27 @@ mod label_column {
         });
         assert!(calls <= super::LABEL_MEASURE_CHARS + 1, "{calls} measurements");
         assert!(shown.ends_with('\u{2026}') && label.starts_with(shown.trim_end_matches('\u{2026}')), "{shown:?}");
+    }
+}
+
+#[cfg(test)]
+mod bookmark_filter {
+    use super::outline_matches;
+    use pdfcraft_render::OutlineItem;
+
+    fn item(title: &str, children: Vec<OutlineItem>) -> OutlineItem {
+        OutlineItem { title: title.into(), page: Some(0), view: pdfcraft_render::DestView::Top, children, open: true }
+    }
+
+    /// Turkish dotted and dotless i match in any case, as in Find (#892).
+    #[test]
+    fn titles_match_in_any_case_with_turkish_i() {
+        let outline = [item("İSTANBUL ŞUBESİ", vec![item("Kış dönemi", vec![])]), item("Ankara", vec![])];
+        let fold = pdfcraft_render::text::fold_case;
+        assert_eq!(outline_matches(&outline, &fold("istanbul")).len(), 1);
+        assert_eq!(outline_matches(&outline, &fold("şubesi")).len(), 1);
+        // A child match keeps its parent: [0] and [0, 0].
+        assert_eq!(outline_matches(&outline, &fold("KIŞ")).len(), 2);
+        assert!(outline_matches(&outline, &fold("izmir")).is_empty());
     }
 }

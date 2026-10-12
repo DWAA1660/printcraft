@@ -35,6 +35,12 @@ pub enum Handling {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrintDraft {
     pub printers: Vec<spool::Printer>,
+    /// The unit the sheet size is shown in (Preferences).
+    pub units: crate::units::Unit,
+    /// The printers are still being listed in the background (see [`PrinterSource`]).
+    pub printers_loading: bool,
+    /// The user chose the printer, so a list arriving late doesn't move it to the default.
+    pub printer_picked: bool,
     /// `None` = Save as PDF.
     pub printer: Option<String>,
     pub copies: u32,
@@ -78,6 +84,9 @@ impl Default for PrintDraft {
     fn default() -> Self {
         PrintDraft {
             printers: Vec::new(),
+            units: Default::default(),
+            printers_loading: false,
+            printer_picked: false,
             printer: None,
             copies: 1,
             collate: true,
@@ -130,7 +139,9 @@ impl PrintDraft {
         } else {
             print::select_pages(count, range.as_deref(), labels, self.subset, self.reverse)
         }
-        .map_err(|e| e.to_string())?;
+        // What the person got wrong about what to print is said in their language: the engine hands
+        // the wording over whole and the page numbers apart from it.
+        .map_err(|e| e.said(&crate::i18n::words))?;
         let layout = match self.handling {
             Handling::Size => Layout::Size(match self.size {
                 SizeMode::Custom(_) => SizeMode::Custom(self.custom_scale),
@@ -165,11 +176,44 @@ impl PrintDraft {
     }
 }
 
+/// Lists the printers off the UI thread (the desktop app sets [`PdfCraftApp::printer_source`]):
+/// on Windows that takes PowerShell a second or more, and CUPS' driverless discovery can wait on
+/// the network. Without a source the dialog reads them as it opens, so tests stay deterministic.
+pub type PrinterSource = std::sync::Arc<dyn Fn() -> Vec<spool::Printer> + Send + Sync>;
+
+/// The system spooler's printers, as the desktop app's [`PrinterSource`].
+pub fn system_printers() -> PrinterSource {
+    std::sync::Arc::new(spool::printers)
+}
+
+/// The Print dialog's work in the background: the printer list being read, and the jobs being
+/// spooled (the printer each was sent to, and the spooler's answer).
+#[derive(Default)]
+pub(crate) struct PrintTasks {
+    #[cfg(not(target_arch = "wasm32"))]
+    printers: Option<std::sync::mpsc::Receiver<Vec<spool::Printer>>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    jobs: Vec<(String, std::sync::mpsc::Receiver<Result<String, String>>)>,
+}
+
+/// The printer the dialog preselects: the system default, else the first.
+fn default_printer(printers: &[spool::Printer]) -> Option<String> {
+    printers.iter().find(|p| p.default).or(printers.first()).map(|p| p.name.clone())
+}
+
 impl PdfCraftApp {
     pub fn open_print(&mut self) {
         let Some((i, _)) = self.active_ids() else { return };
-        let printers = spool::printers();
-        let default = printers.iter().find(|p| p.default).or(printers.first()).map(|p| p.name.clone());
+        let (printers, printers_loading) = match self.printer_source.clone() {
+            // The list from the last time the dialog opened, until the fresh one arrives.
+            #[cfg(not(target_arch = "wasm32"))]
+            Some(source) => {
+                self.list_printers_in_background(source);
+                (self.print_draft.printers.clone(), true)
+            }
+            _ => (spool::printers(), false),
+        };
+        let default = default_printer(&printers);
         let current = self.views[i].current;
         let selected: Vec<usize> = self.views[i].selected.iter().copied().collect();
         let keep = std::mem::take(&mut self.print_draft);
@@ -180,8 +224,84 @@ impl PdfCraftApp {
             (true, Which::Selected) => Which::All,
             (true, other) => other,
         };
-        self.print_draft = PrintDraft { printers, printer: default, current_page: current, sheet: 0, selected, which, ..keep };
+        self.print_draft = PrintDraft {
+            printers,
+            printers_loading,
+            printer_picked: false,
+            units: self.units,
+            printer: default,
+            current_page: current,
+            sheet: 0,
+            selected,
+            which,
+            ..keep
+        };
         self.dialog = Some(crate::Dialog::Print);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn list_printers_in_background(&mut self, source: PrinterSource) {
+        // A list already being read is as fresh as a new one would be.
+        if self.print_tasks.printers.is_some() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ctx = self.ctx.clone();
+        std::thread::spawn(move || {
+            // The receiver may be gone (the app quit): nothing to report to then.
+            let _ = tx.send(source());
+            if let Some(ctx) = ctx {
+                ctx.request_repaint();
+            }
+        });
+        self.print_tasks.printers = Some(rx);
+    }
+
+    /// Pick up a printer list or a spooled job that finished (each frame).
+    pub(crate) fn poll_print(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(rx) = &self.print_tasks.printers {
+                let printers = match rx.try_recv() {
+                    Ok(p) => Some(p),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                    // A source that died lists nothing new; the dialog keeps what it has.
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(self.print_draft.printers.clone()),
+                };
+                if let Some(printers) = printers {
+                    self.print_tasks.printers = None;
+                    let d = &mut self.print_draft;
+                    if !d.printer_picked {
+                        d.printer = default_printer(&printers);
+                    }
+                    d.printers = printers;
+                    d.printers_loading = false;
+                }
+            }
+            let mut finished = Vec::new();
+            self.print_tasks.jobs.retain(|(printer, rx)| match rx.try_recv() {
+                Ok(r) => {
+                    finished.push((printer.clone(), r));
+                    false
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => true,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    finished.push((printer.clone(), Err("the print job stopped unexpectedly".into())));
+                    false
+                }
+            });
+            for (printer, result) in finished {
+                self.report_print_job(&printer, result);
+            }
+        }
+    }
+
+    fn report_print_job(&mut self, printer: &str, result: Result<String, String>) {
+        match result {
+            Ok(msg) if msg.is_empty() => self.notify(crate::i18n::fmt(tl!("Sent to {printer}"), &[("printer", printer)])),
+            Ok(msg) => self.notify(crate::i18n::fmt(tl!("Sent to {printer}: {msg}"), &[("printer", printer), ("msg", &msg)])),
+            Err(e) => self.notify_error(e),
+        }
     }
 
     /// Print (or save) with the dialog's settings. Returns `true` on success. Save as PDF without
@@ -198,7 +318,7 @@ impl PdfCraftApp {
         let settings = match self.print_draft.settings(doc.info.pages.len(), &labels) {
             Ok(s) => s,
             Err(e) => {
-                self.notify_error(e);
+                self.notify_tr(&e);
                 return false;
             }
         };
@@ -211,22 +331,36 @@ impl PdfCraftApp {
             }
         };
         match self.print_draft.printer.clone() {
-            Some(printer) => match spool::submit(&bytes, &self.print_draft.job(&name)) {
-                Ok(msg) => {
-                    self.notify(if msg.is_empty() {
-                        crate::i18n::fmt(tl!("Sent to {printer}"), &[("printer", &printer)])
-                    } else {
-                        crate::i18n::fmt(tl!("Sent to {printer}: {msg}"), &[("printer", &printer), ("msg", &msg)])
-                    });
-                    true
-                }
-                Err(e) => {
-                    self.notify_error(e);
-                    false
-                }
-            },
+            Some(printer) => self.send_to_printer(printer, bytes, self.print_draft.job(&name)),
             None => self.save_print_pdf(&name, bytes),
         }
+    }
+
+    /// Spool a job off the UI thread: on Windows every sheet is rendered at the printer's
+    /// resolution first, which can take minutes for a long document. The dialog closes at once
+    /// and the spooler's answer arrives as a notice.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn send_to_printer(&mut self, printer: String, bytes: Vec<u8>, job: spool::Job) -> bool {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ctx = self.ctx.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(spool::submit(&bytes, &job).map_err(|e| e.to_string()));
+            if let Some(ctx) = ctx {
+                ctx.request_repaint();
+            }
+        });
+        self.notify(crate::i18n::fmt(tl!("Sending to {printer}…"), &[("printer", &printer)]));
+        self.print_tasks.jobs.push((printer, rx));
+        true
+    }
+
+    /// A browser has no spooler: `submit` answers at once.
+    #[cfg(target_arch = "wasm32")]
+    fn send_to_printer(&mut self, printer: String, bytes: Vec<u8>, job: spool::Job) -> bool {
+        let result = spool::submit(&bytes, &job).map_err(|e| e.to_string());
+        let ok = result.is_ok();
+        self.report_print_job(&printer, result);
+        ok
     }
 
     /// Print ▸ Save as PDF on the desktop: write to `save_override` (tests and automation), or
@@ -419,6 +553,9 @@ pub(crate) fn body(
                 ui.horizontal(|ui| {
                     let shown = d.printer.clone().unwrap_or_else(|| tl!("Save as PDF").to_string());
                     egui::ComboBox::from_id_salt("printer").selected_text(shown).width(260.0).show_ui(ui, |ui| {
+                        if d.printers_loading {
+                            ui.add_enabled(false, egui::Label::new(tl!("Looking for printers…")));
+                        }
                         for p in &d.printers {
                             let label = if p.default { crate::i18n::fmt(tl!("{name} (default)"), &[("name", &p.name)]) } else { p.name.clone() };
                             ui.selectable_value(&mut d.printer, Some(p.name.clone()), label);
@@ -446,6 +583,7 @@ pub(crate) fn body(
                     }
                 });
                 if d.printer != before {
+                    d.printer_picked = true;
                     d.show_driver_options = false;
                     d.driver_error = None;
                 }
@@ -471,7 +609,8 @@ pub(crate) fn body(
                 );
                 ui.end_row();
                 ui.label(tl!("Paper:"));
-                egui::ComboBox::from_id_salt("paper").selected_text(PAPERS[d.paper].0).width(160.0).show_ui(ui, |ui| {
+                let paper_name = PAPERS.get(d.paper).map_or("US Letter", |p| p.0);
+                egui::ComboBox::from_id_salt("paper").selected_text(paper_name).width(260.0).show_ui(ui, |ui| {
                     for (i, (name, _)) in PAPERS.iter().enumerate() {
                         ui.selectable_value(&mut d.paper, i, *name);
                     }
@@ -484,6 +623,21 @@ pub(crate) fn body(
             if d.show_driver_options {
                 driver_options_panel(ui, d, t);
             }
+            if let Some(&source) = sizes.get(d.current_page) {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(crate::i18n::fmt(tl!("PDF page: {size}"), &[("size", &d.units.size(source.0, source.1))]));
+                    let matched = print::matching_paper(source);
+                    if ui.add_enabled(matched.is_some(), egui::Button::new(tl!("Match page at 100%"))).clicked()
+                        && let Some(paper) = matched
+                    {
+                        d.paper = paper;
+                        d.handling = Handling::Size;
+                        d.size = SizeMode::Actual;
+                        d.orientation = Orientation::Auto;
+                        d.sheet = 0;
+                    }
+                });
+            }
             ui.add_space(6.0);
             widgets::section_title(ui, tl!("Pages to Print"));
             ui.horizontal(|ui| {
@@ -492,7 +646,7 @@ pub(crate) fn body(
                 ui.radio_value(&mut d.which, Which::Range, tl!("Pages"));
                 let r = ui.add_enabled(
                     d.which == Which::Range,
-                    egui::TextEdit::singleline(&mut d.range).hint_text(format!("1-{}", sizes.len())).desired_width(110.0),
+                    crate::widgets::line(&mut d.range).hint_text(format!("1-{}", sizes.len())).desired_width(110.0),
                 );
                 if r.gained_focus() {
                     d.which = Which::Range;
@@ -516,7 +670,7 @@ pub(crate) fn body(
             });
             ui.add_space(6.0);
             widgets::section_title(ui, tl!("Page Sizing & Handling"));
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 for (h, label) in [
                     (Handling::Size, tl!("Size")),
                     (Handling::Poster, tl!("Poster")),
@@ -632,7 +786,7 @@ pub(crate) fn body(
             ui.painter().rect_filled(area, 6.0, t.hover);
             match (&settings, sheets.get(d.sheet)) {
                 (Err(e), _) => {
-                    ui.put(area.shrink(16.0), egui::Label::new(egui::RichText::new(e).color(t.text_muted)).wrap());
+                    ui.put(area.shrink(16.0), egui::Label::new(egui::RichText::new(tl!(e)).color(t.text_muted)).wrap());
                 }
                 (Ok(_), Some(sheet)) => {
                     let k = (PREVIEW_BOX.0 / sheet.size.0 as f32).min(PREVIEW_BOX.1 / sheet.size.1 as f32);
@@ -709,9 +863,18 @@ pub(crate) fn body(
                     d.sheet += 1;
                 }
             });
-            if let Some(s) = sheets.first() {
-                let (w, h) = (s.size.0 / 72.0, s.size.1 / 72.0);
-                ui.label(egui::RichText::new(format!("{w:.2} × {h:.2} in")).small().color(t.text_muted));
+            if let Some(s) = sheets.get(d.sheet) {
+                ui.label(egui::RichText::new(d.units.size(s.size.0, s.size.1)).small().color(t.text_muted));
+                if d.handling == Handling::Size
+                    && let Some(p) = s.placed.first()
+                {
+                    let scale = p.matrix.0[0].hypot(p.matrix.0[1]) * 100.0;
+                    ui.label(crate::i18n::fmt(tl!("PDF scale: {scale}%"), &[("scale", &format!("{scale:.2}"))]));
+                    ui.label(egui::RichText::new(tl!("Printer paper and scaling may differ. Check driver settings.")).small().color(t.text_muted));
+                    if (scale - 100.0).abs() > 0.01 {
+                        ui.label(egui::RichText::new(tl!("Drawing scale changes. Use Actual size for full-scale plans.")).small().color(t.text_muted));
+                    }
+                }
             }
         });
     });

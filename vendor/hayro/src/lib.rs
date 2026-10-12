@@ -194,7 +194,7 @@ pub fn render_into<'a>(
         render_mode: RenderMode::OptimizeSpeed,
     };
 
-    let mut device = Renderer::new(pix_width, pix_height, vc_settings, cache);
+    let mut device = Renderer::new(pix_width, pix_height, vc_settings, cache, interpreter_settings.preview);
 
     device.ctx.set_paint(render_settings.bg_color);
     device

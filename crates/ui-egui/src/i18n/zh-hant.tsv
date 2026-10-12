@@ -17,6 +17,9 @@
 	Preferences	偏好設定
 	Preferences…	偏好設定…
 	Interface language	介面語言
+	Interface size	介面大小
+	Auto ({percent}%)	自動 ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	「自動」會跟隨系統的文字大小。頁面一律以螢幕的完整解析度呈現。
 	Identity	個人資訊
 	Name on new comments	新註解的作者名稱
 	Open…	開啟…
@@ -74,6 +77,7 @@
 	Rotate view clockwise	順時針旋轉檢視
 	Rotate view counterclockwise	逆時針旋轉檢視
 	Take a snapshot	擷取快照
+	Column select	欄選取
 	Full screen mode	全螢幕模式
 	Read mode	閱讀模式
 	Switch light / dark theme	切換淺色／深色主題
@@ -155,7 +159,7 @@
 	Signature panel	簽名面板
 	{month} {day}, {y}	{month}{day}日，{y}年
 	The document's security settings don't allow filling in form fields	文件安全設定不允許填寫表單欄位
-	{name} is read-only	{name}為只讀
+	{name} is read-only	{name} 為唯讀
 	{name} has no action	{name}沒有動作
 	Previous month	上個月
 	Next month	下個月
@@ -240,7 +244,7 @@
 	This field is locked. Unlock it to change its properties.	此欄位已鎖定。解鎖後可更改其屬性。
 	Tooltip:	提示：
 	Common Properties	常規屬性
-	Read Only	只讀
+	Read Only	唯讀
 	Required	必填
 	Font Size:	字號：
 	Auto	自動
@@ -270,14 +274,14 @@
 	Check box is checked by default	預設選中核取方塊
 	Button is checked by default	預設選中按鈕
 	Buttons with the same name and value are selected in unison	同名同值的按鈕一起選中
-	Item:	專案：
-	Item List	專案列表
+	Item:	項目：
+	Item List	項目清單
 	Up	上移
 	Delete {o}	刪除 {o}
 	Add the choices people pick from.	新增供人選擇的選項。
 	Default:	預設值：
 	(none)	（無）
-	Sort items	排序專案
+	Sort items	排序項目
 	Allow user to enter custom text	允許使用者輸入自定義文字
 	Multiple selection	多選
 	Commit selected value immediately	立即提交所選值
@@ -343,7 +347,7 @@
 	Centre	居中
 	Align right	右對齊
 	Justify	兩端對齊
-	Standard fonts; text outside Windows-1252 isn't supported yet.	標準字型；尚不支援 Windows-1252 之外的文字。
+	Thai and Arabic use regular fallback fonts when available.	泰語和阿拉伯語使用可用的一般樣式備用字型。
 	Edit image	編輯圖片
 	Rotate counterclockwise	逆時針旋轉
 	Rotate clockwise	順時針旋轉
@@ -414,7 +418,7 @@
 	{verb} Header and Footer	{verb}頁首和頁尾
 	{verb} Watermark	{verb}水印
 	{verb} Background	{verb}背景
-	Margins (in)	邊距（英寸）
+	Margins	邊距
 	Left Header Text	左頁首文字
 	Center Header Text	居中頁首文字
 	Right Header Text	右頁首文字
@@ -493,6 +497,10 @@
 	The signature will be invisible.	簽名將不可見。
 	Distinguished name	可分辨名稱
 	Labels	標籤
+	Graphic	圖形
+	Signer's name	簽署者姓名
+	Fill & Sign signature	填寫與簽署中的簽名
+	Choose image…	選擇圖片…
 	Permitted actions after certifying	認證後允許的操作
 	No changes allowed	不允許任何更改
 	Annotations, form fill-in, and digital signatures	註解、填寫表單和數位簽章
@@ -623,8 +631,8 @@
 	Collapse	摺疊
 	Expand	展開
 	{rule} - {status}	{rule} - {status}
-	Passed	透過
-	Failed	未透過
+	Passed	通過
+	Failed	未通過
 	Needs manual check	需要人工檢驗
 	Skipped	已跳過
 	Fix	修復
@@ -680,7 +688,7 @@
 	Page will not cause screen flicker	頁面不會導致螢幕閃爍
 	Animation that flashes can cause seizures. Check scripts and media for flicker.	閃爍的動畫可能導致癲癇發作。請檢驗指令碼和媒體是否存在閃爍。
 	Scripts	指令碼
-	No inaccessible scripts	沒有無障礙指令碼
+	No inaccessible scripts	沒有妨礙無障礙操作的指令碼
 	Timed responses	限時回應
 	Page does not require timed responses	頁面不需要限時回應
 	People may need more time to respond. Check that nothing has a time limit.	人們可能需要更多時間來回應。請檢驗確認沒有時間限制。
@@ -708,14 +716,14 @@
 	Other elements alternate text	其他元素替代文字
 	Other elements that require alternate text	需要替代文字的其他元素
 	Formulas and similar non-text elements need alternate text. Add alternate text to them.	公式及類似非文字元素需要替代文字。請為它們新增替代文字。
-	Rows	行
+	Rows	列
 	TR must be a child of Table, THead, TBody, or TFoot	TR 必須是 Table、THead、TBody 或 TFoot 的子級
-	Table cells belong in a row. Fix the table's tags.	表格儲存格應位於行內。請修復表格標記。
+	Table cells belong in a row. Fix the table's tags.	表格儲存格應位於列內。請修正表格標記。
 	Headers	表頭
 	Tables should have headers	表格應有表頭
-	Header cells (TH) tell listeners what each column or row holds. Mark the header cells.	表頭儲存格（TH）告訴聽者每列或每行包含的內容。請標記表頭儲存格。
+	Header cells (TH) tell listeners what each column or row holds. Mark the header cells.	表頭儲存格（TH）讓聽者知道每欄或每列的內容。請標記表頭儲存格。
 	Regularity	規則性
-	Tables must contain the same number of columns in each row and rows in each column	表格每行必須包含相同數量的列，每列必須包含相同數量的行
+	Tables must contain the same number of columns in each row and rows in each column	表格每列的欄數必須相同，每欄的列數也必須相同
 	Irregular tables confuse cell navigation. Give every row the same number of cells (counting spans).	不規則的表格會妨礙儲存格導覽。請讓每一列具有相同數量的儲存格，並計入合併儲存格。
 	Summary	摘要
 	Tables must have a summary	表格必須有摘要
@@ -742,7 +750,13 @@
 	Dates	日期
 	Text in images isn't found; recognise text (OCR) first.	圖片中的文字無法找到；請先識別文字（OCR）。
 	No matches.	無匹配。
+	Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth.	此處未顯示部分書籤：面板列出的書籤數量和巢狀深度有限。
 	{n} match(es) marked for redaction.	已標記 {n} 個匹配以待遮蔽內容。
+	Multiple words or phrases	多個單字或片語
+	One word or phrase per line	每行一個單字或片語
+	Import list…	匯入清單…
+	{n} word(s) or phrase(s)	{n} 個單字或片語
+	{name} is too large for a word list (at most 1 MB).	{name} 太大，無法用作單字清單（最多 1 MB）。
 	Redaction Tool Properties	遮蔽內容工具屬性
 	Redacted area fill colour:	遮蔽內容區域填充顏色：
 	Use overlay text	使用覆蓋文字
@@ -1035,8 +1049,14 @@
 	Open a PDF ({key})	開啟 PDF（{key}）
 	Dark gray theme	深灰色主題
 	Light theme	淺色主題
+	Appearance mode	外觀模式
+	Light	淺色
+	Dark	深色
+	Active	使用中
+	Dark theme	深色主題
+	Appearance settings…	外觀設定…
 	Print ({key})	列印（{key}）
-	Save (M4)	儲存（M4）
+	Save ({key})	儲存（{key}）
 	Document properties ({key})	文件內容（{key}）
 	Action Wizard…	動作精靈…
 	Add Bates numbering…	新增 Bates 編號…
@@ -1399,6 +1419,8 @@
 	Right Edge	右邊緣
 	Language	語言
 	Saved {place}: {before} → {after} ({pct}% smaller){detail}	已儲存{place}：{before} → {after}（縮小了{pct}%）{detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	此檔案已經是最小的了（{size}）。未儲存副本。
+	Saved {place}: {before} → {after} (not smaller){detail}	已儲存{place}：{before} → {after}（未縮小）{detail}
 	Couldn't save the image: {e}	無法儲存圖片：{e}
 	Adding images arrives on the web with file pickers for images	Web 端新增圖片將使用圖片檔案選擇器
 	Replacing images on page {p} arrives on the web with image pickers ({i})	在 Web 端替換第{p}頁的圖片將使用圖片選擇器（{i}）
@@ -1471,6 +1493,8 @@
 	{file} is too large for a stamp (at most {n} MB)	{file} 對於戳記來說太大了（最大 {n} MB）
 	Sent to {printer}	已傳送到{printer}
 	Sent to {printer}: {msg}	已傳送到{printer}：{msg}
+	Looking for printers…	正在尋找印表機…
+	Sending to {printer}…	正在傳送到{printer}…
 	Choose a folder for the searchable files	選擇可搜尋檔案的資料夾
 	Files are combined from top to bottom. Leave Pages empty to take every page.	檔案將按從上到下的順序合併。頁碼留空表示取全部頁面。
 	Unlock…	解除鎖定…
@@ -1488,16 +1512,16 @@
 	Opened, but its security settings don't allow combining. Enter the permissions password.	已開啟，但其安全性設定不允許合併。請輸入權限密碼。
 	Unlocked: the combined file won't be password-protected	已解除鎖定：合併後的檔案將不受密碼保護
 	Unlocked {n} of {m} files	已解除鎖定 {m} 個檔案中的 {n} 個
-	Drop PDFs or folders here, or choose them.	將 PDF 或資料夾拖放到此處，或選取它們。
+	Drop PDFs, images, text files or folders here, or choose them.	將 PDF、圖片、文字檔案或資料夾拖放到此處，或選取它們。
 	Add folder…	新增資料夾…
 	Add folder and subfolders…	新增資料夾及子資料夾…
 	More ways to add files	更多新增檔案的方式
-	Every PDF in the folder	資料夾中的所有 PDF
-	Every PDF in the folder and the folders inside it	資料夾及其子資料夾中的所有 PDF
+	Every PDF, image and text file in the folder	資料夾中的所有 PDF、圖片和文字檔案
+	Every PDF, image and text file in the folder and the folders inside it	資料夾及其子資料夾中的所有 PDF、圖片和文字檔案
 	Add folder	新增資料夾
 	Add folder and subfolders	新增資料夾及子資料夾
-	No PDFs found in {folder}	在 {folder} 中找不到 PDF
-	Added the first {n} PDFs in {folder}	已新增 {folder} 中的前 {n} 個 PDF
+	No PDFs, images or text files found in {folder}	在 {folder} 中找不到 PDF、圖片或文字檔案
+	Added the first {n} files in {folder}	已新增 {folder} 中的前 {n} 個檔案
 	Click to sort, drag to move the column. Drag its edge to resize it.	按一下以排序，拖曳以移動欄。拖曳欄邊緣可調整寬度。
 	Reset columns	重設欄
 	Remove {n} files	刪除 {n} 個檔案
@@ -1515,7 +1539,7 @@
 	{n} files need attention	{n} 個檔案需要處理
 	{name} can't be combined: {why}	無法合併 {name}：{why}
 	Check the pages of {name}: {why}	請檢查 {name} 的頁碼：{why}
-	Add the PDFs to combine	新增要合併的 PDF
+	Add the files to combine	新增要合併的檔案
 	File name	檔案名稱
 	Warnings	警告
 	Drag to reorder	拖曳以重新排序
@@ -1528,6 +1552,10 @@
 	Password-protected	受密碼保護
 	Its security settings don't allow copying pages	其安全性設定不允許複製頁面
 	Can't be read: {e}	無法讀取：{e}
+	Leave out files that can't be read?	要排除無法讀取的檔案嗎？
+	These files can't be read, so they won't be in the combined PDF:	這些檔案無法讀取，因此不會包含在合併後的 PDF 中：
+	Combine the rest	合併其餘檔案
+	and {n} more	以及另外 {n} 個
 	Includes unsaved changes	包含未儲存的變更
 	Pages of {name} to combine, e.g. 1-3, 6	要合併的{name}的頁面，例如 1-3、6
 	Remove {name}	刪除{name}
@@ -1602,8 +1630,14 @@
 	watermark	水印
 	background	背景
 	This document isn't password-protected	本文件未受密碼保護
-	Only the document's owner can change its security (open it with the permissions password)	只有文件所有者才能更改安全性（請使用許可權密碼開啟）
+	Enter permissions password…	輸入許可權密碼…
+	Permissions password	許可權密碼
+	“{name}” has security restrictions. Enter its permissions password to lift them.	“{name}”有安全限制。請輸入其許可權密碼以解除限制。
+	Restrictions lifted	已解除限制
+	Couldn't unlock {name}: {e}	無法解鎖 {name}：{e}
+	This document has no restrictions to lift	此文件沒有可解除的限制
 	The document's security settings don't allow this change	文件安全設定不允許此更改
+	The document's security settings don't allow copying text and images	文件安全設定不允許複製文字和圖片
 	Open a document first	請先開啟文件
 	Security will be removed when you save	儲存時將刪除安全性設定
 	Click text or an image to edit it	按一下文字或圖片進行編輯
@@ -1694,6 +1728,7 @@
 	Security properties…	安全性內容…
 	Organize pages	整理頁面
 	New bookmark	新增書籤
+	New bookmarks from structure	從結構新增書籤
 	Rotate pages clockwise	順時針旋轉頁面
 	Rotate pages counterclockwise	逆時針旋轉頁面
 	Delete pages	刪除頁面
@@ -1973,8 +2008,12 @@
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	選擇 PNG 或 JPEG 圖像（最大 4 MiB）。透明度會保留。
 	Couldn't import the signature image: {e}	無法匯入簽名圖像：{e}
 	Go to page…	轉到頁面…
+	For page sizes and margins.	用於頁面尺寸和邊距。
 	Reopen the files that were open when PdfCraft last closed	重新開啟上次關閉 PdfCraft 時開啟的檔案
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	PDF 文字字型無法顯示「{c}」（{code}）。請選擇支援的文字。
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	標準字型無法顯示「{c}」（{code}）。目前只能新增西歐字元作為文字。
+	This field's font can't draw “{c}” ({code}), so PdfCraft shows ? in its place. The value is saved, and other PDF viewers redraw the field from it.	此欄位的字型無法顯示「{c}」（{code}），PdfCraft 會在該處顯示 ?。值已儲存，其他 PDF 閱讀器會依據該值重新繪製此欄位。
+	The fonts PdfCraft writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.	PdfCraft 寫入時使用的字型無法顯示「{c}」（{code}），因此它在所有 PDF 閱讀器中都會顯示為 ?。文字已儲存。
 	Open arrow	開口箭頭
 	Closed arrow	閉合箭頭
 	Butt	平頭
@@ -2021,3 +2060,89 @@
 	The field {name} no longer exists.	欄位 {name} 已不存在。
 	A selected field has no widget on any page, so the fields can't be edited together.	某個所選欄位在任何頁面上都沒有控制項，因此無法一起編輯這些欄位。
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	（{n} 張以可繪製的最大尺寸 {dpi} dpi 匯出）
+
+# Multi-object selection and movement (#844)
+@plural	{n} object selected|{n} objects selected	已選取 {n} 個物件
+	Drag the selection to move it. Esc clears the selection.	拖曳選取範圍即可移動。按 Esc 清除選取。
+	Shift-click to select several objects. Drag empty space to select an area.	按住 Shift 點選可選取多個物件。拖曳空白區域可框選。
+	Select at most 1000 objects at a time.	一次最多選取 1000 個物件。
+	Finish or discard the text being edited before selecting several objects.	請先完成或放棄正在編輯的文字，再選取多個物件。
+	Move object	移動物件
+	Move objects	移動多個物件
+	Vertical text cannot be moved with this selection.	無法隨此選取範圍移動直排文字。
+	Text used as a clipping path cannot be moved with this selection.	無法隨此選取範圍移動用作裁切路徑的文字。
+	These objects could not be moved. Select them again and try a smaller move.	無法移動這些物件。請重新選取並嘗試較小的移動距離。
+	This page contains objects that cannot be selected together.	此頁面包含無法一起選取的物件。
+	Fill colour	填充顏色
+	No fill	無填充
+	Fill colour: none	填充顏色：無
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	空格
+	Grid view	格狀檢視
+	List view	清單檢視
+	Files are combined in the order shown. Drag them to change it.	檔案將按顯示的順序合併。拖曳可變更順序。
+	Preview unavailable: {e}	無法預覽：{e}
+	Pages: {k} of {n}	頁面：{k}/{n}
+	Check the pages	請檢查頁碼
+	Switch to List view to change the pages it takes.	切換到清單檢視以變更要使用的頁面。
+	Expand all	全部展開
+	Collapse all	全部摺疊
+	Remove page	刪除頁面
+	Remove {n} pages	刪除 {n} 頁
+
+# Shared panel docking
+	Reset panel layout	重設面板配置
+	Float panel	浮動面板
+	Move to group	移至群組
+	Panels	面板
+	Resize panels	調整面板大小
+	Resize panel window	調整面板視窗大小
+	Tools	工具
+	Inspector	檢查器
+	Reload documents when their files change on disk	檔案在磁碟上變更時重新載入對應的文件
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	此檔案已在磁碟上變更。請重新載入以查看新版本；未儲存的變更將會遺失。
+	Reload	重新載入
+	Couldn't reload {name}: {e}	無法重新載入{name}：{e}
+	Select page {label}	選取頁面 {label}
+	Rotate page {label} counterclockwise	逆時針旋轉頁面 {label}
+	Rotate page {label} clockwise	順時針旋轉頁面 {label}
+	Delete page {label}	刪除頁面 {label}
+	Mouse wheel scroll speed	滑鼠滾輪捲動速度
+scroll speed	Slow	慢
+scroll speed	Normal	正常
+scroll speed	Fast	快
+	Table rows belong directly in a table or its head, body or foot. Fix the table's tags.	表格列應直接位於表格或其表頭、主體、表尾內。請修正表格標記。
+	Enhance camera image	增強相機影像
+	Drag the corners onto the document's edges, then choose Enhance page.	將四個角拖曳到文件邊緣，然後選擇「增強頁面」。
+	Enhance page	增強頁面
+	Clean-up	清理
+	Original	原始
+	Greyscale	灰階
+	Black and white	黑白
+
+# Signature verification and explicit CCA trust
+	Verification	驗證
+	Intact	完整
+	Altered	已變更
+	Trusted	受信任
+	Untrusted	不受信任
+	Not revoked	未撤銷
+	Not recorded	未記錄
+	Trusted timestamp	受信任的時間戳記
+	Signer claim	簽署者聲明
+	Permitted	允許
+	Not permitted	不允許
+	Trust CCA India roots…	信任 CCA India 根憑證…
+	These roots will be saved as trusted certificates and apply to all matching signers.	這些根憑證將儲存為受信任憑證，並套用至所有相符的簽署者。
+	Integrity	完整性
+	Certificate	憑證
+	Revocation	撤銷
+	Changes after signing	簽署後的變更
+	Recommended next steps	建議的後續步驟

@@ -85,7 +85,7 @@ impl Session {
     pub fn compare_report(&self, old: DocId, new: DocId) -> Result<Arc<Vec<u8>>, EditError> {
         let c = self.compare(old, new)?;
         let name = |id| self.get(id).map(|d| d.name.clone()).unwrap_or_default();
-        self.create_from_text("Compare Report", &pdfcraft_compare::report(&c, &name(old), &name(new)))
+        self.create_report("Compare Report", &pdfcraft_compare::report(&c, &name(old), &name(new)))
     }
 
     /// Mark the differences in `new` as comments: highlights over replaced and inserted text

@@ -18,6 +18,11 @@ pub use pdfcraft_fonts::helvetica_width;
 pub const DETECTION_MODEL: &str = "text-detection.rten";
 pub const RECOGNITION_MODEL: &str = "text-recognition.rten";
 
+/// The recognition model's alphabet, as it was trained (ocrs-models' `DEFAULT_ALPHABET`): its
+/// output classes follow this order. The ocrs crate's own copy has an `E` where the training had
+/// `€`, which made a scanned "€250" read as "E250".
+pub const ALPHABET: &str = " 0123456789!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~€ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
 /// The languages the models read (ISO 639-1); all use the Latin alphabet without accents.
 pub const LANGUAGES: &[(&str, &str)] = &[("en", "English")];
 
@@ -109,6 +114,7 @@ impl Ocr {
         let params = ocrs::OcrEngineParams {
             detection_model: Some(load(&models.detection)?),
             recognition_model: Some(load(&models.recognition)?),
+            alphabet: Some(ALPHABET.into()),
             ..Default::default()
         };
         let engine = ocrs::OcrEngine::new(params).map_err(|e| OcrError::Load("ocr engine".into(), e.to_string()))?;
@@ -228,6 +234,14 @@ mod tests {
         assert_eq!(w.up, [0.0, 20.0]);
     }
 
+    /// The text layer is Helvetica in WinAnsiEncoding: every character the model can recognise
+    /// must be one it can hold, or recognised text would be saved as `?`. A model with a wider
+    /// alphabet (Chinese, for example) needs a text layer in another font first.
+    #[test]
+    fn the_model_alphabet_fits_the_text_layer_font() {
+        assert_eq!(pdfcraft_fonts::first_undrawable(ALPHABET), None);
+    }
+
     #[test]
     fn text_layer_is_invisible_text_fitted_to_each_box() {
         let w = PlacedWord { text: "Hi".into(), origin: [10.0, 20.0], across: [30.0, 0.0], up: [0.0, 9.3] };
@@ -278,6 +292,15 @@ mod tests {
     }
 
     /// The message tells end users what to do; release builds have no cargo.
+    #[test]
+    fn the_alphabet_is_the_trained_one() {
+        let chars: Vec<char> = ALPHABET.chars().collect();
+        assert_eq!(chars.len(), 96);
+        // The euro sign follows the ASCII punctuation (class 44; 0 is the CTC blank), not a second E.
+        assert_eq!(chars.iter().position(|&c| c == '€'), Some(43));
+        assert_eq!(chars.iter().filter(|&&c| c == 'E').count(), 1);
+    }
+
     #[test]
     fn missing_models_message_is_for_end_users() {
         let message = OcrError::NoModels.to_string();

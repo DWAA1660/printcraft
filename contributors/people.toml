@@ -71,3 +71,35 @@ sync_github_name = true
 [people.Hathor875]
 real_name = "Krzysztof Cieślik"
 sync_github_name = true
+
+[people.jay-tau]
+sync_github_name = true
+
+[people.Piohrun]
+real_name = "Grzegorz Martens"
+sync_github_name = true
+
+[people.krinry]
+sync_github_name = true
+
+
+[people.arcanii]
+real_name = "Bryan Mark"
+display_name = "Arcanii"
+sync_github_name = false
+
+[people.atoslins]
+real_name = "Atos Lins"
+display_name = "Atos Lins"
+sync_github_name = false
+
+[people.mhadidi06]
+display_name = "Mustafa Hadidi"
+
+[people.LucasT-dev]
+real_name = "Lucas"
+display_name = "Lucas"
+sync_github_name = true   # use the name on your public GitHub profile as display name
+
+[people.Losminek]
+sync_github_name = true

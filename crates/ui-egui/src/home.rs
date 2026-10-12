@@ -5,7 +5,7 @@ use egui::{Align2, CornerRadius, Rect, Sense, Stroke, vec2};
 use pdfcraft_engine::catalog;
 
 use crate::theme::{self, Tokens};
-use crate::{LeftPanel, PdfCraftApp, icons, panels::human_size, widgets};
+use crate::{PdfCraftApp, icons, panels::human_size, widgets};
 
 const RECOMMENDED: [&str; 5] = ["organize", "comment", "form", "edit", "protect"];
 
@@ -86,8 +86,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             );
                             let resp = if title_elided || blurb_elided { resp.on_hover_text(format!("{}\n{blurb}", tl!(g.label))) } else { resp };
                             if resp.clicked() {
-                                app.left = LeftPanel::Tool(g.id);
-                                app.left_open = true;
+                                app.select_tool(g.id);
                             }
                         }
                         let (rect, resp) = ui.allocate_exact_size(vec2(170.0, 104.0), Sense::click());
@@ -162,7 +161,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 let detail = ui.painter().text(
                     rect.right_center() - vec2(48.0, 0.0),
                     Align2::RIGHT_CENTER,
-                    format!("{} {}  ·  {}", r.pages, tl!("pages"), human_size(r.size)),
+                    format!("{}  ·  {}", crate::i18n::trn(crate::i18n::current(), r.pages as u64, "{n} page", "{n} pages"), human_size(r.size)),
                     theme::regular(12.0),
                     t.text_muted,
                 );

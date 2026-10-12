@@ -208,6 +208,55 @@ endif</script></event></field>
     .to_string()
 }
 
+/// Shaped like a real Designer leave-request form: a positioned page whose unnamed subform holds
+/// an area (`box`) with a top-to-bottom table of positioned rows (`<occur min="3"/>`) and a
+/// read-only total that a FormCalc calculate works out over a fixed range of rows, as such forms
+/// do. `data` is `xfa:data` content as Adobe's viewers write it: areas are not data scopes, so
+/// there is no `box` element.
+pub fn leave_template(data: &str) -> String {
+    let datasets = if data.is_empty() {
+        String::new()
+    } else {
+        format!("<xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data>{data}</xfa:data></xfa:datasets>")
+    };
+    format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page" w="7.5in" h="9in">
+  <subform w="7.5in" h="8in">
+   <area name="box" x="0.25in" y="0.5in">
+    <subform name="table" layout="tb" w="5in">
+     <subform name="row" w="5in" h="0.3in"><occur min="3" max="-1"/>
+      <field name="reason" x="0in" w="3in" h="0.3in"><ui><textEdit/></ui></field>
+      <field name="days" x="3in" w="1in" h="0.3in"><ui><numericEdit/></ui></field>
+     </subform>
+    </subform>
+    <field name="carried" y="1.5in" w="2in" h="0.3in"><ui><numericEdit/></ui></field>
+    <field name="allowance" y="2in" w="2in" h="0.3in"><ui><numericEdit/></ui><value><float>30</float></value></field>
+    <field name="rest" y="2.5in" w="2in" h="0.3in" access="readOnly"><ui><numericEdit/></ui>
+     <calculate><script>
+      var left = carried + allowance
+      for i=0 upto 2 step 1 do
+       if (table.row[i].reason == "Regular") then
+        left = left - table.row[i].days
+       endif
+      endfor
+      this = left
+     </script></calculate></field>
+   </area>
+  </subform>
+ </subform>
+</subform>
+</template>
+{datasets}
+</xdp:xdp>
+"##
+    )
+}
+
 /// A 2 × 2 RGBA PNG: red, green / blue, transparent.
 pub fn tiny_png() -> Vec<u8> {
     TINY_PNG.to_vec()
@@ -272,6 +321,39 @@ pub fn shell(xdp: &str) -> Vec<u8> {
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>".to_vec(),
         b"<< /Length 44 >>\nstream\nBT /F1 12 Tf 72 700 Td (Please wait...) Tj ET\nendstream".to_vec(),
         format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()).into_bytes(),
+    ];
+    assemble(objs)
+}
+
+/// A dynamic form with two signature boxes of which `sign` has been signed: the file holds the
+/// field a signing application leaves (named by its SOM path, its value a signature dictionary)
+/// and the picture drawn in the box, a solid blue rectangle.
+pub fn signed_shell() -> Vec<u8> {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="body" layout="tb" w="7.5in">
+  <field name="sign" w="3in" h="1in"><ui><signature/></ui></field>
+  <field name="other" w="3in" h="1in"><ui><signature/></ui></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let picture = "0 0 1 rg 0 0 100 40 re f";
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /NeedsRendering true /AcroForm << /XFA 5 0 R /Fields [6 0 R] /SigFlags 3 >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>".to_vec(),
+        b"<< /Length 44 >>\nstream\nBT /F1 12 Tf 72 700 Td (Please wait...) Tj ET\nendstream".to_vec(),
+        format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()).into_bytes(),
+        b"<< /T (form[0]) /Kids [7 0 R] >>".to_vec(),
+        b"<< /T (body[0]) /Parent 6 0 R /Kids [8 0 R] >>".to_vec(),
+        b"<< /T (sign[0]) /Parent 7 0 R /FT /Sig /V 9 0 R /Type /Annot /Subtype /Widget /Rect [0 0 0 0] /AP << /N 10 0 R >> >>".to_vec(),
+        b"<< /Type /Sig /Name (A Signer) >>".to_vec(),
+        format!("<< /Type /XObject /Subtype /Form /BBox [0 0 100 40] /Length {} >>\nstream\n{picture}\nendstream", picture.len()).into_bytes(),
     ];
     assemble(objs)
 }

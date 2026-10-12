@@ -181,12 +181,12 @@ fn disallowed_later_changes_report_altered_while_comments_stay_allowed() {
     let r = verify::verify_doc(&open(&commented), &commented, &trust).into_iter().find(|r| r.signed).unwrap();
     assert_eq!(r.status, Status::Valid);
     assert_eq!(r.integrity, Integrity::Intact);
-    assert_eq!(r.modification, Modification::Allowed(vec!["comments".into()]));
+    assert_eq!(r.modification, Modification::Allowed(vec!["comments"]));
     let rewritten = edit_after(&signed, change_text);
     let r = verify::verify_doc(&open(&rewritten), &rewritten, &trust).into_iter().find(|r| r.signed).unwrap();
     assert_eq!(r.status, Status::Invalid);
     assert!(matches!(r.integrity, Integrity::Altered { .. }));
-    assert_eq!(r.modification, Modification::Disallowed(vec!["page content".into()]));
+    assert_eq!(r.modification, Modification::Disallowed(vec!["page content"]));
     let summary = verify::summarize(&verify::verify_doc(&open(&rewritten), &rewritten, &trust));
     assert_eq!((summary.overall.as_str(), summary.modified_disallowed), ("invalid", 1));
 }
@@ -215,7 +215,7 @@ fn counter_signed_document_reports_each_signature() {
     let signed: Vec<_> = reports.iter().filter(|r| r.signed).collect();
     assert_eq!(signed.len(), 2);
     let approval = signed.iter().find(|r| r.field == "Approval").unwrap();
-    assert_eq!(approval.modification, Modification::Allowed(vec!["signature".into()]));
+    assert_eq!(approval.modification, Modification::Allowed(vec!["signature"]));
     assert!(signed.iter().all(|r| r.status == Status::Valid), "{reports:?}");
     assert_eq!(verify::summarize(&reports).overall.as_str(), "valid");
 }
@@ -229,7 +229,7 @@ fn expired_signer_certificate_is_reported_not_collapsed() {
     let reports = verify::verify_doc(&open(&signed), &signed, &trust);
     let r = reports.iter().find(|r| r.signed).unwrap();
     assert_eq!(r.integrity, Integrity::Intact);
-    assert!(matches!(&r.trust, Trust::Trusted { .. }), "{:?}", r.trust);
+    assert_eq!(r.trust, Trust::Untrusted, "core refusal cannot be promoted by a trusted anchor");
     assert!(matches!(&r.cert_validity, CertValidity::NotValidAtSigning { .. }), "{:?}", r.cert_validity);
     let summary = verify::summarize(&reports);
     assert_eq!((summary.overall.as_str(), summary.expired_or_invalid_cert), ("expired-or-invalid-cert", 1));
@@ -256,10 +256,51 @@ fn unsupported_signature_maps_to_unknown_integrity() {
     let trust = TrustStore { certs: vec![id.certificate.clone()] };
     let mut info = signatures(&open(&signed), &signed, &trust).into_iter().find(|s| s.signed).unwrap();
     info.status = Status::Unknown;
-    info.details.push("PdfCraft can't check this signature yet: test seam.".to_string());
+    info.details.push(pdfcraft_sign::Detail {
+        message: "PdfCraft can't check this signature yet: test seam.".into(),
+        pattern: "test",
+        fill: pdfcraft_sign::Fill::Nothing,
+    });
     let r = verify::report_for(&info, &trust);
     assert!(matches!(r.integrity, Integrity::Unknown { .. }), "{:?}", r.integrity);
     assert_eq!(verify::summarize(std::slice::from_ref(&r)).overall.as_str(), "unsupported");
+}
+
+#[test]
+fn core_unknown_is_not_promoted_to_trusted_or_valid() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let mut info = signatures(&open(&signed), &signed, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(info.status, Status::Valid);
+    // The report must respect any core refusal, including #749's EKU/key-usage
+    // rejection after this branch is integrated with main. Wording is immaterial.
+    info.status = Status::Unknown;
+    info.details =
+        vec![pdfcraft_sign::Detail { message: "The core validator refused the signer.".into(), pattern: "test", fill: pdfcraft_sign::Fill::Nothing }];
+    let mut report = verify::report_for(&info, &trust);
+    assert_eq!(report.trust, Trust::Untrusted);
+    assert!(!report.summary.contains("Signature is valid"), "{}", report.summary);
+    assert_ne!(verify::summarize(std::slice::from_ref(&report)).overall, "valid");
+    // summarize is public: a caller-supplied trust row cannot override status.
+    report.trust = Trust::Trusted { anchor: "Test Root".into(), via_cca: false };
+    assert_eq!(verify::summarize(&[report]).overall, "unknown");
+}
+
+#[test]
+fn missing_signing_time_is_reported_without_claiming_expiry() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let mut info = signatures(&open(&signed), &signed, &trust).into_iter().find(|s| s.signed).unwrap();
+    info.signing_time = None;
+    info.timestamp_time = None;
+    let report = verify::report_for(&info, &trust);
+    assert_eq!(report.cert_validity, CertValidity::NoSigningTime);
+    assert!(report.summary.contains("no signing time"), "{}", report.summary);
+    let summary = verify::summarize(&[report]);
+    assert_eq!(summary.overall, "no-signing-time");
+    assert_eq!(summary.valid, 0);
 }
 
 #[test]

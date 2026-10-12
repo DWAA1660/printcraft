@@ -120,6 +120,16 @@ fn rejects_invalid_geometry_and_unsupported_scales() {
     assert!(set_scale(&mut d, 0, [0.0; 4], "bad", &Scale::default()).is_err());
 }
 #[test]
+fn filled_open_triangle_snaps_to_closing_edge() {
+    for (op, closed) in [("f", true), ("F", true), ("f*", true), ("B", true), ("B*", true), ("h f", true), ("S", false)] {
+        let d = fixture(&format!("40 50 m 160 50 l 100 170 l {op}"), "", &[]);
+        let paths = snap::geometry(&d, 0).unwrap();
+        assert_eq!(paths.segments.len(), if closed { 3 } else { 2 }, "{op}");
+        let hit = paths.snap([70.0, 110.0], 5.0, snap::SnapOptions::default()).unwrap();
+        assert_eq!(hit.is_some(), closed, "{op}");
+    }
+}
+#[test]
 fn snap_paths_endpoints_midpoints_and_intersections() {
     let d = fixture("10 20 m 110 20 l S 60 0 m 60 80 l S 10 100 100 40 re S", "", &[]);
     let paths = snap::geometry(&d, 0).unwrap();
@@ -140,6 +150,39 @@ fn snap_paths_endpoints_midpoints_and_intersections() {
     assert!(paths.snap([200.0, 200.0], 3.0, opts).unwrap().is_none());
     assert!(paths.snap([f64::NAN, 0.0], 3.0, opts).is_err());
 }
+#[test]
+fn filled_open_subpath_offers_the_same_snap_edges_as_explicit_close() {
+    let open = fixture("40 50 m 160 50 l 100 170 l f", "", &[]);
+    let closed = fixture("40 50 m 160 50 l 100 170 l h f", "", &[]);
+    let stroke = fixture("40 50 m 160 50 l 100 170 l S", "", &[]);
+    let filled = snap::geometry(&open, 0).unwrap();
+    let explicit = snap::geometry(&closed, 0).unwrap();
+    let stroked = snap::geometry(&stroke, 0).unwrap();
+
+    assert_eq!(filled.segments, explicit.segments);
+    assert_eq!(filled.segments.len(), 3);
+    assert_eq!(stroked.segments.len(), 2);
+    let paths_only = snap::SnapOptions { endpoints: false, midpoints: false, intersections: false, paths: true };
+    let hit = filled.snap([55.0, 80.0], 5.0, paths_only).unwrap().unwrap();
+    assert_eq!(hit.kind, snap::SnapKind::Path);
+    assert_eq!(hit.point, [55.0, 80.0]);
+    assert!(stroked.snap([55.0, 80.0], 5.0, paths_only).unwrap().is_none());
+}
+
+#[test]
+fn fills_close_all_open_subpaths_but_strokes_do_not() {
+    let triangles = "0 0 m 20 0 l 10 20 l 40 0 m 60 0 l 50 20 l";
+    for paint in ["f", "F", "f*", "B", "B*", "b", "b*"] {
+        let doc = fixture(&format!("{triangles} {paint}"), "", &[]);
+        let geometry = snap::geometry(&doc, 0).unwrap();
+        assert_eq!(geometry.segments.len(), 6, "{paint}");
+        assert!(geometry.segments.contains(&[[10.0, 20.0], [0.0, 0.0]]), "{paint}");
+        assert!(geometry.segments.contains(&[[50.0, 20.0], [40.0, 0.0]]), "{paint}");
+    }
+    let stroked = fixture(&format!("{triangles} S"), "", &[]);
+    assert_eq!(snap::geometry(&stroked, 0).unwrap().segments.len(), 4);
+}
+
 #[test]
 fn nested_forms_transforms_curves_and_cycles_are_bounded() {
     let body = "0 0 m 10 0 l S 0 0 m 0 10 10 10 10 0 c S /Nested Do";

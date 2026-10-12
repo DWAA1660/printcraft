@@ -4,12 +4,12 @@
 
 use std::path::PathBuf;
 
-use egui::{Align, Color32, CornerRadius, Layout, Pos2, Rect, Stroke, pos2, vec2};
+use egui::{Align, Color32, CornerRadius, Layout, Pos2, Rect, Stroke, vec2};
 use pdfcraft_engine::sign::{self, Appearance, Certificate, DigitalId, Modification, Name, PrivateKey};
-use pdfcraft_engine::{SignOptions, SignatureInfo, SignatureReport, SignatureStatus};
-use pdfcraft_render::DocInfo;
+use pdfcraft_engine::{SignOptions, SignatureImage, SignatureInfo, SignatureReport, SignatureStatus};
 
 use crate::canvas::{DocView, PageXform};
+use crate::fill_sign::SavedSig;
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons, widgets};
 
@@ -22,6 +22,10 @@ pub struct DigitalIdEntry {
     pub issuer: String,
     pub email: String,
     pub expires: String,
+    /// Why the ID can't sign (a Windows store certificate whose key PdfCraft can't use): shown
+    /// greyed with the reason, and never selectable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unusable: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,6 +77,19 @@ impl Default for NewIdDraft {
     }
 }
 
+/// What a visible signature shows on its left (Acrobat: Configure Signature Appearance ▸ Text,
+/// Draw or Image). The one last signed with is remembered.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum SignGraphic {
+    /// The signer's name in large type (when Name is on).
+    #[default]
+    Name,
+    /// The saved Fill & Sign signature, as it is when signing.
+    FillSign,
+    /// An imported PNG or JPEG.
+    Image(#[serde(with = "crate::fill_sign::image_data")] SignatureImage),
+}
+
 /// The signing dialogs' state.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SignDraft {
@@ -89,23 +106,30 @@ pub struct SignDraft {
     pub reason: String,
     pub location: String,
     pub appearance: Appearance,
+    pub graphic: SignGraphic,
+    /// The image the dialog holds (remembered or chosen), so Image can be chosen again.
+    pub image: Option<SignatureImage>,
     pub new_id: NewIdDraft,
     pub error: Option<String>,
 }
 
 impl SignDraft {
-    fn new(page: usize, rect: Option<[f64; 4]>, field: Option<String>, certify: Option<u8>, ids: usize) -> Self {
+    /// Starts at Choose when there are IDs to show (even only unusable ones, so their reasons
+    /// are seen), with the first usable one selected.
+    fn new(page: usize, rect: Option<[f64; 4]>, field: Option<String>, certify: Option<u8>, ids: &[DigitalIdEntry]) -> Self {
         Self {
             page,
             rect,
             field,
             certify,
-            step: if ids == 0 { SignStep::Configure } else { SignStep::Choose },
-            selected: (ids > 0).then_some(0),
+            step: if ids.is_empty() { SignStep::Configure } else { SignStep::Choose },
+            selected: ids.iter().position(|e| e.unusable.is_none()),
             password: String::new(),
             reason: String::new(),
             location: String::new(),
             appearance: Appearance::default(),
+            graphic: SignGraphic::Name,
+            image: None,
             new_id: NewIdDraft::default(),
             error: None,
         }
@@ -221,6 +245,20 @@ pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
         issuer: c.issuer.common_name().map(str::to_string).unwrap_or_else(|| c.issuer.display()),
         email: c.subject.email().unwrap_or("").to_string(),
         expires: format!("{:04}.{:02}.{:02}", c.not_after.year, c.not_after.month, c.not_after.day),
+        unusable: None,
+    }
+}
+
+/// A greyed entry for a Windows store certificate that can't sign, with the reason.
+#[cfg(target_os = "windows")]
+fn entry_unusable(u: &sign::windows::Unusable) -> DigitalIdEntry {
+    DigitalIdEntry {
+        path: format!("windows:{}", u.fingerprint.split(' ').collect::<String>().to_ascii_lowercase()),
+        name: u.subject.clone(),
+        issuer: String::new(),
+        email: String::new(),
+        expires: String::new(),
+        unusable: Some(u.reason.clone()),
     }
 }
 
@@ -228,7 +266,15 @@ impl PdfCraftApp {
     /// Start signing: the rectangle (or field) is known; show Sign with a Digital ID.
     pub fn start_signing(&mut self, page: usize, rect: Option<[f64; 4]>, field: Option<String>, certify: Option<u8>) {
         self.refresh_os_key_store_ids();
-        self.sign_draft = Some(SignDraft::new(page, rect, field, certify, self.digital_ids.len()));
+        let mut draft = SignDraft::new(page, rect, field, certify, &self.digital_ids);
+        draft.graphic = match &self.sign_graphic {
+            SignGraphic::FillSign if self.signature.is_none() => SignGraphic::Name,
+            g => g.clone(),
+        };
+        if let SignGraphic::Image(image) = &self.sign_graphic {
+            draft.image = Some(image.clone());
+        }
+        self.sign_draft = Some(draft);
         self.dialog = Some(crate::Dialog::Sign);
     }
 
@@ -240,7 +286,12 @@ impl PdfCraftApp {
             match sign::keychain::identities(None) {
                 Ok(ids) => {
                     for id in ids {
-                        self.digital_ids.push(entry_for(&sign::keychain::reference(&id.certificate), &id.certificate));
+                        let mut entry = entry_for(&sign::keychain::reference(&id.certificate), &id.certificate);
+                        // Smart card identities say so ("… (smart card)").
+                        if let Some(name) = id.friendly_name {
+                            entry.name = name;
+                        }
+                        self.digital_ids.push(entry);
                     }
                 }
                 Err(e) => self.notify_fmt("The Keychain's digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]),
@@ -248,10 +299,15 @@ impl PdfCraftApp {
         }
         #[cfg(target_os = "windows")]
         if self.os_key_store_ids {
-            match sign::windows::identities() {
-                Ok(ids) => {
-                    for id in ids {
+            match sign::windows::list() {
+                Ok(listing) => {
+                    for id in &listing.ids {
                         self.digital_ids.push(entry_for(&sign::windows::reference(&id.certificate), &id.certificate));
+                    }
+                    // Certificates without a private key aren't identities; the rest are shown
+                    // greyed with why they can't sign (issue #179).
+                    for u in listing.unusable.iter().filter(|u| !u.no_private_key) {
+                        self.digital_ids.push(entry_unusable(u));
                     }
                 }
                 Err(e) => self.notify_fmt("The Windows store's digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]),
@@ -326,7 +382,7 @@ impl PdfCraftApp {
         }
         let Some((_, doc_id)) = self.active_ids() else { return Err("no document".into()) };
         let d = self.sign_draft.clone().ok_or("nothing to sign")?;
-        let entry = d.selected.and_then(|i| self.digital_ids.get(i)).cloned().ok_or("Choose a digital ID.")?;
+        let entry = d.selected.and_then(|i| self.digital_ids.get(i)).filter(|e| e.unusable.is_none()).cloned().ok_or("Choose a digital ID.")?;
         let id = if entry.path.starts_with("keychain:") {
             keychain_id(&entry.path)?
         } else if entry.path.starts_with("windows:") {
@@ -339,6 +395,12 @@ impl PdfCraftApp {
             })?
         };
         let some = |s: &str| (!s.trim().is_empty()).then(|| s.trim().to_string());
+        // Only a visible signature shows its graphic.
+        let graphic = match self.graphic_sig(&d.graphic) {
+            Some(saved) if d.rect.is_some() || d.field.is_some() => Some(saved.graphic().ok_or("The saved signature has nothing to draw.")?),
+            _ => None,
+        };
+        let choice = d.graphic.clone();
         let opts = SignOptions {
             field: d.field.clone(),
             page: d.page,
@@ -347,6 +409,7 @@ impl PdfCraftApp {
             location: some(&d.location),
             certify: d.certify,
             appearance: d.appearance.clone(),
+            graphic,
             ..SignOptions::default()
         };
         // Signing saves, as in Acrobat: choose where (a cancelled save cancels signing). The
@@ -361,7 +424,11 @@ impl PdfCraftApp {
             }
             let signed = app.session.sign(doc_id, &id, opts).map_err(|e| e.to_string())?;
             crate::editing::write_atomically(&path.to_string_lossy(), signed.as_slice()).map_err(|e| format!("Could not save: {e}"))?;
+            // Our own write is not a change on disk to reload (#431).
+            #[cfg(not(target_arch = "wasm32"))]
+            app.watch.known_now(doc_id, &path.to_string_lossy());
             app.session.mark_signed(doc_id, signed, Some(path.to_string_lossy().into_owned())).map_err(|e| e.to_string())?;
+            app.sign_graphic = choice;
             if let Some(view) = app.views.iter_mut().find(|v| v.id == doc_id) {
                 view.invalidate_content();
             }
@@ -395,6 +462,37 @@ impl PdfCraftApp {
         }
     }
 
+    /// The saved signature or image `g` stands for (`None`: the name).
+    fn graphic_sig(&self, g: &SignGraphic) -> Option<SavedSig> {
+        graphic_of(self.signature.as_ref(), g)
+    }
+
+    /// Sign as ▸ Choose image…: answered only into the signing dialog that asked.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn pick_sign_graphic_image(&mut self) {
+        let epoch = self.dialog_epoch();
+        let dialog = rfd::AsyncFileDialog::new().add_filter(tl!("Image"), &["png", "jpg", "jpeg"]);
+        self.ask_one(crate::pickers::Ask::File(dialog), None, move |app, path| {
+            if app.dialog_epoch() != epoch || app.dialog != Some(crate::Dialog::Sign) {
+                return;
+            }
+            // Scanned paper becomes transparent, as for Fill & Sign image signatures.
+            let image = std::fs::File::open(path)
+                .map_err(pdfcraft_engine::signature_image::SignatureImageError::from)
+                .and_then(SignatureImage::read)
+                .and_then(|image| image.remove_white_background(245, 35));
+            match (image, app.sign_draft.as_mut()) {
+                (Ok(image), Some(d)) => {
+                    d.graphic = SignGraphic::Image(image.clone());
+                    d.image = Some(image);
+                    d.error = None;
+                }
+                (Ok(_), None) => {}
+                (Err(e), _) => app.notify_fmt("Couldn't import the signature image: {e}", &[("e", &e.to_string())]),
+            }
+        });
+    }
+
     /// Trust a certificate (Signatures panel ▸ Add to trusted certificates), revalidating.
     pub fn trust_certificate(&mut self, cert: Certificate) {
         let mut certs = self.session.trusted_certificates().to_vec();
@@ -404,8 +502,8 @@ impl PdfCraftApp {
         self.session.set_trusted_certificates(certs);
     }
 
-    /// Trust the bundled CCA India roots (Signatures panel ▸ Verify with CCA India
-    /// roots) and revalidate every open document.
+    /// Trust the bundled CCA India roots after explicit confirmation in the
+    /// Signatures panel, then revalidate every open document.
     pub fn trust_cca_roots(&mut self) {
         match self.session.trust_cca_roots() {
             Ok(0) => self.notify_tr("The CCA India roots are already trusted."),
@@ -466,7 +564,7 @@ fn title(ui: &mut egui::Ui, text: &str) {
 
 fn error(ui: &mut egui::Ui, err: &Option<String>) {
     if let Some(e) = err.as_ref().filter(|e| !e.is_empty()) {
-        ui.colored_label(Color32::from_rgb(0xD7, 0x37, 0x3F), e);
+        ui.colored_label(Color32::from_rgb(0xD7, 0x37, 0x3F), tl!(e));
         ui.add_space(4.0);
     }
 }
@@ -481,17 +579,20 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
         for (i, e) in ids.iter().enumerate() {
             let selected = d.selected == Some(i);
+            let usable = e.unusable.is_none();
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 52.0), egui::Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, selected, &e.name));
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, usable, selected, &e.name));
             let fill = if selected {
                 t.accent_soft
-            } else if resp.hovered() {
+            } else if resp.hovered() && usable {
                 t.hover
             } else {
                 Color32::TRANSPARENT
             };
             ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
-            icons::paint(ui, Rect::from_min_size(rect.min + vec2(10.0, 15.0), vec2(20.0, 20.0)), "badge-check", 18.0, t.accent);
+            // An unusable ID is greyed, with the reason where the issuer would be.
+            let (icon, name_color) = if usable { (t.accent, t.text) } else { (t.text_muted, t.text_muted) };
+            icons::paint(ui, Rect::from_min_size(rect.min + vec2(10.0, 15.0), vec2(20.0, 20.0)), "badge-check", 18.0, icon);
             // Certificate names can be any length: cut both lines with "…" at the row's edge
             // and show them whole on hover.
             let line = |text: &str, font: egui::FontId, color: Color32| {
@@ -499,27 +600,33 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
                 job.wrap = egui::text::TextWrapping::truncate_at_width((rect.width() - 50.0).max(0.0));
                 ui.painter().layout_job(job)
             };
-            let name = line(&e.name, theme::semibold(13.0), t.text);
-            let sub = format!(
-                "{keychain}{email}{issued}{issuer}{expires}{date}",
-                keychain = if e.path.starts_with("keychain:") {
-                    tl!("Keychain  ·  ").to_string()
-                } else if e.path.starts_with("windows:") {
-                    tl!("Windows store  ·  ").to_string()
-                } else {
-                    String::new()
-                },
-                email = if e.email.is_empty() { String::new() } else { format!("{}  ·  ", e.email) },
-                issued = tl!("Issued by: "),
-                issuer = e.issuer,
-                expires = tl!(", Expires: "),
-                date = e.expires,
-            );
+            let name = line(&e.name, theme::semibold(13.0), name_color);
+            let store = if e.path.starts_with("keychain:") {
+                tl!("Keychain  ·  ").to_string()
+            } else if e.path.starts_with("windows:") {
+                tl!("Windows store  ·  ").to_string()
+            } else {
+                String::new()
+            };
+            let sub = match &e.unusable {
+                Some(reason) => format!("{store}{reason}"),
+                None => format!(
+                    "{store}{email}{issued}{issuer}{expires}{date}",
+                    email = if e.email.is_empty() { String::new() } else { format!("{}  ·  ", e.email) },
+                    issued = tl!("Issued by: "),
+                    issuer = e.issuer,
+                    expires = tl!(", Expires: "),
+                    date = e.expires,
+                ),
+            };
             let details = line(&sub, theme::regular(11.5), t.text_muted);
             let elided = name.elided || details.elided;
-            ui.painter().galley(rect.min + vec2(40.0, 9.0), name, t.text);
+            ui.painter().galley(rect.min + vec2(40.0, 9.0), name, name_color);
             ui.painter().galley(rect.min + vec2(40.0, 28.0), details, t.text_muted);
             let resp = if elided { resp.on_hover_text(format!("{}\n{sub}", e.name)) } else { resp };
+            if !usable {
+                continue;
+            }
             if resp.clicked() {
                 d.selected = Some(i);
             }
@@ -571,11 +678,11 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
                 (tl!("Email Address"), &mut n.email),
             ] {
                 let l = ui.label(label);
-                ui.add(egui::TextEdit::singleline(value).desired_width(260.0)).labelled_by(l.id);
+                ui.add(crate::widgets::line(value).desired_width(260.0)).labelled_by(l.id);
                 ui.end_row();
             }
             let l = ui.label(tl!("Country/Region"));
-            ui.add(egui::TextEdit::singleline(&mut n.country).hint_text("US").char_limit(2).desired_width(60.0)).labelled_by(l.id);
+            ui.add(crate::widgets::line(&mut n.country).hint_text("US").char_limit(2).desired_width(60.0)).labelled_by(l.id);
             ui.end_row();
             ui.label(tl!("Key Algorithm"));
             egui::ComboBox::from_id_salt("key-alg").selected_text(KEY_ALGORITHMS[n.key].0).show_ui(ui, |ui| {
@@ -585,10 +692,10 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             });
             ui.end_row();
             let l = ui.label(tl!("Password"));
-            ui.add(egui::TextEdit::singleline(&mut n.password).password(true).desired_width(200.0)).labelled_by(l.id);
+            ui.add(crate::widgets::line(&mut n.password).password(true).desired_width(200.0)).labelled_by(l.id);
             ui.end_row();
             let l = ui.label(tl!("Confirm Password"));
-            ui.add(egui::TextEdit::singleline(&mut n.confirm).password(true).desired_width(200.0)).labelled_by(l.id);
+            ui.add(crate::widgets::line(&mut n.confirm).password(true).desired_width(200.0)).labelled_by(l.id);
             ui.end_row();
         });
         ui.label(
@@ -600,7 +707,7 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         egui::Grid::new("id-file").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
             let l = ui.label(tl!("File (.p12, .pfx)"));
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut n.file).desired_width(220.0)).labelled_by(l.id);
+                ui.add(crate::widgets::line(&mut n.file).desired_width(220.0)).labelled_by(l.id);
                 #[cfg(not(target_arch = "wasm32"))]
                 if ui.button(tl!("Browse…")).clicked() {
                     browse = true;
@@ -608,7 +715,7 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             });
             ui.end_row();
             let l = ui.label(tl!("Password"));
-            ui.add(egui::TextEdit::singleline(&mut n.file_password).password(true).desired_width(200.0)).labelled_by(l.id);
+            ui.add(crate::widgets::line(&mut n.file_password).password(true).desired_width(200.0)).labelled_by(l.id);
             ui.end_row();
         });
     }
@@ -662,17 +769,29 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
 }
 
 /// The appearance preview: Acrobat's standard layout (name left, details right).
-fn preview(ui: &mut egui::Ui, t: &Tokens, name: &str, d: &SignDraft) {
+/// The saved signature or image `g` stands for, given the saved Fill & Sign `signature`.
+fn graphic_of(signature: Option<&SavedSig>, g: &SignGraphic) -> Option<SavedSig> {
+    match g {
+        SignGraphic::Name => None,
+        SignGraphic::FillSign => signature.cloned(),
+        SignGraphic::Image(image) => Some(SavedSig::Image(image.clone())),
+    }
+}
+
+/// The signature as it will look: the graphic (or the name) on the left, the details beside it.
+fn preview(
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    name: &str,
+    d: &SignDraft,
+    graphic: Option<&SavedSig>,
+    cache: &mut Option<(SavedSig, egui::TextureHandle)>,
+) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 96.0), egui::Sense::hover());
     let bg = if t.dark() { Color32::from_gray(0xF4) } else { Color32::WHITE };
     ui.painter().rect(rect, CornerRadius::same(4), bg, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
     let inner = rect.shrink(10.0);
     let a = &d.appearance;
-    if a.name {
-        let half = Rect::from_min_size(inner.min, vec2(inner.width() * 0.5 - 6.0, inner.height()));
-        let galley = ui.painter().layout(name.to_string(), theme::regular(22.0), Color32::BLACK, half.width());
-        ui.painter().galley(half.left_center() - vec2(0.0, galley.size().y / 2.0), galley, Color32::BLACK);
-    }
     let mut lines = Vec::new();
     if a.name {
         lines.push(if a.labels { format!("Digitally signed by {name}") } else { name.to_string() });
@@ -686,7 +805,16 @@ fn preview(ui: &mut egui::Ui, t: &Tokens, name: &str, d: &SignDraft) {
     if a.date {
         lines.push(format!("{}{}", if a.labels { "Date: " } else { "" }, "(the signing time)"));
     }
-    let x = if a.name { inner.center().x + 6.0 } else { inner.left() };
+    // As in the signature itself: a graphic with no details beside it fills the box.
+    let alone = graphic.is_some() && lines.is_empty();
+    let half = Rect::from_min_size(inner.min, vec2(inner.width() * 0.5 - 6.0, inner.height()));
+    if let Some(g) = graphic {
+        crate::fill_sign::paint_saved(ui, if alone { inner } else { half }, g, cache, "sign-graphic");
+    } else if a.name {
+        let galley = ui.painter().layout(name.to_string(), theme::regular(22.0), Color32::BLACK, half.width());
+        ui.painter().galley(half.left_center() - vec2(0.0, galley.size().y / 2.0), galley, Color32::BLACK);
+    }
+    let x = if (a.name || graphic.is_some()) && !alone { inner.center().x + 6.0 } else { inner.left() };
     let galley = ui.painter().layout(lines.join("\n"), theme::regular(11.0), Color32::from_gray(0x20), inner.right() - x);
     ui.painter().galley(egui::pos2(x, inner.center().y - galley.size().y / 2.0), galley, Color32::BLACK);
 }
@@ -708,9 +836,12 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     let in_os_key_store = entry.path.starts_with("keychain:") || entry.path.starts_with("windows:");
     let mut close = false;
     let mut go = false;
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut pick = false;
     if d.rect.is_some() || d.field.is_some() {
         ui.label(egui::RichText::new(tl!("Appearance")).font(theme::semibold(12.5)));
-        preview(ui, t, &entry.name, d);
+        let graphic = graphic_of(app.signature.as_ref(), &d.graphic);
+        preview(ui, t, &entry.name, d, graphic.as_ref(), &mut app.sign_graphic_preview);
         ui.horizontal_wrapped(|ui| {
             let a = &mut d.appearance;
             ui.checkbox(&mut a.name, tl!("Name"));
@@ -719,6 +850,27 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             ui.checkbox(&mut a.location, tl!("Location"));
             ui.checkbox(&mut a.distinguished_name, tl!("Distinguished name"));
             ui.checkbox(&mut a.labels, tl!("Labels"));
+        });
+        // Acrobat: Configure Signature Appearance, Text, Draw or Image.
+        ui.horizontal_wrapped(|ui| {
+            ui.label(tl!("Graphic"));
+            ui.radio_value(&mut d.graphic, SignGraphic::Name, tl!("Signer's name"));
+            ui.add_enabled_ui(app.signature.is_some(), |ui| {
+                if ui.radio(d.graphic == SignGraphic::FillSign, tl!("Fill & Sign signature")).clicked() {
+                    d.graphic = SignGraphic::FillSign;
+                }
+            });
+            ui.add_enabled_ui(d.image.is_some(), |ui| {
+                if ui.radio(matches!(d.graphic, SignGraphic::Image(_)), tl!("Image")).clicked()
+                    && let Some(image) = &d.image
+                {
+                    d.graphic = SignGraphic::Image(image.clone());
+                }
+            });
+            #[cfg(not(target_arch = "wasm32"))]
+            if widgets::pill_button(ui, tl!("Choose image…"), false).clicked() {
+                pick = true;
+            }
         });
         ui.add_space(6.0);
     } else {
@@ -742,10 +894,10 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             ui.end_row();
         }
         let l = ui.label(tl!("Reason"));
-        ui.add(egui::TextEdit::singleline(&mut d.reason).hint_text(tl!("Optional")).desired_width(260.0)).labelled_by(l.id);
+        ui.add(crate::widgets::line(&mut d.reason).hint_text(tl!("Optional")).desired_width(260.0)).labelled_by(l.id);
         ui.end_row();
         let l = ui.label(tl!("Location"));
-        ui.add(egui::TextEdit::singleline(&mut d.location).hint_text(tl!("Optional")).desired_width(260.0)).labelled_by(l.id);
+        ui.add(crate::widgets::line(&mut d.location).hint_text(tl!("Optional")).desired_width(260.0)).labelled_by(l.id);
         ui.end_row();
         if in_os_key_store {
             ui.label("");
@@ -760,7 +912,7 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             );
         } else {
             let l = ui.label(tl!("Digital ID password"));
-            let r = ui.add(egui::TextEdit::singleline(&mut d.password).password(true).desired_width(200.0)).labelled_by(l.id);
+            let r = ui.add(crate::widgets::line(&mut d.password).password(true).desired_width(200.0)).labelled_by(l.id);
             if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 go = true;
             }
@@ -783,6 +935,10 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             }
         });
     });
+    #[cfg(not(target_arch = "wasm32"))]
+    if pick {
+        app.pick_sign_graphic_image();
+    }
     if go {
         match app.finish_signing() {
             Ok(()) => {
@@ -812,7 +968,12 @@ pub(crate) fn banner(sigs: &[SignatureInfo]) -> Option<(&'static str, Color32, &
     {
         let by = c.certificate.as_ref().map(|x| {
             let org = x.subject.organization().map(|o| format!(", {o}")).unwrap_or_default();
-            format!("{}{org}, certificate issued by {}.", x.display_name(), x.issuer.common_name().unwrap_or("an unknown issuer"))
+            let who = format!("{}{org}", x.display_name());
+            let (template, issuer) = match x.issuer.common_name() {
+                Some(issuer) => ("{who}, certificate issued by {issuer}.", issuer),
+                None => ("{who}, certificate issued by an unknown issuer.", ""),
+            };
+            crate::i18n::fmt(tl!(template), &[("who", &who), ("issuer", issuer)])
         });
         return Some(("badge-check", Color32::from_rgb(0x14, 0x73, 0xE6), "Certified by {by}", by.unwrap_or_default()));
     }
@@ -837,192 +998,6 @@ fn status_icon(s: &SignatureInfo) -> (&'static str, Color32) {
     }
 }
 
-/// Viewer-only verification badge for a signed signature widget on the canvas.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct WidgetBadge {
-    pub icon: &'static str,
-    pub color: Color32,
-    /// Tooltip text: the icon never stands alone.
-    pub label: String,
-}
-
-/// Map a signature to its canvas badge. `None` for empty fields: nothing to verify.
-/// This mirrors the engine verdict without re-checking it — invalid stays invalid and
-/// unknown stays unknown — so the widget reflects verification instead of forcing green.
-pub(crate) fn widget_badge(s: &SignatureInfo) -> Option<WidgetBadge> {
-    if !s.signed {
-        return None;
-    }
-    const GREEN: Color32 = Color32::from_rgb(0x2D, 0x9D, 0x78);
-    const AMBER: Color32 = Color32::from_rgb(0xE6, 0x86, 0x19);
-    const RED: Color32 = Color32::from_rgb(0xD7, 0x37, 0x3F);
-    const GRAY: Color32 = Color32::from_gray(0x6E);
-    if matches!(s.modification, Modification::Disallowed(_)) {
-        return Some(WidgetBadge {
-            icon: "circle-x",
-            color: RED,
-            label: tl!("Signature is invalid: the document was modified after signing.").to_string(),
-        });
-    }
-    match s.status {
-        SignatureStatus::Valid => Some(WidgetBadge { icon: "circle-check", color: GREEN, label: tl!("Signature valid").to_string() }),
-        SignatureStatus::Invalid => Some(WidgetBadge { icon: "circle-x", color: RED, label: tl!("Signature is invalid.").to_string() }),
-        SignatureStatus::Unknown if s.details.iter().any(|d| d.to_lowercase().contains("can't check")) => Some(WidgetBadge {
-            icon: "circle-help",
-            color: GRAY,
-            label: tl!("Signature cannot be checked yet: unsupported algorithm or structure.").to_string(),
-        }),
-        SignatureStatus::Unknown => Some(WidgetBadge {
-            icon: "triangle-alert",
-            color: AMBER,
-            label: tl!("Signature validity is unknown: the signer is not trusted.").to_string(),
-        }),
-    }
-}
-
-/// A coherent on-canvas presentation of one signed widget: an opaque plate covering
-/// the widget's baked appearance plus the live verification verdict. The baked
-/// appearance (e.g. the signer's own "not verified" look) is document content and is
-/// never edited — it is hidden behind viewer-only paint so it cannot contradict the
-/// verdict beside a green tick.
-pub(crate) struct WidgetPlate {
-    /// The widget's screen rect, painted opaquely.
-    pub cover: Rect,
-    pub badge: WidgetBadge,
-    pub signer: Option<String>,
-    /// Signing time for the details line, where available.
-    pub date: Option<String>,
-    /// Present only when validation justifies the valid state: painted as the
-    /// reference-style stamp instead of the generic plate.
-    pub stamp: Option<crate::stamp::ValidStamp>,
-}
-
-/// Screen-space plates for the signed, visible widgets on `page`. Viewer-only: the
-/// document bytes are untouched.
-pub(crate) fn widget_plates(sigs: &[SignatureInfo], page: usize, xf: &PageXform, info: &DocInfo) -> Vec<WidgetPlate> {
-    let mut out = Vec::new();
-    // A corrupt file can name a page that does not exist: show nothing, never panic.
-    if info.pages.get(page).is_none() {
-        return out;
-    }
-    for s in sigs {
-        if s.page != Some(page) || !s.visible {
-            continue;
-        }
-        let (Some(rect), Some(badge)) = (s.rect, widget_badge(s)) else { continue };
-        if rect[2] <= rect[0] || rect[3] <= rect[1] {
-            continue;
-        }
-        let cover = xf.user_rect(info, page, [rect[0] as f32, rect[1] as f32, rect[2] as f32, rect[3] as f32]);
-        let date = s.signing_time.map(|t| t.to_string()).or_else(|| s.date.clone());
-        let stamp = crate::stamp::valid_stamp_for(s);
-        out.push(WidgetPlate { cover, badge, signer: s.signer.clone(), date, stamp });
-    }
-    out
-}
-
-/// Design box the plate typography is laid out for, in screen points: the reference
-/// viewer scales its 50x30pt stamp form to the widget box the same way.
-const PLATE_DESIGN_W: f32 = 220.0;
-const PLATE_DESIGN_H: f32 = 64.0;
-
-/// Scale + geometry for one plate's content. Pure so the complete visual state is
-/// unit-testable: the status line must survive (scaled to fit), never be dropped.
-#[derive(Clone, Debug)]
-pub(crate) struct PlateLayout {
-    pub icon_rect: Rect,
-    pub icon_size: f32,
-    /// Absolute x where text starts, and how wide the text column is.
-    pub text_x: f32,
-    pub text_w: f32,
-    pub status_size: f32,
-    pub sub_size: f32,
-    pub line_gap: f32,
-}
-
-/// Compute the plate content layout for `cover`. `status_w_at_base` is the measured
-/// width of the status label at 12pt. Returns `None` for degenerate covers (paint the
-/// cover only). The status line always fits: the layout shrinks uniformly to fit it,
-///
-/// mirroring how the reference viewer scales its stamp to the widget box.
-pub(crate) fn plate_layout(cover: Rect, status_w_at_base: f32) -> Option<PlateLayout> {
-    let pad = 4.0;
-    if cover.width() < pad * 2.0 + 8.0 || cover.height() < pad * 2.0 + 8.0 {
-        return None;
-    }
-    // Uniform scale from the box, like the reference stampScale from the widget box.
-    let mut k = ((cover.width() - pad * 2.0) / PLATE_DESIGN_W).min((cover.height() - pad * 2.0) / PLATE_DESIGN_H).clamp(0.3, 1.25);
-    let scaled = |k: f32| {
-        let icon = (22.0 * k).clamp(8.0, 24.0);
-        let text_x = cover.left() + pad * 2.0 + icon;
-        (icon, text_x, cover.right() - pad - text_x)
-    };
-    let (mut icon, mut text_x, mut available) = scaled(k);
-    // Shrink-to-fit so the required status line is always drawn, never dropped.
-    let need = status_w_at_base * k;
-    if need > available && available > 0.0 {
-        k = (k * available / need).max(0.25);
-        (icon, text_x, available) = scaled(k);
-    }
-    let status_size = 12.0 * k;
-    let sub_size = 10.5 * k;
-    Some(PlateLayout {
-        icon_rect: Rect::from_center_size(pos2(cover.left() + pad + icon / 2.0, cover.center().y), vec2(icon, icon)),
-        icon_size: icon,
-        text_x,
-        text_w: available.max(0.0),
-        status_size,
-        sub_size,
-        line_gap: 1.0,
-    })
-}
-/// Paint one plate. A plate carrying a valid stamp is painted exactly as the
-/// reference valid stamp (opaque cover, tick, title, body — no outer border, which
-/// the reference stamp does not have). Anything else keeps the warning-plate
-/// presentation so untrusted, invalid and modified states stay distinct.
-pub(crate) fn paint_widget_plate(ui: &egui::Ui, painter: &egui::Painter, plate: &WidgetPlate) {
-    if let Some(stamp) = &plate.stamp {
-        crate::stamp::paint_valid_stamp(ui, painter, plate.cover, stamp);
-        return;
-    }
-    let r = plate.cover;
-    painter.rect_filled(r, CornerRadius::same(2), Color32::WHITE);
-    painter.rect_stroke(r, CornerRadius::same(2), Stroke::new(1.0, plate.badge.color), egui::StrokeKind::Inside);
-    let ink = Color32::from_gray(0x20);
-    let status_w = painter.layout_no_wrap(plate.badge.label.clone(), theme::semibold(12.0), ink).size().x;
-    let Some(l) = plate_layout(r, status_w) else {
-        return; // degenerate on screen: the cover alone hides the stale appearance
-    };
-    let painter = painter.with_clip_rect(r);
-    icons::paint(ui, l.icon_rect, plate.badge.icon, l.icon_size, plate.badge.color);
-    // Status line first (always fits by construction), then signer and date while the
-    // measured widths and the vertical room allow.
-    let mut lines = vec![(plate.badge.label.clone(), l.status_size, true)];
-    for (text, size) in [plate.signer.clone().map(|s| (s, l.sub_size)), plate.date.clone().map(|s| (s, l.sub_size))].into_iter().flatten() {
-        if text.trim().is_empty() {
-            continue;
-        }
-        let w = painter.layout_no_wrap(text.clone(), theme::regular(size), Color32::from_gray(0x5A)).size().x;
-        if w <= l.text_w {
-            lines.push((text, size, false));
-        }
-    }
-    let heights: Vec<f32> = lines.iter().map(|(_, s, _)| s * 1.25).collect();
-    let mut shown = lines.len();
-    while shown > 1 && heights[..shown].iter().sum::<f32>() + (shown as f32 - 1.0) * l.line_gap + 6.0 > r.height() {
-        shown -= 1;
-    }
-    let total: f32 = heights[..shown].iter().sum::<f32>() + (shown as f32 - 1.0) * l.line_gap;
-    let mut y = r.center().y - total / 2.0;
-    for (text, size, strong) in &lines[..shown] {
-        let font = if *strong { theme::semibold(*size) } else { theme::regular(*size) };
-        let g = painter.layout_no_wrap(text.clone(), font, ink);
-        painter.galley(pos2(l.text_x, y), g.clone(), ink);
-        y += g.size().y + l.line_gap;
-    }
-}
-
-/// What the Signatures panel asks the app to do.
 #[derive(Clone, Debug)]
 pub enum PanelAction {
     Validate,
@@ -1051,54 +1026,54 @@ fn verification_rows(ui: &mut egui::Ui, t: &Tokens, r: &SignatureReport) {
         ui,
         "Integrity",
         &match &r.integrity {
-            Integrity::Intact => tl!("Intact: the digest and the signature value verify.").to_string(),
-            Integrity::Altered { reason } => format!("{} {reason}", tl!("Altered:")),
-            Integrity::Unknown { reason } => format!("{} {reason}", tl!("Unknown:")),
-            Integrity::NotApplicable => tl!("No signature to check.").to_string(),
+            Integrity::Intact => tl!("Intact").to_string(),
+            Integrity::Altered { reason } => format!("{} {reason}", tl!("Altered")),
+            Integrity::Unknown { reason } => format!("{} {reason}", tl!("Unknown")),
+            Integrity::NotApplicable => tl!("None").to_string(),
         },
     );
     detail_row(
         ui,
         "Trust",
         &match &r.trust {
-            Trust::Trusted { anchor, via_cca: true } => format!("{} ({anchor})", tl!("Trusted through the bundled CCA India roots")),
+            Trust::Trusted { anchor, via_cca: true } => format!("{} ({anchor})", tl!("Trusted")),
             Trust::Trusted { anchor, .. } => format!("{} ({anchor})", tl!("Trusted")),
-            Trust::Untrusted => tl!("Not trusted: the signer is unknown.").to_string(),
+            Trust::Untrusted => tl!("Untrusted").to_string(),
         },
     );
     detail_row(
         ui,
         "Certificate",
         &match &r.cert_validity {
-            CertValidity::Valid => tl!("Valid at the signing time.").to_string(),
+            CertValidity::Valid => tl!("Valid").to_string(),
             CertValidity::NotValidAtSigning { detail } => detail.clone(),
-            CertValidity::NoSigningTime => tl!("No signing time recorded, so validity then cannot be judged.").to_string(),
-            CertValidity::NoCertificate => tl!("No signer certificate in the signature.").to_string(),
+            CertValidity::NoSigningTime => tl!("Unknown").to_string(),
+            CertValidity::NoCertificate => tl!("None").to_string(),
         },
     );
     detail_row(
         ui,
         "Revocation",
         &match &r.revocation {
-            Revocation::Good => tl!("Not revoked: embedded evidence was checked.").to_string(),
+            Revocation::Good => tl!("Not revoked").to_string(),
             Revocation::Revoked { detail } => detail.clone(),
-            Revocation::Unknown => tl!("Unknown: offline verification only checks evidence embedded in the document.").to_string(),
+            Revocation::Unknown => tl!("Unknown").to_string(),
         },
     );
     detail_row(
         ui,
         "Signing time",
         &match (&r.signing_time, &r.time_source) {
-            (Some(when), TimeSource::TrustedTimestamp) => format!("{when} ({})", tl!("from a validated timestamp of a trusted authority")),
-            (Some(when), _) => format!("{when} ({})", tl!("from the signer's computer clock, not independently validated")),
-            (None, _) => tl!("Not recorded.").to_string(),
+            (Some(when), TimeSource::TrustedTimestamp) => format!("{when} ({})", tl!("Trusted timestamp")),
+            (Some(when), _) => format!("{when} ({})", tl!("Signer claim")),
+            (None, _) => tl!("Not recorded").to_string(),
         },
     );
     detail_row(
         ui,
         "Changes after signing",
         &match &r.modification {
-            Modification::None => tl!("None.").to_string(),
+            Modification::None => tl!("None").to_string(),
             Modification::Allowed(kinds) => format!("{} ({})", tl!("Permitted"), kinds.join(", ")),
             Modification::Disallowed(kinds) => format!("{} ({})", tl!("Not permitted"), kinds.join(", ")),
         },
@@ -1123,21 +1098,29 @@ pub(crate) fn panel(
     expanded: &mut Vec<String>,
 ) -> Option<PanelAction> {
     let mut action = None;
+    let consent_id = ui.make_persistent_id("cca-trust-confirmation");
     ui.horizontal_wrapped(|ui| {
         if widgets::pill_button(ui, tl!("Validate all"), false).clicked() {
             action = Some(PanelAction::Validate);
         }
         if cca_trusted {
-            ui.label(egui::RichText::new(tl!("CCA India roots trusted")).small().color(t.text_muted));
-        } else if widgets::pill_button(ui, tl!("Verify with CCA India roots"), false).clicked() {
-            action = Some(PanelAction::TrustCca);
+            ui.label(egui::RichText::new(format!("{} (CCA India)", tl!("Trusted"))).small().color(t.text_muted));
+        } else if widgets::pill_button(ui, tl!("Trust CCA India roots…"), false).clicked() {
+            ui.data_mut(|data| data.insert_temp(consent_id, true));
         }
     });
-    ui.label(
-        egui::RichText::new(tl!("e-Aadhaar PDFs chain to India's CCA roots, bundled with PdfCraft and checked on this device. Nothing is uploaded."))
-            .small()
-            .color(t.text_muted),
-    );
+    if !cca_trusted && ui.data(|data| data.get_temp::<bool>(consent_id).unwrap_or(false)) {
+        ui.label(tl!("These roots will be saved as trusted certificates and apply to all matching signers."));
+        ui.horizontal_wrapped(|ui| {
+            if widgets::pill_button(ui, tl!("Trust"), true).clicked() {
+                ui.data_mut(|data| data.insert_temp(consent_id, false));
+                action = Some(PanelAction::TrustCca);
+            }
+            if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+                ui.data_mut(|data| data.insert_temp(consent_id, false));
+            }
+        });
+    }
     ui.add_space(6.0);
     if sigs.is_empty() {
         ui.add_space(24.0);
@@ -1153,16 +1136,14 @@ pub(crate) fn panel(
     for s in ordered {
         let open = expanded.contains(&s.field);
         let (icon, color) = status_icon(s);
-        let head = if s.signed {
-            format!(
-                "Rev. {}: {} by {}",
-                s.revision,
-                if s.certify.is_some() { "Certified" } else { "Signed" },
-                s.signer.as_deref().unwrap_or("an unknown signer")
-            )
-        } else {
-            format!("Unsigned signature field: {}", s.field)
+        let (template, name) = match (s.signed, s.certify.is_some(), s.signer.as_deref()) {
+            (false, ..) => ("Unsigned signature field: {name}", s.field.as_str()),
+            (true, true, Some(signer)) => ("Rev. {rev}: Certified by {name}", signer),
+            (true, true, None) => ("Rev. {rev}: Certified by an unknown signer", ""),
+            (true, false, Some(signer)) => ("Rev. {rev}: Signed by {name}", signer),
+            (true, false, None) => ("Rev. {rev}: Signed by an unknown signer", ""),
         };
+        let head = crate::i18n::fmt(tl!(template), &[("rev", &s.revision.to_string()), ("name", name)]);
         let resp = ui
             .horizontal(|ui| {
                 let chevron = if open { "chevron-down" } else { "chevron-right" };
@@ -1198,12 +1179,13 @@ pub(crate) fn panel(
                 })
                 .font(theme::semibold(12.0)),
             );
-            for line in &s.details {
+            for detail in &s.details {
+                // Each detail is a whole sentence of ours plus what the signature itself says; said
+                // here in the panel's language, with the signature's own words left as they are.
+                let line = detail.said(&crate::i18n::words);
                 ui.add(egui::Label::new(egui::RichText::new(format!("• {line}")).font(theme::regular(11.5)).color(t.text_muted)).wrap());
             }
-            if let Some(r) = reports.iter().find(|r| r.field == s.field) {
-                verification_rows(ui, t, r);
-            }
+
             ui.add_space(4.0);
             ui.label(egui::RichText::new(tl!("Signature Details")).font(theme::semibold(12.0)));
             let row = |ui: &mut egui::Ui, k: &str, v: &str| {
@@ -1248,7 +1230,10 @@ pub(crate) fn panel(
             }
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
-                if let Some(c) = s.chain.last().or(s.certificate.as_ref())
+                // Trust exactly the signer shown above (s.certificate), not the chain top the
+                // document embedded: trusting an issuer or root is a separate, explicit step in
+                // the Certificate Viewer's Trust tab, which names that certificate.
+                if let Some(c) = s.certificate.as_ref()
                     && s.status == SignatureStatus::Unknown
                     && ui.button(tl!("Add to trusted certificates")).clicked()
                 {
@@ -1270,6 +1255,9 @@ pub(crate) fn panel(
                     action = Some(PanelAction::ExportCertificate(Box::new(c.clone())));
                 }
             });
+            if let Some(r) = reports.iter().find(|r| r.field == s.field) {
+                verification_rows(ui, t, r);
+            }
         });
     }
     action
@@ -1306,8 +1294,8 @@ fn key_usage(bits: u16) -> String {
         "Encipher Only",
         "Decipher Only",
     ];
-    let used: Vec<&str> = NAMES.iter().enumerate().filter(|(i, _)| bits & (1 << i) != 0).map(|(_, n)| *n).collect();
-    if used.is_empty() { "None".into() } else { used.join(", ") }
+    let used: Vec<&str> = NAMES.iter().enumerate().filter(|(i, _)| bits & (1 << i) != 0).map(|(_, n)| tl!(*n)).collect();
+    if used.is_empty() { tl!("None").into() } else { used.join(", ") }
 }
 
 /// What the viewer asks for.
@@ -1438,7 +1426,7 @@ mod tests {
     fn create_in(dir: &std::path::Path) -> Result<PathBuf, String> {
         let mut app = PdfCraftApp::new();
         app.export_dir_override = Some(dir.to_string_lossy().into_owned());
-        let mut draft = SignDraft::new(0, None, None, None, 0);
+        let mut draft = SignDraft::new(0, None, None, None, &[]);
         // P-256 keeps the test fast.
         let key = KEY_ALGORITHMS.iter().position(|k| k.1 == "p256").unwrap();
         draft.new_id =
@@ -1499,289 +1487,5 @@ mod tests {
         let mode = std::fs::metadata(&saved).unwrap().permissions().mode();
         assert_eq!(mode & 0o077, 0, "the private key is not readable by others: {mode:o}");
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// A signed signature widget for badge tests: status and modification vary.
-    fn widget_info(status: SignatureStatus, modification: pdfcraft_engine::sign::Modification, details: &[&str]) -> SignatureInfo {
-        SignatureInfo {
-            field: "Sig1".to_string(),
-            signed: true,
-            page: Some(0),
-            rect: Some([20.0, 20.0, 180.0, 60.0]),
-            visible: true,
-            signer: None,
-            certificate: None,
-            chain: Vec::new(),
-            date: None,
-            signing_time: None,
-            reason: None,
-            location: None,
-            contact: None,
-            sub_filter: None,
-            doc_timestamp: false,
-            certify: None,
-            revision: 2,
-            signed_len: 1000,
-            digest: None,
-            algorithm: None,
-            timestamp: false,
-            timestamp_time: None,
-            status,
-            modification,
-            details: details.iter().map(|d| d.to_string()).collect(),
-        }
-    }
-
-    #[test]
-    fn widget_badges_mirror_the_engine_verdict() {
-        use pdfcraft_engine::sign::Modification;
-        // Valid and trusted: green check, "valid" wording.
-        let b = widget_badge(&widget_info(SignatureStatus::Valid, Modification::None, &["The signer's identity is valid."])).unwrap();
-        assert_eq!((b.icon, b.color), ("circle-check", Color32::from_rgb(0x2D, 0x9D, 0x78)));
-        assert!(b.label.contains("valid") && !b.label.contains("unknown"), "{}", b.label);
-        // Intact but untrusted: yellow, explicitly unknown — never green.
-        let b = widget_badge(&widget_info(SignatureStatus::Unknown, Modification::None, &["The signer's identity is unknown."])).unwrap();
-        assert_eq!((b.icon, b.color), ("triangle-alert", Color32::from_rgb(0xE6, 0x86, 0x19)));
-        assert!(b.label.contains("unknown"), "{}", b.label);
-        // Unsupported: distinct indeterminate state, not red.
-        let b = widget_badge(&widget_info(SignatureStatus::Unknown, Modification::None, &["PdfCraft can't check this signature yet: test seam."]))
-            .unwrap();
-        assert_eq!((b.icon, b.color), ("circle-help", Color32::from_gray(0x6E)));
-        // Invalid: red, "invalid" wording.
-        let b = widget_badge(&widget_info(SignatureStatus::Invalid, Modification::None, &["The signature value does not match."])).unwrap();
-        assert_eq!((b.icon, b.color), ("circle-x", Color32::from_rgb(0xD7, 0x37, 0x3F)));
-        assert!(b.label.contains("invalid"), "{}", b.label);
-        // Modified after signing: red with a modified-document warning.
-        let b = widget_badge(&widget_info(SignatureStatus::Invalid, Modification::Disallowed(vec!["page content".into()]), &["altered"])).unwrap();
-        assert_eq!(b.icon, "circle-x");
-        assert!(b.label.contains("modified"), "{}", b.label);
-    }
-
-    #[test]
-    fn empty_fields_get_no_badge() {
-        let mut unsigned = widget_info(SignatureStatus::Unknown, pdfcraft_engine::sign::Modification::None, &[]);
-        unsigned.signed = false;
-        assert!(widget_badge(&unsigned).is_none());
-    }
-
-    #[test]
-    fn plates_cover_only_signed_visible_widgets_on_the_page() {
-        let xf = crate::canvas::PageXform { rect: Rect::from_min_max(pos2(0.0, 0.0), pos2(600.0, 800.0)), rot: 0, pw: 600.0, ph: 800.0 };
-        let info = badge_doc_info();
-        let mut other_page = widget_info(SignatureStatus::Valid, Modification::None, &[]);
-        other_page.page = Some(1);
-        let mut hidden = widget_info(SignatureStatus::Valid, Modification::None, &[]);
-        hidden.visible = false;
-        let mut no_rect = widget_info(SignatureStatus::Valid, Modification::None, &[]);
-        no_rect.rect = None;
-        let mut unsigned = widget_info(SignatureStatus::Unknown, Modification::None, &[]);
-        unsigned.signed = false;
-        let sigs = vec![
-            widget_info(SignatureStatus::Valid, Modification::None, &[]),
-            widget_info(SignatureStatus::Unknown, Modification::None, &[]),
-            other_page,
-            hidden,
-            no_rect,
-            unsigned,
-        ];
-        let plates = widget_plates(&sigs, 0, &xf, &info);
-        assert_eq!(plates.len(), 2, "only the two signed, visible widgets on page 0");
-        assert_eq!((plates[0].badge.icon, plates[1].badge.icon), ("circle-check", "triangle-alert"));
-        // Geometry follows the widget through the page transform, and the plate covers
-        // the whole widget: the baked appearance underneath cannot show through.
-        let sr = xf.user_rect(&info, 0, [20.0, 20.0, 180.0, 60.0]);
-        assert_eq!(plates[0].cover, sr);
-        assert!(widget_plates(&sigs, 1, &xf, &info).len() == 1);
-        assert!(widget_plates(&[], 0, &xf, &info).is_empty());
-        assert!(widget_plates(&sigs, 9, &xf, &info).is_empty(), "a page that does not exist shows nothing");
-    }
-
-    #[test]
-    fn valid_plate_shows_no_contradictory_indicator() {
-        // Regression test for the green-tick-over-question-mark bug: a valid, trusted
-        // signature yields exactly one plate, carrying the green verdict and covering the
-        // widget — never an unknown/invalid badge alongside it.
-        let xf = crate::canvas::PageXform { rect: Rect::from_min_max(pos2(0.0, 0.0), pos2(600.0, 800.0)), rot: 0, pw: 600.0, ph: 800.0 };
-        let info = badge_doc_info();
-        let sig = widget_info(SignatureStatus::Valid, Modification::None, &["The signer's identity is valid."]);
-        let plates = widget_plates(std::slice::from_ref(&sig), 0, &xf, &info);
-        assert_eq!(plates.len(), 1);
-        let plate = &plates[0];
-        assert_eq!(plate.badge.icon, "circle-check");
-        assert!(plate.badge.label.contains("valid") && !plate.badge.label.contains("unknown"), "{}", plate.badge.label);
-        assert!(!plate.badge.label.contains("Not Verified"), "{}", plate.badge.label);
-        let sr = xf.user_rect(&info, 0, [20.0, 20.0, 180.0, 60.0]);
-        assert!(plate.cover.contains_rect(sr), "the opaque cover hides the whole baked appearance");
-    }
-
-    #[test]
-    fn plate_layout_draws_status_text_for_eaadhaar_sizes() {
-        // A typical e-Aadhaar widget on screen: wide but short. The old fixed-12pt
-        // code dropped the status line here, leaving a tick-only rectangle.
-        let cover = Rect::from_min_max(pos2(0.0, 0.0), pos2(200.0, 53.0));
-        let l = plate_layout(cover, 105.0).expect("content for a normal widget");
-        // The status line fits the text column at the laid-out size.
-        assert!(105.0 * (l.status_size / 12.0) <= l.text_w + 0.01, "{l:?}");
-        assert!((3.0..=15.0).contains(&l.status_size), "{l:?}");
-        assert!(l.text_x > cover.left() && l.text_x < cover.right() - 40.0, "{l:?}");
-        assert!(cover.contains_rect(l.icon_rect), "{l:?}");
-    }
-
-    #[test]
-    fn plate_layout_never_drops_status_on_narrow_widgets() {
-        let cover = Rect::from_min_max(pos2(0.0, 0.0), pos2(70.0, 44.0));
-        let l = plate_layout(cover, 105.0).expect("content even when narrow");
-        // Shrunk uniformly to fit instead of dropped.
-        assert!(l.status_size < 12.0, "{l:?}");
-        assert!(105.0 * (l.status_size / 12.0) <= l.text_w + 0.01, "{l:?}");
-    }
-
-    #[test]
-    fn plate_layout_degenerate_cover_has_no_content() {
-        let tiny = Rect::from_min_max(pos2(0.0, 0.0), pos2(10.0, 10.0));
-        assert!(plate_layout(tiny, 105.0).is_none(), "cover paint alone hides the stale look");
-        let empty = Rect::from_min_max(pos2(0.0, 0.0), pos2(0.0, 0.0));
-        assert!(plate_layout(empty, 105.0).is_none());
-    }
-
-    fn badge_doc_info() -> pdfcraft_render::DocInfo {
-        let page = |label: &str| pdfcraft_render::PageInfo {
-            width: 600.0,
-            height: 800.0,
-            label: label.to_string(),
-            crop: [0.0, 0.0, 600.0, 800.0],
-            rotation: 0,
-        };
-        pdfcraft_render::DocInfo { pages: vec![page("1"), page("2")], ..Default::default() }
-    }
-
-    /// Render the harness frame and count (green-tick, dark-text) pixels inside the
-    /// screen-space `cover` rect. Green ~= Acrobat #00a651 tick fill.
-    fn stamp_pixels(h: &mut egui_kittest::Harness<'static, PdfCraftApp>, cover: Rect) -> (u32, u32) {
-        let image = h.render().expect("a rendered frame");
-        // The builder below uses 1200x800 logical points.
-        let (sx, sy) = (image.width() as f32 / 1200.0, image.height() as f32 / 800.0);
-        let (left, top, right, bottom) =
-            ((cover.left() * sx) as u32, (cover.top() * sy) as u32, (cover.right() * sx) as u32, (cover.bottom() * sy) as u32);
-        let mut green = 0u32;
-        let mut dark = 0u32;
-        for y in top..bottom.min(image.height()) {
-            for x in left..right.min(image.width()) {
-                let p = image.get_pixel(x, y).0;
-                let (r, g, b) = (i32::from(p[0]), i32::from(p[1]), i32::from(p[2]));
-                if g - r > 60 && g > 100 && b < 160 {
-                    green += 1;
-                }
-                if r < 100 && g < 100 && b < 100 {
-                    dark += 1;
-                }
-            }
-        }
-        (green, dark)
-    }
-
-    /// Plate data follows real validation through the app: yellow while the signer is
-    /// untrusted, green once trusted — recomputed, never stored.
-    #[test]
-    fn widget_badges_follow_trust_through_the_app() {
-        use egui_kittest::Harness;
-        const FIXTURE: &[u8] = b"%PDF-1.7
-1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
-2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
-3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
-4 0 obj << /Length 45 >> stream
-BT /F1 14 Tf 20 150 Td (Please sign below) Tj ET
-endstream endobj
-5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
-trailer << /Root 1 0 R >>
-%%EOF";
-        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
-            let mut app = PdfCraftApp::new();
-            app.set_option("language", "en").unwrap();
-            app
-        });
-        h.run_steps(1);
-        // Pin the clock before opening anything: a deterministic signing time.
-        {
-            let st = h.state_mut();
-            let s = std::mem::replace(&mut st.session, pdfcraft_engine::Session::new()).with_clock(|| 1_800_000_000);
-            st.session = s;
-            st.open_bytes("contract.pdf", None, FIXTURE.to_vec()).expect("opens");
-        }
-        h.run_steps(6);
-        let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
-        let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
-        let signer = digital_id.certificate.clone();
-        let doc_id = h.state().views[0].id;
-        let opts = SignOptions { page: 0, rect: Some([20.0, 20.0, 180.0, 60.0]), ..SignOptions::default() };
-        let signed = h.state().session.sign(doc_id, &digital_id, opts).unwrap();
-        h.state_mut().session.mark_signed(doc_id, signed, None).unwrap();
-        h.run_steps(6);
-        // Intact but untrusted: the canvas badge is yellow, like the panel and banner.
-        {
-            let s = h.state();
-            let doc = s.session.get(s.views[0].id).unwrap();
-            assert_eq!(doc.signatures.len(), 1);
-            let sig = &doc.signatures[0];
-            assert!(sig.signed && sig.visible && sig.page == Some(0));
-            let badge = widget_badge(sig).expect("a badge for the signed widget");
-            assert_eq!((badge.icon, badge.color), ("triangle-alert", Color32::from_rgb(0xE6, 0x86, 0x19)));
-            let view = &s.views[0];
-            let xf = view.page_xform(0).expect("a painted page transform");
-            let plates = widget_plates(&doc.signatures, 0, &xf, &doc.info);
-            assert_eq!(plates.len(), 1);
-            let r = sig.rect.unwrap();
-            let sr = xf.user_rect(&doc.info, 0, [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32]);
-            assert_eq!(plates[0].cover, sr, "the opaque plate hides the whole baked appearance");
-            assert_eq!(plates[0].badge.icon, "triangle-alert");
-            // No green tick pixels while untrusted: the yellow warning plate paints no green.
-            assert_eq!(stamp_pixels(&mut h, sr).0, 0, "no green tick before trust");
-        }
-        // Trusting the signer turns the badge green without touching the document.
-        let before = h.state().session.get(h.state().views[0].id).unwrap().bytes.clone();
-        h.state_mut().trust_certificate(signer);
-        h.run_steps(3);
-        {
-            let s = h.state();
-            let doc = s.session.get(s.views[0].id).unwrap();
-            assert_eq!(*before, *doc.bytes, "revalidation must not rewrite the file");
-            let sig = &doc.signatures[0];
-            let badge = widget_badge(sig).expect("a badge for the signed widget");
-            assert_eq!((badge.icon, badge.color), ("circle-check", Color32::from_rgb(0x2D, 0x9D, 0x78)));
-            assert_eq!(banner(&doc.signatures).map(|b| b.0), Some("circle-check"));
-            // The plate is unchanged geometrically — only the verdict flipped — and it
-            // still covers the widget, so no stale "not verified" look can leak through.
-            let view = &s.views[0];
-            let xf = view.page_xform(0).expect("a painted page transform");
-            let plates = widget_plates(&doc.signatures, 0, &xf, &doc.info);
-            assert_eq!(plates.len(), 1);
-            let r = sig.rect.unwrap();
-            let sr = xf.user_rect(&doc.info, 0, [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32]);
-            assert_eq!(plates[0].cover, sr);
-            assert!(plates[0].badge.label.contains("valid") && !plates[0].badge.label.contains("unknown"));
-            // The complete visual state travels with the plate: tick + valid text +
-            // signer details, with a signing date for the details line.
-            assert!(plates[0].signer.as_deref().is_some_and(|s| !s.trim().is_empty()));
-            assert!(plates[0].date.as_deref().is_some_and(|s| !s.trim().is_empty()));
-            let status_w = plates[0].badge.label.len() as f32 * 7.0;
-            let layout = plate_layout(sr, status_w).expect("a layout for the real widget");
-            assert!(layout.status_size > 0.0 && layout.text_x < sr.right());
-        }
-        // Actual pixels: the stamp paints green tick pixels and dark title/body text
-        // inside the widget cover — the rendering regression test.
-        let cover = h.state().session.get(h.state().views[0].id).unwrap().signatures[0].rect.map(|r| {
-            let s = h.state();
-            let doc = s.session.get(s.views[0].id).unwrap();
-            let xf = s.views[0].page_xform(0).expect("a painted page transform");
-            xf.user_rect(&doc.info, 0, [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32])
-        });
-        let cover = cover.expect("a widget rect");
-        let (green, dark) = stamp_pixels(&mut h, cover);
-        assert!(green >= 40, "the green tick painted only {green} pixels in {cover:?}");
-        assert!(dark >= 15, "the stamp title/body painted only {dark} pixels in {cover:?}");
-        if let Ok(path) = std::env::var("PDFCRAFT_STAMP_SHOT") {
-            let image = h.render().expect("a rendered frame");
-            image.save(&path).unwrap();
-        }
     }
 }

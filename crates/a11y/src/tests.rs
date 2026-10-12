@@ -157,6 +157,135 @@ fn row_and_column_spans_keep_a_table_regular() {
     assert_eq!(status(&r, Rule::TableRegularity), Status::Passed, "{:?}", r.result(Rule::TableRegularity));
 }
 
+/// A tagged document whose structure tree is the Document element `document` (object 3).
+fn structure_doc(objects: &[String]) -> Document {
+    let mut objs = vec!["<< /Type /Catalog /StructTreeRoot 2 0 R >>".to_string(), "<< /Type /StructTreeRoot /K 3 0 R >>".to_string()];
+    objs.extend_from_slice(objects);
+    pdf(&objs, "")
+}
+
+fn checked(doc: &Document, rules: &[Rule]) -> Report {
+    check(doc, &Options { rules: rules.iter().copied().collect(), pages: None })
+}
+
+#[test]
+fn figures_and_tables_past_the_old_element_cut_off_are_checked() {
+    // Five thousand paragraphs, then a figure without alternate text and a table whose second row
+    // is narrower than its first.
+    let mut kids = vec!["<< /S /P >>".to_string(); 5_000];
+    kids.push("<< /S /Figure >>".into());
+    kids.push(
+        "<< /S /Table /A << /O /Table /Summary (s) >> /K [ << /S /TR /K [ << /S /TD >> << /S /TD >> ] >> << /S /TR /K [ << /S /TD >> ] >> ] >>"
+            .into(),
+    );
+    let doc = structure_doc(&[format!("<< /S /Document /K [{}] >>", kids.join(" "))]);
+    let r = checked(&doc, &[Rule::FiguresAltText, Rule::TableRegularity]);
+    assert_eq!(r.result(Rule::FiguresAltText).unwrap().findings.len(), 1);
+    assert!(r.result(Rule::TableRegularity).unwrap().findings[0].message.contains("between 1 and 2"));
+}
+
+#[test]
+fn findings_are_listed_in_document_order_not_in_the_order_they_close() {
+    // Each element has alternate text but no content. The outer ones close last.
+    let doc = structure_doc(&["<< /S /Document /K [ << /S /Sect /Alt (a) /K [ << /S /P /Alt (b) /K [ << /S /Div /Alt (c) >> ] >> ] >> ] >>".into()]);
+    let r = checked(&doc, &[Rule::AltTextAssociated]);
+    let kinds: Vec<&str> = r.result(Rule::AltTextAssociated).unwrap().findings.iter().map(|f| f.message.split(' ').next().unwrap_or("")).collect();
+    assert_eq!(kinds, ["Sect", "P", "Div"]);
+}
+
+#[test]
+fn a_rule_lists_its_first_findings_and_counts_the_rest() {
+    let figures = vec!["<< /S /Figure >>".to_string(); 300].join(" ");
+    let doc = structure_doc(&[format!("<< /S /Document /K [{figures}] >>")]);
+    let r = checked(&doc, &[Rule::FiguresAltText]);
+    let found = &r.result(Rule::FiguresAltText).unwrap().findings;
+    assert_eq!(found.len(), 201);
+    assert_eq!(found[200].message, "… and 100 more");
+    assert!(found[..200].iter().all(|f| f.message == "Figure element: no alternate text"));
+}
+
+#[test]
+fn cycles_shared_kids_and_missing_kids_are_read_once() {
+    // Object 4 holds itself, a figure twice, and a missing object is listed too.
+    let doc = structure_doc(&[
+        "<< /S /Document /K [4 0 R 4 0 R 99 0 R] >>".into(),
+        "<< /S /Sect /K [4 0 R 5 0 R 5 0 R] >>".into(),
+        "<< /S /Figure >>".into(),
+    ]);
+    let r = checked(&doc, &[Rule::FiguresAltText]);
+    assert_eq!(r.result(Rule::FiguresAltText).unwrap().findings.len(), 1);
+}
+
+#[test]
+fn nesting_is_read_to_the_depth_limit_and_no_further() {
+    // Sections, each the kid of the one before, ending in a figure without alternate text. The
+    // figure is at depth `sections`; the walk reads depths up to 256.
+    let figure_within = |sections: usize| {
+        let mut objs: Vec<String> = (0..sections).map(|i| format!("<< /S /Sect /K {} 0 R >>", 4 + i)).collect();
+        objs.push("<< /S /Figure >>".into());
+        let r = checked(&structure_doc(&objs), &[Rule::FiguresAltText]);
+        r.result(Rule::FiguresAltText).unwrap().findings.len()
+    };
+    assert_eq!(figure_within(250), 1, "within the depth limit");
+    assert_eq!(figure_within(300), 0, "past the depth limit");
+}
+
+#[test]
+fn arrays_nested_deeper_than_the_limit_are_not_read() {
+    let nested = |n: usize| format!("<< /S /Document /K {}<< /S /Figure >>{} >>", "[".repeat(n), "]".repeat(n));
+    let shallow = checked(&structure_doc(&[nested(100)]), &[Rule::FiguresAltText]);
+    assert_eq!(shallow.result(Rule::FiguresAltText).unwrap().findings.len(), 1);
+    let deep = checked(&structure_doc(&[nested(300)]), &[Rule::FiguresAltText]);
+    assert_eq!(deep.result(Rule::FiguresAltText).unwrap().findings.len(), 0);
+}
+
+#[test]
+fn a_long_list_of_marked_content_counts_as_content() {
+    // The first paragraph holds 20,000 marked-content items, so its alternate text has content.
+    let items = (0..20_000).map(|i| i.to_string()).collect::<Vec<_>>().join(" ");
+    let doc = structure_doc(&[format!("<< /S /Document /K [ << /S /P /Alt (a) /K [{items}] >> << /S /P /Alt (b) >> ] >>")]);
+    let r = checked(&doc, &[Rule::AltTextAssociated]);
+    assert_eq!(r.result(Rule::AltTextAssociated).unwrap().findings.len(), 1);
+}
+
+#[test]
+fn huge_spans_do_not_size_the_table() {
+    // A row of 2,000 cells, each spanning 10,000 columns, then a row of one cell.
+    let wide = vec!["<< /S /TD /A << /O /Table /ColSpan 10000 >> >>".to_string(); 2_000].join(" ");
+    let doc = structure_doc(&[format!(
+        "<< /S /Document /K [ << /S /Table /A << /O /Table /Summary (s) >> /K [ << /S /TR /K [{wide}] >> << /S /TR /K [ << /S /TD >> ] >> ] >> ] >>"
+    )]);
+    let r = checked(&doc, &[Rule::TableRegularity]);
+    let found = &r.result(Rule::TableRegularity).unwrap().findings;
+    assert_eq!(found[0].message, "Table element: rows have between 1 and 20000000 columns");
+}
+
+#[test]
+fn row_spans_carry_past_their_row() {
+    // Row 1: 3,000 cells, each spanning 10,000 rows. Row 2: 3,000 cells, which start after them.
+    let row1 = vec!["<< /S /TD /A << /O /Table /RowSpan 10000 >> >>".to_string(); 3_000].join(" ");
+    let row2 = vec!["<< /S /TD >>".to_string(); 3_000].join(" ");
+    let doc = structure_doc(&[format!(
+        "<< /S /Document /K [ << /S /Table /A << /O /Table /Summary (s) >> /K [ << /S /TR /K [{row1}] >> << /S /TR /K [{row2}] >> ] >> ] >>"
+    )]);
+    let r = checked(&doc, &[Rule::TableRegularity]);
+    let found = &r.result(Rule::TableRegularity).unwrap().findings;
+    assert_eq!(found[0].message, "Table element: rows have between 3000 and 6000 columns");
+}
+
+#[test]
+fn spans_that_are_not_positive_integers_read_as_one() {
+    // ColSpan -3 and 0 read as 1, and 2.0 reads as 2; the first row is 4 columns wide, the second 5.
+    let doc = structure_doc(&[
+        "<< /S /Document /K [ << /S /Table /A << /O /Table /Summary (s) >> /K [ \
+         << /S /TR /K [ << /S /TD /A << /O /Table /ColSpan -3 >> >> << /S /TD /A << /O /Table /ColSpan 0 >> >> << /S /TD /A << /O /Table /ColSpan 2.0 >> >> ] >> \
+         << /S /TR /K [ << /S /TD >> << /S /TD >> << /S /TD >> << /S /TD >> << /S /TD >> ] >> ] >> ] >>"
+            .into(),
+    ]);
+    let r = checked(&doc, &[Rule::TableRegularity]);
+    assert_eq!(r.result(Rule::TableRegularity).unwrap().findings[0].message, "Table element: rows have between 4 and 5 columns");
+}
+
 #[test]
 fn page_content_and_annotation_problems_are_found() {
     let mut objs = good();
@@ -218,9 +347,15 @@ fn rules_have_ids_and_the_report_lists_them() {
     let per: Vec<usize> = Category::ALL.iter().map(|c| Rule::ALL.iter().filter(|r| r.category() == *c).count()).collect();
     assert_eq!(per, [8, 9, 2, 5, 5, 2, 1]);
     let doc = pdf(&good(), "/Info 8 0 R");
-    let html = report_html(&check(&doc, &Options::default()), "a<b>.pdf", "2026-10-02");
+    let report = check(&doc, &Options::default());
+    let html = report_html(&report, "a<b>.pdf", "2026-10-02", "en", &in_english);
     assert!(html.contains("a&lt;b&gt;.pdf") && html.contains("Accessibility permission flag") && html.contains("Needs manual check: 5"));
     assert!(html.contains("<h3>Headings</h3>"));
+    // In another language every word of ours is said in it, down to the `lang`; the file name is the
+    // file's own and stays as it is.
+    let other = report_html(&report, "a<b>.pdf", "2026-10-02", "es", &|w| format!("«{w}»"));
+    assert!(other.contains("<html lang=\"es\">") && other.contains("<h3>«Headings»</h3>") && other.contains("a&lt;b&gt;.pdf"));
+    assert!(!other.contains(">Headings<"), "an English heading is left in the report: {other}");
 }
 
 fn figures_doc() -> Document {
@@ -278,4 +413,150 @@ fn setting_alt_text_and_marking_decorative() {
     let pdfcraft_cos::Object::Stream(c) = &*c else { panic!("one content stream") };
     let text = String::from_utf8(c.decoded().unwrap()).unwrap();
     assert!(text.contains("/Artifact BMC") && !text.contains("/MCID 0"), "{text}");
+}
+
+fn ref_(n: u32) -> Option<pdfcraft_cos::ObjRef> {
+    Some(pdfcraft_cos::ObjRef::new(n, 0))
+}
+
+/// Two tagged pages: role-mapped and nested headings, actual text, a ToUnicode font, a heading
+/// without text and a heading that lists itself among its kids.
+fn headings_doc() -> Vec<String> {
+    vec![
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 8 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 5 0 R /Resources << /Font << /F1 7 0 R >> >> >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 6 0 R /Resources << /Font << /F1 7 0 R /F2 9 0 R >> >> >>".into(),
+        stream(
+            "/H1 << /MCID 0 >> BDC BT /F1 12 Tf 20 180 Td (Chapter) Tj ( One) Tj ET EMC \
+             /P << /MCID 1 >> BDC BT (Body) Tj ET EMC \
+             /H << /MCID 2 >> BDC BT /F1 10 Tf [(Sec) -500 (A)] TJ ET EMC",
+        ),
+        stream("/H2 << /MCID 0 >> BDC BT /F1 12 Tf (Ignored) Tj ET EMC /H3 << /MCID 1 >> BDC BT /F2 12 Tf <0102> Tj ET EMC"),
+        FONT.into(),
+        "<< /Type /StructTreeRoot /K 10 0 R /RoleMap << /Chapter /H1 >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Custom /ToUnicode 11 0 R >>".into(),
+        "<< /S /Document /K [12 0 R << /S /P /Pg 3 0 R /K 1 >> << /S /Sect /K << /S /Sect /K 13 0 R >> >> 14 0 R 15 0 R 16 0 R] >>".into(),
+        stream(
+            "/CIDInit /ProcSet findresource begin 12 dict begin begincmap 1 begincodespacerange <00> <FF> endcodespacerange \
+             2 beginbfchar <01> <0041> <02> <0042> endbfchar endcmap end end",
+        ),
+        "<< /S /Chapter /Pg 3 0 R /K 0 >>".into(),
+        "<< /S /H /Pg 3 0 R /K << /Type /MCR /MCID 2 >> >>".into(),
+        "<< /S /H2 /Pg 4 0 R /ActualText (Override) /K 0 >>".into(),
+        "<< /S /H3 /Pg 4 0 R /K [1 15 0 R] >>".into(),
+        "<< /S /H1 /Pg 4 0 R /K 9 >>".into(),
+    ]
+}
+
+#[test]
+fn headings_are_found_with_their_levels_titles_and_pages() {
+    let doc = pdf(&headings_doc(), "");
+    let found: Vec<_> = headings(&doc).into_iter().map(|h| (h.title, h.level, h.page, h.obj)).collect();
+    assert_eq!(
+        found,
+        [
+            ("Chapter One".to_string(), 1, 0, ref_(12)),
+            ("Sec A".to_string(), 2, 0, ref_(13)),
+            ("Override".to_string(), 2, 1, ref_(14)),
+            ("AB".to_string(), 3, 1, ref_(15)),
+        ]
+    );
+}
+
+#[test]
+fn an_untagged_document_has_no_headings() {
+    let mut objs = headings_doc();
+    objs[0] = "<< /Type /Catalog /Pages 2 0 R >>".into();
+    assert!(headings(&pdf(&objs, "")).is_empty());
+}
+
+/// The text of every `"…"` literal with a space in it, outside comments and byte strings.
+fn sentences(source: &str) -> Vec<String> {
+    let b = source.as_bytes();
+    let (mut out, mut i) = (Vec::new(), 0);
+    while i < b.len() {
+        if b[i] == b'/' && b.get(i + 1) == Some(&b'/') {
+            while i < b.len() && b[i] != b'\n' {
+                i += 1;
+            }
+        } else if b[i] == b'"' {
+            let byte_string = i > 0 && b[i - 1] == b'b';
+            let start = i + 1;
+            i = start;
+            while i < b.len() && b[i] != b'"' {
+                i += if b[i] == b'\\' { 2 } else { 1 };
+            }
+            // Quotes and backslashes are ASCII, so this never cuts a character in two.
+            let text = source.get(start..i.min(b.len())).unwrap_or_default();
+            if !byte_string && text.contains(' ') {
+                out.push(text.replace("\\\"", "\""));
+            }
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Every sentence the rules can say is listed in `WORDINGS`, so an interface showing the report in
+/// another language has something to translate. The two rule files hold no prose of their own, so a
+/// literal with a space in it is a sentence a person reads.
+#[test]
+fn wordings_are_complete() {
+    let mut missing = Vec::new();
+    for source in [include_str!("content.rs"), include_str!("structure.rs")] {
+        for sentence in sentences(source) {
+            if !WORDINGS.contains(&sentence.as_str()) {
+                missing.push(sentence);
+            }
+        }
+    }
+    assert!(missing.is_empty(), "add these to WORDINGS, and a translation of each to every interface: {missing:#?}");
+}
+
+/// Every word the report page says of its own is listed in `REPORT_WORDS`, and every word on that
+/// list is one the page says: the page hands each over to `words` as a literal, so the two can be
+/// read off one another.
+#[test]
+fn report_words_are_complete() {
+    let source = include_str!("report.rs");
+    let mut said = Vec::new();
+    let mut rest = source;
+    while let Some(at) = rest.find("words(\"") {
+        rest = &rest[at + 7..];
+        let Some(end) = rest.find('"') else { break };
+        said.push(&rest[..end]);
+        rest = &rest[end..];
+    }
+    let missing: Vec<&&str> = said.iter().filter(|word| !REPORT_WORDS.contains(word)).collect();
+    assert!(missing.is_empty(), "add these to REPORT_WORDS, and a translation of each to every interface: {missing:#?}");
+    let unsaid: Vec<&&str> = REPORT_WORDS.iter().filter(|word| !said.contains(word)).collect();
+    assert!(unsaid.is_empty(), "REPORT_WORDS lists words the page no longer says: {unsaid:#?}");
+}
+
+/// `say` puts the values in, and what it puts in is never read as a hole of its own: a document that
+/// names a font `{p}` cannot make a finding say which page it is on.
+#[test]
+fn say_fills_holes_once() {
+    let values = [("{p}", "7".to_string()), ("{}", "{p} {n}".to_string())];
+    assert_eq!(
+        say("Font {} on page {p} doesn't map its characters to Unicode", &values),
+        "Font {p} {n} on page 7 doesn't map its characters to Unicode"
+    );
+    // A hole with nothing for it, and a brace with nothing closing it, are left as they stand.
+    assert_eq!(say("{a} {p} {", &values), "{a} 7 {");
+}
+
+/// A finding whose frame holds another wording says the whole thing in English, holes and all
+/// filled, and still hands the interface the two wordings to translate.
+#[test]
+fn a_nested_finding_says_itself() {
+    let values = vec![("{min}", "1".to_string()), ("{max}", "2".to_string()), ("{ty}", "Table".to_string()), ("{p}", "3".to_string())];
+    let f = Finding::nested(Some(2), "{ty} element on page {p}: {what}", "rows have between {min} and {max} columns", values);
+    assert_eq!(f.message, "Table element on page 3: rows have between 1 and 2 columns");
+    assert_eq!(f.said(&in_english), f.message, "saying it in English is the message");
+    // Both wordings are translated, each on its own, and the document's words are left alone.
+    assert_eq!(f.said(&|w: &str| format!("«{w}»")), "«Table element on page 3: «rows have between 1 and 2 columns»»");
 }

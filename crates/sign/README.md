@@ -20,7 +20,9 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
   no fix, so `rsa` is only used to verify). ECDSA signs with deterministic nonces (RFC 6979).
 - **Signing:** PAdES B-B (`ETSI.CAdES.detached`, signing-certificate-v2, SHA-256/384, no SHA-1).
   An existing unsigned field or a new one (visible with Acrobat's name-and-details appearance,
-  or invisible); certification with DocMDP P=1/2/3. The document is written incrementally
+  or invisible); certification with DocMDP P=1/2/3. A visible signature can show a `Graphic`
+  where the large name would be: drawn strokes, filled outlines (a typed signature) or RGBA
+  pixels (an image XObject with a soft mask), checked and size-capped first. The document is written incrementally
   with a zero-filled `/Contents` and fixed-width `/ByteRange`, which are then patched in
   place. Encrypted documents are refused for now.
 - **Timestamps (PAdES B-T):** the `timestamp` module builds and parses RFC 3161 requests,
@@ -54,7 +56,11 @@ ECDSA P-256/P-384; the store integration is tested with software-backed keys. A 
 or token whose driver registers a CNG key storage provider is such an identity too: the key
 is opened for signing without the silent flag, so the provider shows its own PIN dialog
 (checked by hand with a SafeNet token; CI has no hardware). A store identity signs with the
-issuers Windows chains its certificate to, without the root.
+issuers Windows chains its certificate to, without the root. Store certificates that can't
+sign (no private key, another key type, a key CNG can't open) are returned by
+`windows::list` as `unusable` with the reason and the Windows error code, shown greyed in
+the Sign dialog and by `sign_windows_ids`, instead of being left out silently; a key that
+needs a prompt to open is listed and asks at signing (issue #179).
 - **Validation:** `/ByteRange` and the CMS are read from the file's own bytes; the digest,
   the signature value and the signer's chain (against a `TrustStore`) are checked. Later
   revisions are diffed against the signed one, and the changes are classified (signing, form
@@ -66,6 +72,11 @@ issuers Windows chains its certificate to, without the root.
   `pathLenConstraint` that allows the CAs below it, and, given the signing time, validity then.
   Certificates embedded in a document are in the pool too, so an ordinary subscriber certificate
   can never vouch for another one; when an issuer is refused, the signature's details say why.
+- **The signer's certificate must allow signing documents** (`Certificate::signing_problem`): a
+  key usage needs digitalSignature or nonRepudiation, an extended key usage needs a
+  document-signing purpose (any, emailProtection, codeSigning, RFC 9336 documentSigning, Adobe
+  Authentic Documents, Microsoft document signing), and no critical extension may be one PdfCraft
+  doesn't process. Otherwise the verdict is unknown, never valid, and the details say why.
 - **BER as well as DER.** The CMS is read with `der::Tlv::parse_ber`, as Windows CryptoAPI, Adobe
   PPKMS, DocuSign, Documenso and `openssl cms -stream` write it: indefinite lengths and an
   OCTET STRING split into segments. Only the structure is read that way; certificates and signed
@@ -119,18 +130,16 @@ those roots. PdfCraft bundles them and verifies natively — no separate app, no
   CRLs/OCSP), signing-time source (signer's clock claim vs validated timestamp), later
   changes (none / allowed / disallowed), and recommended next steps. A matching subject
   name alone never counts as trusted (tested with a spoofed `CN=CCA India 2022`).
-- **Use it:** fresh sessions already trust the bundle, so genuine e-Aadhaar PDFs
-  validate green on open. The Signatures panel shows *CCA India roots trusted*, or
-  *Verify with CCA India roots* to re-add them after the store was cleared; headless
-  `sign_verify` takes `trust: "both"` (default), `"session"`, or `"cca"` — see
-  `Session::verify_signatures` and `VerifyTrust`. Encrypted e-Aadhaar PDFs open with
-  their user password first.
-- **Canvas stamp:** a successfully verified, trusted signature gets the reference
-  verifier's Adobe-style stamp as a viewer-only overlay: opaque white cover over the
-  widget's baked appearance, the green tick ribbon (#00a651 with black shadow and
-  outline, triangulated from the reference polygon), the "Signature valid" title, and
-  signer identity + signing-date lines scaled to the widget. Anything else keeps a
-  distinct warning plate (untrusted, invalid, modified, or not yet checkable).
+- **Use it:** fresh sessions start with no trusted certificates. Headless
+  `sign_verify` consults the session store by default; `trust: "cca"` or
+  `"both"` explicitly selects CCA roots for that verification. Persistent root
+  trust is an explicit user action. Integration with the named, opt-in trust
+  sets in #622 remains separate work.
+- **Reports respect core validation:** an anchor match cannot promote a core
+  Unknown/Invalid result to Trusted or an overall valid result. Missing signing
+  time is reported separately from an expired certificate.
+- **Document appearance:** signature widgets retain their own appearance. No
+  canvas plate or copied third-party stamp covers signed document content.
 
 Limitations: revocation needs evidence embedded in the file (`/DSS`); without it the
 report says unknown and suggests an online OCSP/CRL check for high assurance.

@@ -191,8 +191,21 @@ impl Automation {
             .filter(|c| c.in_reply_to.is_none() && only.is_none_or(|p| c.page == p))
             .map(|c| {
                 let mut v = view(c);
-                let thread: Vec<&Annotation> = match &c.name {
-                    Some(nm) => all.iter().filter(|r| r.in_reply_to.as_deref() == Some(nm.as_str())).collect(),
+                // Every reply under this comment, at any depth, in document order. A reply to a
+                // reply keeps its `/IRT` on the direct parent, so following one level would drop it.
+                let descends_from = |r: &Annotation, root: &str| -> bool {
+                    let mut parent = r.in_reply_to.as_deref();
+                    for _ in 0..64 {
+                        let Some(nm) = parent else { return false };
+                        if nm == root {
+                            return true;
+                        }
+                        parent = all.iter().find(|x| x.name.as_deref() == Some(nm)).and_then(|x| x.in_reply_to.as_deref());
+                    }
+                    false
+                };
+                let thread: Vec<&Annotation> = match c.name.as_deref() {
+                    Some(nm) => all.iter().filter(|r| r.in_reply_to.is_some() && descends_from(r, nm)).collect(),
                     None => Vec::new(),
                 };
                 let status = thread.iter().rev().filter(|r| !r.is_mark()).find_map(|r| r.state.clone());
@@ -488,6 +501,14 @@ impl Automation {
             // A typed signature or initials in the script font, left edge at `at`, upright as displayed.
             kind @ ("signature" | "initials") => {
                 let t = a.str("text")?;
+                // Nobody sees a preview here: refuse what the script font would leave out.
+                if let Some(c) = pdfcraft_engine::script_missing(t) {
+                    return Err(ToolError::InvalidArgs(format!(
+                        "the signature script font can't draw \"{}\" (U+{:04X}); type the {kind} in Latin, Cyrillic or Greek letters, or pass `path` to a PNG or JPEG image of it instead of `text`",
+                        c.escape_debug(),
+                        u32::from(c)
+                    )));
+                }
                 let h = if kind == "initials" { 24.0 } else { 32.0 };
                 let shape = pdfcraft_engine::typed_signature_shape(at, t, h, i64::from(info.rotation))
                     .ok_or_else(|| ToolError::InvalidArgs("text has nothing to draw".into()))?;
@@ -564,6 +585,10 @@ impl Automation {
         let (color, opacity, width) = (a.color("color")?, a.opt_num("opacity")?, a.opt_num("width")?);
         if color.is_some() || opacity.is_some() || width.is_some() {
             edits.push(Edit::StyleAnnotation { page, index, color, opacity, width, endings: None });
+        }
+        if let Some(f) = a.opt_str("fill")? {
+            let fill = if f.eq_ignore_ascii_case("none") { None } else { Some(parse_color(f)?) };
+            edits.push(Edit::FillAnnotation { page, index, fill });
         }
         if let Some(r) = a.nums::<4>("rect")? {
             edits.push(Edit::ResizeAnnotation { page, index, rect: rect_to_user(&info, r) });

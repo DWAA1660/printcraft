@@ -20,7 +20,7 @@
 use pdfcraft_cos::Document;
 
 use crate::cca;
-use crate::pdf::{Modification, SignatureInfo, Status, TrustStore, list};
+use crate::pdf::{Detail, Modification, SignatureInfo, Status, TrustStore, list};
 
 /// Whether the signed bytes still match the signature.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -137,20 +137,20 @@ pub struct DocumentSummary {
     pub revocation_unknown: usize,
     pub modified_disallowed: usize,
     /// One of: `no-signatures`, `invalid`, `unsupported`, `expired-or-invalid-cert`,
-    /// `untrusted`, `valid`.
+    /// `untrusted`, `unknown`, `no-signing-time`, `valid`.
     pub overall: String,
     pub overall_text: String,
 }
 
-fn contains_any(details: &[String], needles: &[&str]) -> bool {
+fn contains_any(details: &[Detail], needles: &[&str]) -> bool {
     details.iter().any(|d| {
-        let lower = d.to_lowercase();
+        let lower = d.message.to_lowercase();
         needles.iter().any(|n| lower.contains(n))
     })
 }
 
-fn first_detail(details: &[String]) -> String {
-    details.first().cloned().unwrap_or_else(|| "No details recorded.".to_string())
+fn first_detail(details: &[Detail]) -> String {
+    details.first().map(|d| d.message.clone()).unwrap_or_else(|| "No details recorded.".to_string())
 }
 
 fn chain_trusts(info: &SignatureInfo, trust: &TrustStore) -> bool {
@@ -169,7 +169,10 @@ fn chain_anchor(info: &SignatureInfo, trust: &TrustStore) -> Option<(String, boo
 
 /// Map one validated signature to its report.
 pub fn report_for(info: &SignatureInfo, trust: &TrustStore) -> SignatureReport {
-    let trusted = info.signed && chain_trusts(info, trust);
+    // An anchor match cannot override the core validator's certificate-purpose,
+    // lifetime, cryptography or other refusal. It is the authority for acceptance.
+    let anchored = info.signed && chain_trusts(info, trust);
+    let trusted = anchored && info.status == Status::Valid;
     let trust = if trusted {
         let (anchor, via_cca) = chain_anchor(info, trust).unwrap_or_else(|| ("a trusted certificate".to_string(), false));
         Trust::Trusted { anchor, via_cca }
@@ -251,7 +254,9 @@ pub fn report_for(info: &SignatureInfo, trust: &TrustStore) -> SignatureReport {
         Integrity::Intact | Integrity::NotApplicable => {}
     }
     if info.signed {
-        if matches!(trust, Trust::Untrusted) {
+        if anchored && info.status != Status::Valid {
+            next_steps.push("The core validator did not accept this signature. Review its validation details before relying on the document.".into());
+        } else if matches!(trust, Trust::Untrusted) {
             next_steps.push("The signature is intact but the signer is not trusted. For e-Aadhaar, verify with the bundled CCA India roots; otherwise add the signer's root to trusted certificates and validate again.".to_string());
         }
         if matches!(cert_validity, CertValidity::NotValidAtSigning { .. }) {
@@ -269,10 +274,15 @@ pub fn report_for(info: &SignatureInfo, trust: &TrustStore) -> SignatureReport {
 
     let summary = if !info.signed {
         "Unsigned signature field.".to_string()
+    } else if info.status == Status::Unknown && anchored {
+        info.summary().to_string()
     } else {
         match (&integrity, &trust, &cert_validity) {
             (Integrity::Altered { .. }, _, _) => "Signature is INVALID: the document changed or the signature does not verify.".to_string(),
             (Integrity::Unknown { .. }, _, _) => "Verification is INCOMPLETE: PdfCraft cannot check this signature yet.".to_string(),
+            (Integrity::Intact, _, CertValidity::NoSigningTime) => {
+                "Signature is intact, but no signing time is recorded to check the certificate's validity at signing.".to_string()
+            }
             (Integrity::Intact, Trust::Trusted { .. }, CertValidity::Valid) => "Signature is valid and the signer is trusted.".to_string(),
             (Integrity::Intact, Trust::Trusted { .. }, _) => {
                 "Signature is intact and the signer is trusted, but the certificate was not valid at the signing time.".to_string()
@@ -314,7 +324,7 @@ pub fn report_for(info: &SignatureInfo, trust: &TrustStore) -> SignatureReport {
         signed_len: info.signed_len,
         doc_timestamp: info.doc_timestamp,
         summary,
-        details: info.details.clone(),
+        details: info.details.iter().map(|d| d.message.clone()).collect(),
         next_steps,
     }
 }
@@ -358,7 +368,8 @@ pub fn summarize(reports: &[SignatureReport]) -> DocumentSummary {
     };
     for r in reports.iter().filter(|r| r.signed) {
         match r.status {
-            Status::Valid => s.valid += 1,
+            Status::Valid if r.cert_validity == CertValidity::Valid && matches!(r.trust, Trust::Trusted { .. }) => s.valid += 1,
+            Status::Valid => {}
             Status::Invalid => s.invalid += 1,
             Status::Unknown => {}
         }
@@ -391,6 +402,10 @@ pub fn summarize(reports: &[SignatureReport]) -> DocumentSummary {
         ("expired-or-invalid-cert", "At least one signer certificate was not valid at the signing time.")
     } else if s.untrusted > 0 {
         ("untrusted", "Signatures are intact but at least one signer is not trusted.")
+    } else if reports.iter().any(|r| r.signed && r.cert_validity == CertValidity::NoSigningTime) {
+        ("no-signing-time", "A signature has no recorded signing time to check certificate validity at signing.")
+    } else if s.valid != signed {
+        ("unknown", "Verification is incomplete: the core validator has not accepted every signature.")
     } else {
         ("valid", "All signatures are valid and trusted.")
     };

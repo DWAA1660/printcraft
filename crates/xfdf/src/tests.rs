@@ -36,6 +36,52 @@ fn blank() -> Document {
     Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap()
 }
 
+/// A deeply nested field tree is refused with an error. The walk used to recurse once per level
+/// with nothing bounding it, so a small file overflowed the stack - and a stack overflow aborts
+/// the process, which no `catch_unwind` can intercept.
+#[test]
+fn deeply_nested_fields_are_refused_instead_of_overflowing_the_stack() {
+    let mut xml = String::from(r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><fields>"#);
+    for i in 0..10_000 {
+        xml.push_str(&format!(r#"<field name="f{i}">"#));
+    }
+    xml.push_str("<value>v</value>");
+    for _ in 0..10_000 {
+        xml.push_str("</field>");
+    }
+    xml.push_str("</fields></xfdf>");
+    assert!(matches!(data_values(xml.as_bytes()), Err(DataError::Malformed(_))), "ten thousand nested fields must be refused, not walked");
+}
+
+/// Nesting inside the limit still reads, and the dotted field name is built as before.
+#[test]
+fn nested_fields_within_the_limit_still_read() {
+    let mut xml = String::from(r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><fields>"#);
+    for i in 0..16 {
+        xml.push_str(&format!(r#"<field name="f{i}">"#));
+    }
+    xml.push_str("<value>deep</value>");
+    for _ in 0..16 {
+        xml.push_str("</field>");
+    }
+    xml.push_str("</fields></xfdf>");
+    let Ok(values) = data_values(xml.as_bytes()) else { panic!("sixteen levels must still read") };
+    assert_eq!(values.len(), 1);
+    assert_eq!(values[0].0, "f0.f1.f2.f3.f4.f5.f6.f7.f8.f9.f10.f11.f12.f13.f14.f15");
+    assert_eq!(values[0].1, vec!["deep".to_string()]);
+}
+
+/// The scanner counts a tag that closes itself as one level while it is read, not as a level left
+/// open, so a flat file with thousands of them stays shallow and is not refused.
+#[test]
+fn self_closing_elements_do_not_accumulate_in_the_depth() {
+    use crate::xml_nesting_depth as d;
+    assert_eq!(d("<a/>"), 1);
+    assert_eq!(d("<a><b/></a>"), 2);
+    assert_eq!(d(&"<empty/>".repeat(2_000)), 1);
+    assert_eq!(d(&format!("<fields>{}</fields>", r#"<field name="a"/>"#.repeat(2_000))), 2);
+}
+
 /// The blank document with comments and values.
 fn filled() -> Document {
     let mut doc = blank();
@@ -329,5 +375,224 @@ fn unicode_annotation_colours_are_ignored_without_panicking() {
         );
         let report = import(&mut doc, xml.as_bytes()).unwrap();
         assert_eq!(report.comments, 1);
+    }
+}
+
+/// Importing the same note again must not leave the earlier pop-up on the page.
+#[test]
+fn reimporting_a_note_replaces_its_popup() {
+    let xfdf = concat!(
+        r#"<xfdf xmlns="http://ns.adobe.com/xfdf/"><annots><text page="0" name="n1" rect="10,10,30,30"><contents>body</contents>"#,
+        r#"<popup page="0" rect="40,10,140,60" open="no"/></text></annots></xfdf>"#,
+    );
+    let mut doc = blank();
+    for _ in 0..3 {
+        import(&mut doc, xfdf.as_bytes()).unwrap();
+    }
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    let annots = doc.get(page).as_dict().and_then(|p| p.get(b"Annots").cloned()).and_then(|a| doc.resolve(&a).as_array().cloned()).unwrap();
+    let refs: Vec<ObjRef> = annots.iter().filter_map(|a| a.as_ref()).collect();
+    let is_popup = |r: &ObjRef| doc.get(*r).as_dict().and_then(|d| d.name(b"Subtype")) == Some(b"Popup".as_slice());
+    let popups: Vec<ObjRef> = refs.iter().copied().filter(is_popup).collect();
+    assert_eq!(popups.len(), 1, "one current pop-up, not one per import");
+    let parent = doc.get(popups[0]).as_dict().and_then(|d| d.reference(b"Parent")).unwrap();
+    assert!(refs.contains(&parent), "the pop-up belongs to a note that is still on the page");
+}
+
+#[test]
+fn imported_redact_marks_cannot_replace_a_locked_mark_or_hide_themselves() {
+    let mut doc = blank();
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    // A locked redaction mark the user placed, with a known /NM.
+    let mut mark = Dict::new();
+    mark.set(b"Type".to_vec(), Object::name("Annot"));
+    mark.set(b"Subtype".to_vec(), Object::name("Redact"));
+    mark.set(b"NM".to_vec(), PdfString::text("mark1"));
+    mark.set(b"Rect".to_vec(), Object::Array(vec![60.into(), 660.into(), 560.into(), 678.into()]));
+    mark.set(b"F".to_vec(), Object::Int(128)); // Locked
+    let mark_ref = doc.add(Object::Dict(mark));
+    let mut annots =
+        doc.get(page).as_dict().and_then(|p| p.get(b"Annots").cloned()).and_then(|a| doc.resolve(&a).as_array().cloned()).unwrap_or_default();
+    annots.push(Object::Ref(mark_ref));
+    doc.update_dict(page, |p| p.set(b"Annots".to_vec(), Object::Array(annots))).unwrap();
+
+    // A reviewer's XFDF: shrink the locked mark to a 1×1 corner by reusing its /NM, and add a
+    // redaction mark imported as Hidden that would remove other content unseen.
+    let xfdf = concat!(
+        r#"<xfdf xmlns="http://ns.adobe.com/xfdf/"><annots>"#,
+        r#"<redact page="0" name="mark1" rect="0,0,1,1" title="Reviewer"/>"#,
+        r#"<redact page="0" name="ghost" rect="60,600,560,620" flags="hidden" title="Reviewer"/>"#,
+        r#"</annots></xfdf>"#,
+    );
+    import(&mut doc, xfdf.as_bytes()).unwrap();
+
+    let refs: Vec<ObjRef> = doc
+        .get(page)
+        .as_dict()
+        .and_then(|p| p.get(b"Annots").cloned())
+        .and_then(|a| doc.resolve(&a).as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|a| a.as_ref())
+        .collect();
+    // The locked mark is still there, unchanged (same object, same geometry, still its /NM).
+    assert!(refs.contains(&mark_ref), "the locked redaction mark was replaced");
+    let locked = doc.get(mark_ref).as_dict().cloned().unwrap();
+    assert_eq!(nums_of(&doc, locked.get(b"Rect")), vec![60.0, 660.0, 560.0, 678.0], "the locked mark's geometry was changed");
+    assert_eq!(locked.get(b"NM").and_then(|n| n.as_string().map(|s| s.to_text())).as_deref(), Some("mark1"));
+    assert_eq!(locked.int(b"F"), Some(128), "the locked mark lost its Locked flag");
+    // Every redaction mark on the page is visible (none Invisible/Hidden/NoView): the import's two
+    // marks were added beside the protected one, both drawable for review.
+    let redacts: Vec<Dict> =
+        refs.iter().map(|r| doc.get(*r).as_dict().cloned().unwrap()).filter(|d| d.name(b"Subtype") == Some(b"Redact".as_slice())).collect();
+    assert_eq!(redacts.len(), 3, "the imported marks should be added, not merged away");
+    for d in &redacts {
+        assert_eq!(d.int(b"F").unwrap_or(0) & (1 | 2 | 32), 0, "a redaction mark is hidden from review: {d:?}");
+    }
+}
+
+/// The `/Vertices` of every annotation on the document's pages, by subtype.
+fn vertices(doc: &Document) -> Vec<(String, Vec<f64>)> {
+    let mut out = Vec::new();
+    for p in pdfcraft_model::pages(doc) {
+        for a in p.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default() {
+            let Some(d) = doc.resolve(&a).as_dict().cloned() else { continue };
+            let sub = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
+            let v = nums_of(doc, d.get(b"Vertices"));
+            if !v.is_empty() {
+                out.push((sub, v));
+            }
+        }
+    }
+    out
+}
+
+/// storytold/pdfcraft#809: XFDF exchange dropped polygon and polyline vertices, so the
+/// imported comments had no shape (and no appearance).
+#[test]
+fn xfdf_keeps_polygon_and_polyline_vertices() {
+    let mut src = blank();
+    let meta = |id: &str| Meta { date: Some("D:20261002120000Z".into()), id: id.into() };
+    let polygon = Shape::Polygon { vertices: vec![[100.0, 100.0], [200.0, 120.0], [150.0, 220.5]], cloud: false };
+    let polyline = Shape::PolyLine {
+        vertices: vec![[50.0, 300.0], [120.0, 380.0], [200.0, 310.0]],
+        start: pdfcraft_annot::LineEnding::None,
+        end: pdfcraft_annot::LineEnding::ClosedArrow,
+    };
+    for (page, shape, id) in [(0, polygon, "pg"), (1, polyline, "pl")] {
+        let new = NewAnnotation { page, style: Style::default_for(&shape), shape, contents: id.into(), author: "Ada".into() };
+        add_annotation(&mut src, &new, &meta(id)).unwrap();
+    }
+    let xfdf = export_xfdf(&src, true, false, "shapes.pdf");
+    assert!(xfdf.contains("<vertices>100,100;200,120;150,220.5</vertices>"), "{xfdf}");
+    assert!(xfdf.contains("<vertices>50,300;120,380;200,310</vertices>"), "{xfdf}");
+    let mut dst = blank();
+    let r = import(&mut dst, xfdf.as_bytes()).unwrap();
+    assert_eq!(r.comments, 2, "{r:?}");
+    assert_eq!(vertices(&dst), vertices(&src));
+    // The imported shapes are drawn again.
+    for p in pdfcraft_model::pages(&dst) {
+        for a in p.dict.get(b"Annots").map(|a| dst.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default() {
+            let d = dst.resolve(&a).as_dict().cloned().unwrap();
+            assert!(d.get(b"AP").is_some(), "{d:?}");
+        }
+    }
+    // Acrobat-style input: a stray trailing number is dropped and only whole points are kept.
+    let odd = r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><annots>
+        <polygon page="0" rect="0,0,50,50" name="odd"><vertices>1,2;3,4;5,6;7</vertices></polygon>
+        <polygon page="0" rect="0,0,50,50" name="none"><vertices>junk</vertices></polygon>
+        </annots></xfdf>"#;
+    let mut dst = blank();
+    import(&mut dst, odd.as_bytes()).unwrap();
+    assert_eq!(vertices(&dst), vec![("Polygon".to_string(), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])]);
+}
+
+#[test]
+fn xfdf_keeps_callout_leader_inset_and_ending() {
+    let mut src = blank();
+    let shape = Shape::Callout {
+        rect: [40.0, 300.0, 180.0, 360.0],
+        knee: [260.0, 330.0],
+        point: [320.0, 200.0],
+        font_size: 12.0,
+        ending: pdfcraft_annot::LineEnding::ClosedArrow,
+    };
+    let meta = Meta { date: Some("D:20261002120000Z".into()), id: "c1".into() };
+    add_annotation(
+        &mut src,
+        &NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: "leader".into(), author: "Ada".into() },
+        &meta,
+    )
+    .unwrap();
+    let xfdf = export_xfdf(&src, true, false, "form.pdf");
+    let mut dst = blank();
+    import(&mut dst, xfdf.as_bytes()).unwrap();
+    let callout_keys = |doc: &Document| {
+        let page = pdfcraft_model::pages(doc).remove(0);
+        let annots = page.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
+        let d = annots.iter().filter_map(|a| doc.resolve(a).as_dict().cloned()).find(|d| d.name(b"Subtype") == Some(b"FreeText")).unwrap();
+        (
+            nums_of(doc, d.get(b"Rect")),
+            nums_of(doc, d.get(b"CL")),
+            nums_of(doc, d.get(b"RD")),
+            d.name(b"IT").map(<[u8]>::to_vec),
+            d.get(b"LE").and_then(|o| o.as_name()).map(<[u8]>::to_vec),
+        )
+    };
+    let want = callout_keys(&src);
+    assert_eq!(want.1.len(), 6, "{want:?}");
+    assert_eq!(callout_keys(&dst), want, "{xfdf}");
+}
+
+/// Run `f` on a thread with a small stack, as a deep recursion would overflow it.
+fn on_small_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    std::thread::Builder::new().stack_size(256 << 10).spawn(f).unwrap().join().unwrap()
+}
+
+#[test]
+fn deeply_nested_xml_is_refused_before_parsing() {
+    // A file nested far deeper than any stack holds used to overflow roxmltree's recursive
+    // parser, which aborts the process. It must be refused without recursing.
+    let deep = |root: &str| format!("<{root}>{}{}</{root}>", "<a>".repeat(100_000), "</a>".repeat(100_000));
+    let xfdf = deep("xfdf");
+    let xml = deep("fields");
+    let (imported, table, values) = on_small_stack(move || {
+        let mut doc = blank();
+        (import(&mut doc, xfdf.as_bytes()), import(&mut doc, xml.as_bytes()), data_values(xfdf.as_bytes()))
+    });
+    for r in [imported.map(|_| ()), table.map(|_| ()), values.map(|_| ())] {
+        assert!(matches!(&r, Err(DataError::Malformed(m)) if m.contains("deep")), "{r:?}");
+    }
+}
+
+#[test]
+fn wide_or_commented_xml_is_not_mistaken_for_deep() {
+    // Thousands of siblings, self-closing tags, `>` in attribute values, and tags inside
+    // comments, CDATA and processing instructions add no depth.
+    let mut x = String::from("<?xml version=\"1.0\"?><!-- <a><a><a> --><xfdf><fields>");
+    for i in 0..5_000 {
+        x.push_str(&format!("<field name=\"f{i} > g\"><value>v</value></field><empty/><![CDATA[<b><b>]]><?pi <c> ?>"));
+    }
+    x.push_str("</fields></xfdf>");
+    assert_eq!(check_form_xml_depth(&x), Ok(()));
+    let nested = |n: usize| format!("{}{}", "<a>".repeat(n), "</a>".repeat(n));
+    assert_eq!(check_form_xml_depth(&nested(MAX_XML_DEPTH)), Ok(()));
+    assert!(check_form_xml_depth(&nested(MAX_XML_DEPTH + 1)).is_err());
+}
+
+#[test]
+fn duplicate_xfdf_annotation_flags_do_not_turn_on_unrelated_bits() {
+    // Flags are a set of bit masks, not additive integers. A repeated "print" flag
+    // must not carry into "nozoom", nor repeated "readonly" into "locked".
+    for (flags, expected) in [("print, PRINT, nozoom", 12), ("readonly,readonly", 64), ("print,print,print", 4)] {
+        let xfdf = format!(
+            r#"<xfdf xmlns="http://ns.adobe.com/xfdf/"><annots><square page="0" rect="10,10,50,50" name="flags" flags="{flags}" /></annots></xfdf>"#
+        );
+        let mut doc = blank();
+        assert_eq!(import(&mut doc, xfdf.as_bytes()).unwrap().comments, 1);
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        let annotations = doc.get(page).as_dict().and_then(|p| p.get(b"Annots")).map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap();
+        let square = annotations.iter().filter_map(|a| doc.resolve(a).as_dict().cloned()).find(|d| d.name(b"Subtype") == Some(b"Square")).unwrap();
+        assert_eq!(square.get(b"F").and_then(Object::as_int), Some(expected), "flags={flags}");
     }
 }

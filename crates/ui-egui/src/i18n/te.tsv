@@ -22,6 +22,9 @@ comment menu	Edit	సవరించు
 	Preferences	ప్రాధాన్యతలు
 	Preferences…	ప్రాధాన్యతలు…
 	Interface language	ఇంటర్‌ఫేస్ భాష
+	Interface size	ఇంటర్‌ఫేస్ పరిమాణం
+	Auto ({percent}%)	ఆటో ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	ఆటో సిస్టమ్ టెక్స్ట్ పరిమాణాన్ని అనుసరిస్తుంది. పేజీలు ఎల్లప్పుడూ డిస్‌ప్లే పూర్తి రిజల్యూషన్‌లో చూపబడతాయి.
 	Identity	గుర్తింపు
 	Name on new comments	కొత్త వ్యాఖ్యలపై చూపే పేరు
 	Open…	తెరువు…
@@ -50,6 +53,7 @@ comment menu	Edit	సవరించు
 	Fit visible	కనిపించే భాగానికి సరిపోయేలా
 	Marquee zoom	ఎంచుకున్న ప్రాంతానికి జూమ్
 	Take a snapshot	స్నాప్‌షాట్ తీయి
+	Column select	నిలువు వరుస ఎంపిక
 	Full screen mode	పూర్తి స్క్రీన్ మోడ్
 	Read mode	చదివే మోడ్
 	Switch light / dark theme	లేత / ముదురు థీమ్‌ల మధ్య మారు
@@ -83,12 +87,18 @@ comment menu	Edit	సవరించు
 	Open a PDF ({key})	PDFను తెరువు ({key})
 	Dark gray theme	ముదురు బూడిద రంగు థీమ్
 	Light theme	లేత థీమ్
+	Appearance mode	రూపం మోడ్
+	Light	లైట్
+	Dark	డార్క్
+	Active	సక్రియం
+	Dark theme	డార్క్ థీమ్
+	Appearance settings…	రూపం సెట్టింగ్‌లు…
 	All tools	అన్ని సాధనాలు
 	Read	చదవడం
 	Convert	మార్పిడి
 	E-Sign	ఇ-సంతకం
 	Print ({key})	ముద్రించు ({key})
-	Save (M4)	సేవ్ చేయి (M4)
+	Save ({key})	సేవ్ చేయి ({key})
 	Document properties ({key})	పత్ర లక్షణాలు ({key})
 	Find tools and commands	సాధనాలను, కమాండ్‌లను కనుగొను
 	Fit to height	ఎత్తుకు సరిపోయేలా
@@ -254,6 +264,7 @@ comment menu	Edit	సవరించు
 	Security properties…	భద్రతా లక్షణాలు…
 	Organize pages	పేజీలను నిర్వహించు
 	New bookmark	కొత్త బుక్‌మార్క్
+	New bookmarks from structure	నిర్మాణం నుండి కొత్త బుక్‌మార్క్‌లు
 	Rotate pages clockwise	పేజీలను సవ్యదిశలో తిప్పు
 	Rotate pages counterclockwise	పేజీలను అపసవ్యదిశలో తిప్పు
 	Delete pages	పేజీలను తొలగించు
@@ -671,7 +682,7 @@ comment menu	Edit	సవరించు
 	Centre	మధ్యకు అమర్చు
 	Align right	కుడికి అమర్చు
 	Justify	రెండు వైపులా అమర్చు
-	Standard fonts; text outside Windows-1252 isn't supported yet.	ప్రామాణిక ఫాంట్‌లు; Windows-1252 పరిధికి బయటి టెక్స్ట్‌కు ఇంకా మద్దతు లేదు.
+	Thai and Arabic use regular fallback fonts when available.	థాయ్ మరియు అరబిక్ కోసం అందుబాటులో ఉన్నప్పుడు సాధారణ శైలి ప్రత్యామ్నాయ ఫాంట్‌లను ఉపయోగిస్తారు.
 	Edit image	చిత్ర సవరణ
 	Rotate counterclockwise	అపసవ్యదిశలో తిప్పు
 	Rotate clockwise	సవ్యదిశలో తిప్పు
@@ -742,7 +753,7 @@ comment menu	Edit	సవరించు
 	{verb} Header and Footer	హెడర్ మరియు ఫుటర్‌ను {verb}
 	{verb} Watermark	వాటర్‌మార్క్‌ను {verb}
 	{verb} Background	నేపథ్యాన్ని {verb}
-	Margins (in)	మార్జిన్‌లు (in)
+	Margins	మార్జిన్‌లు
 	Left Header Text	ఎడమ హెడర్ టెక్స్ట్
 	Center Header Text	మధ్య హెడర్ టెక్స్ట్
 	Right Header Text	కుడి హెడర్ టెక్స్ట్
@@ -820,6 +831,10 @@ comment menu	Edit	సవరించు
 	The signature will be invisible.	సంతకం కనిపించదు.
 	Distinguished name	విశిష్ట పేరు
 	Labels	లేబుల్‌లు
+	Graphic	గ్రాఫిక్
+	Signer's name	సంతకదారు పేరు
+	Fill & Sign signature	నింపడం & సంతకం సంతకం
+	Choose image…	చిత్రాన్ని ఎంచుకోండి…
 	Permitted actions after certifying	సర్టిఫై చేసిన తర్వాత అనుమతించే చర్యలు
 	No changes allowed	మార్పులు ఏవీ అనుమతించబడవు
 	Annotations, form fill-in, and digital signatures	ఉల్లేఖనలు, ఫారం నింపడం మరియు డిజిటల్ సంతకాలు
@@ -1068,7 +1083,13 @@ comment menu	Edit	సవరించు
 	Dates	తేదీలు
 	Text in images isn't found; recognise text (OCR) first.	చిత్రాలలోని టెక్స్ట్ కనుగొనబడదు; ముందుగా టెక్స్ట్‌ను గుర్తించండి (OCR).
 	No matches.	సరిపోలికలు ఏవీ లేవు.
+	Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth.	కొన్ని బుక్‌మార్క్‌లు ఇక్కడ చూపబడవు: ప్యానెల్ పరిమిత సంఖ్యలో, పరిమిత లోతు వరకు మాత్రమే జాబితా చేస్తుంది.
 	{n} match(es) marked for redaction.	రెడాక్షన్ కోసం గుర్తించిన సరిపోలికలు: {n}.
+	Multiple words or phrases	బహుళ పదాలు లేదా పదబంధాలు
+	One word or phrase per line	ఒక్కో పంక్తికి ఒక పదం లేదా పదబంధం
+	Import list…	జాబితాను దిగుమతి చేయండి…
+	{n} word(s) or phrase(s)	పదాలు లేదా పదబంధాలు: {n}
+	{name} is too large for a word list (at most 1 MB).	పద జాబితాకు {name} చాలా పెద్దది (గరిష్ఠంగా 1 MB).
 	Redaction Tool Properties	రెడాక్షన్ సాధనం లక్షణాలు
 	Redacted area fill colour:	రెడాక్ట్ చేసిన ప్రాంతం నింపు రంగు:
 	Use overlay text	ఓవర్‌లే టెక్స్ట్‌ను ఉపయోగించు
@@ -1465,6 +1486,8 @@ action wizard	Start	ప్రారంభించు
 	Right Edge	కుడి అంచు
 	Language	భాష
 	Saved {place}: {before} → {after} ({pct}% smaller){detail}	{place} సేవ్ చేయబడింది: {before} → {after} ({pct}% తగ్గింది){detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	ఈ ఫైల్ ఇప్పటికే సాధ్యమైనంత చిన్నదిగా ఉంది ({size}). కాపీ ఏదీ సేవ్ చేయబడలేదు.
+	Saved {place}: {before} → {after} (not smaller){detail}	{place} సేవ్ చేయబడింది: {before} → {after} (తగ్గలేదు){detail}
 	Couldn't save the image: {e}	చిత్రాన్ని సేవ్ చేయడం సాధ్యం కాలేదు: {e}
 	Adding images arrives on the web with file pickers for images	చిత్రాలను జోడించడం, చిత్రాల కోసం ఫైల్ పికర్‌లతో పాటు వెబ్‌లో వస్తుంది
 	Replacing images on page {p} arrives on the web with image pickers ({i})	{p}వ పేజీలోని చిత్రాలను భర్తీ చేయడం, చిత్రాల పికర్‌లతో పాటు వెబ్‌లో వస్తుంది ({i})
@@ -1537,6 +1560,8 @@ action wizard	Start	ప్రారంభించు
 	{file} is too large for a stamp (at most {n} MB)	స్టాంప్‌కు {file} చాలా పెద్దది (గరిష్ఠంగా {n} MB)
 	Sent to {printer}	{printer}కు పంపబడింది
 	Sent to {printer}: {msg}	{printer}కు పంపబడింది: {msg}
+	Looking for printers…	ప్రింటర్ల కోసం వెతుకుతోంది…
+	Sending to {printer}…	{printer}కు పంపుతోంది…
 	Choose a folder for the searchable files	వెతకగలిగే ఫైల్‌ల కోసం ఒక ఫోల్డర్‌ను ఎంచుకోండి
 	Files are combined in this order. Leave Pages empty to take every page.	ఫైల్‌లు ఈ క్రమంలో కలపబడతాయి. అన్ని పేజీలను తీసుకోవడానికి పేజీలు ఫీల్డ్‌ను ఖాళీగా వదలండి.
 	Pages of {name} to combine, e.g. 1-3, 6	కలపాల్సిన {name} పేజీలు, ఉదా. 1-3, 6
@@ -1611,8 +1636,14 @@ action wizard	Start	ప్రారంభించు
 	watermark	వాటర్‌మార్క్
 	background	నేపథ్యం
 	This document isn't password-protected	ఈ పత్రం పాస్‌వర్డ్‌తో రక్షించబడలేదు
-	Only the document's owner can change its security (open it with the permissions password)	పత్రం యజమాని మాత్రమే దాని భద్రతను మార్చగలరు (అనుమతుల పాస్‌వర్డ్‌తో దాన్ని తెరవండి)
+	Enter permissions password…	అనుమతుల పాస్‌వర్డ్‌ను నమోదు చేయి…
+	Permissions password	అనుమతుల పాస్‌వర్డ్
+	“{name}” has security restrictions. Enter its permissions password to lift them.	“{name}”కు భద్రతా పరిమితులు ఉన్నాయి. వాటిని తొలగించడానికి దాని అనుమతుల పాస్‌వర్డ్‌ను నమోదు చేయండి.
+	Restrictions lifted	పరిమితులు తొలగించబడ్డాయి
+	Couldn't unlock {name}: {e}	{name}ను అన్‌లాక్ చేయలేకపోయాము: {e}
+	This document has no restrictions to lift	ఈ పత్రంలో తొలగించాల్సిన పరిమితులు లేవు
 	The document's security settings don't allow this change	పత్రం భద్రతా సెట్టింగ్‌లు ఈ మార్పును అనుమతించవు
+	The document's security settings don't allow copying text and images	పత్రం భద్రతా సెట్టింగ్‌లు టెక్స్ట్, చిత్రాలను కాపీ చేయడాన్ని అనుమతించవు
 	Open a document first	ముందుగా ఒక పత్రాన్ని తెరవండి
 	Security will be removed when you save	మీరు సేవ్ చేసినప్పుడు భద్రత తీసివేయబడుతుంది
 	Click text or an image to edit it	సవరించడానికి టెక్స్ట్ లేదా చిత్రంపై క్లిక్ చేయండి
@@ -1913,6 +1944,10 @@ action wizard	Start	ప్రారంభించు
 	Default zoom	డిఫాల్ట్ జూమ్
 	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	PDF ఏ లేఅవుట్‌ను గానీ జూమ్‌ను గానీ కోరనప్పుడు ఉపయోగించబడుతుంది. నిరంతర స్క్రోలింగ్ పేజీల మధ్య ఎప్పుడూ స్నాప్ అవ్వదు.
 	Reopen the files that were open when PdfCraft last closed	PdfCraftను చివరిసారి మూసివేసినప్పుడు తెరిచి ఉన్న ఫైల్‌లను మళ్లీ తెరువు
+	Reload documents when their files change on disk	డిస్క్‌లో వాటి ఫైల్‌లు మారినప్పుడు పత్రాలను మళ్లీ లోడ్ చేయి
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	ఈ ఫైల్ డిస్క్‌లో మారింది. కొత్త వెర్షన్‌ను చూడటానికి దాన్ని మళ్లీ లోడ్ చేయండి; సేవ్ చేయని మీ మార్పులు పోతాయి.
+	Reload	మళ్లీ లోడ్ చేయి
+	Couldn't reload {name}: {e}	{name}ను మళ్లీ లోడ్ చేయడం సాధ్యం కాలేదు: {e}
 	About	పరిచయం
 	Contributors	సహకారులు
 	Models	మోడల్‌లు
@@ -1972,16 +2007,16 @@ action wizard	Start	ప్రారంభించు
 	Opened, but its security settings don't allow combining. Enter the permissions password.	తెరవబడింది, కానీ దీని భద్రతా సెట్టింగ్‌లు కలపడాన్ని అనుమతించవు. అనుమతుల పాస్‌వర్డ్‌ను నమోదు చేయండి.
 	Unlocked: the combined file won't be password-protected	అన్‌లాక్ చేయబడింది: కలిపిన ఫైల్ పాస్‌వర్డ్‌తో రక్షించబడదు
 	Unlocked {n} of {m} files	{m} ఫైల్‌లలో అన్‌లాక్ చేయబడినవి: {n}
-	Drop PDFs or folders here, or choose them.	PDFలను లేదా ఫోల్డర్‌లను ఇక్కడ లాగి వదలండి, లేదా వాటిని ఎంచుకోండి.
+	Drop PDFs, images, text files or folders here, or choose them.	PDFలను, చిత్రాలను, టెక్స్ట్ ఫైల్‌లను లేదా ఫోల్డర్‌లను ఇక్కడ లాగి వదలండి, లేదా వాటిని ఎంచుకోండి.
 	Add folder…	ఫోల్డర్‌ను జోడించు…
 	Add folder and subfolders…	ఫోల్డర్‌ను, దాని ఉప ఫోల్డర్‌లను జోడించు…
 	More ways to add files	ఫైల్‌లను జోడించడానికి మరిన్ని మార్గాలు
-	Every PDF in the folder	ఫోల్డర్‌లోని ప్రతి PDF
-	Every PDF in the folder and the folders inside it	ఫోల్డర్‌లోని, దాని లోపలి ఫోల్డర్‌లలోని ప్రతి PDF
+	Every PDF, image and text file in the folder	ఫోల్డర్‌లోని ప్రతి PDF, చిత్రం, టెక్స్ట్ ఫైల్
+	Every PDF, image and text file in the folder and the folders inside it	ఫోల్డర్‌లోని, దాని లోపలి ఫోల్డర్‌లలోని ప్రతి PDF, చిత్రం, టెక్స్ట్ ఫైల్
 	Add folder	ఫోల్డర్‌ను జోడించు
 	Add folder and subfolders	ఫోల్డర్‌ను, దాని ఉప ఫోల్డర్‌లను జోడించు
-	No PDFs found in {folder}	{folder}లో PDFలు ఏవీ కనుగొనబడలేదు
-	Added the first {n} PDFs in {folder}	{folder}లోని మొదటి {n} PDFలు జోడించబడ్డాయి
+	No PDFs, images or text files found in {folder}	{folder}లో PDFలు, చిత్రాలు లేదా టెక్స్ట్ ఫైల్‌లు ఏవీ కనుగొనబడలేదు
+	Added the first {n} files in {folder}	{folder}లోని మొదటి {n} ఫైల్‌లు జోడించబడ్డాయి
 	Click to sort, drag to move the column. Drag its edge to resize it.	క్రమపరచడానికి క్లిక్ చేయండి, నిలువు వరుసను తరలించడానికి లాగండి. పరిమాణం మార్చడానికి దాని అంచును లాగండి.
 	Reset columns	నిలువు వరుసలను రీసెట్ చేయి
 	Remove {n} files	{n} ఫైల్‌లను తీసివేయి
@@ -1999,7 +2034,7 @@ action wizard	Start	ప్రారంభించు
 	{n} files need attention	{n} ఫైల్‌లలో సమస్యలు ఉన్నాయి
 	{name} can't be combined: {why}	{name}ను కలపడం సాధ్యం కాదు: {why}
 	Check the pages of {name}: {why}	{name} పేజీలను తనిఖీ చేయండి: {why}
-	Add the PDFs to combine	కలపాల్సిన PDFలను జోడించండి
+	Add the files to combine	కలపాల్సిన ఫైల్‌లను జోడించండి
 	File name	ఫైల్ పేరు
 	Warnings	హెచ్చరికలు
 	Drag to reorder	క్రమం మార్చడానికి లాగండి
@@ -2012,6 +2047,10 @@ action wizard	Start	ప్రారంభించు
 	Password-protected	పాస్‌వర్డ్‌తో రక్షించబడింది
 	Its security settings don't allow copying pages	దీని భద్రతా సెట్టింగ్‌లు పేజీలను కాపీ చేయడాన్ని అనుమతించవు
 	Can't be read: {e}	చదవడం సాధ్యం కాదు: {e}
+	Leave out files that can't be read?	చదవలేని ఫైల్‌లను వదిలేయాలా?
+	These files can't be read, so they won't be in the combined PDF:	ఈ ఫైల్‌లను చదవలేము, కాబట్టి అవి కలిపిన PDFలో ఉండవు:
+	Combine the rest	మిగిలినవి కలుపు
+	and {n} more	మరియు మరో {n}
 	Includes unsaved changes	సేవ్ చేయని మార్పులు ఉన్నాయి
 	This web address mixes letters from different alphabets, a common way to imitate another site's name.	ఈ వెబ్ చిరునామాలో వేర్వేరు లిపుల అక్షరాలు కలిసి ఉన్నాయి. వేరే సైట్ పేరును అనుకరించడానికి ఇది తరచూ వాడే పద్ధతి.
 	This web address uses letters from another alphabet, which can look like familiar ones.	ఈ వెబ్ చిరునామాలో వేరే లిపి అక్షరాలు ఉన్నాయి. అవి మీకు తెలిసిన అక్షరాల్లాగే కనిపించవచ్చు.
@@ -2024,6 +2063,7 @@ action wizard	Start	ప్రారంభించు
 	Pin folder to Home…	ఫోల్డర్‌ను హోమ్‌కు పిన్ చేయి…
 	No recent files	ఇటీవలి ఫైళ్లు లేవు
 	Go to page…	పేజీకి వెళ్లు…
+	For page sizes and margins.	పేజీ పరిమాణాలు మరియు మార్జిన్‌ల కోసం.
 	Open arrow	తెరిచిన బాణం
 	Closed arrow	మూసిన బాణం
 	Butt	మొండి చివర
@@ -2066,3 +2106,83 @@ action wizard	Start	ప్రారంభించు
 	The field {name} no longer exists.	{name} ఫీల్డ్ ఇకపై లేదు.
 	A selected field has no widget on any page, so the fields can't be edited together.	ఎంచుకున్న ఒక ఫీల్డ్‌కు ఏ పేజీలోనూ విడ్జెట్ లేదు, కాబట్టి ఫీల్డ్‌లను కలిపి సవరించలేము.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} {dpi} dpi వద్ద, అవి గీయగల అతిపెద్ద పరిమాణం)
+
+# Multi-object selection and movement (#844)
+@plural	{n} object selected|{n} objects selected	{n} వస్తువు ఎంచుకోబడింది|{n} వస్తువులు ఎంచుకోబడ్డాయి
+	Drag the selection to move it. Esc clears the selection.	ఎంపికను కదిలించడానికి లాగండి. Esc ఎంపికను తొలగిస్తుంది.
+	Shift-click to select several objects. Drag empty space to select an area.	అనేక వస్తువులను ఎంచుకోవడానికి Shift నొక్కి క్లిక్ చేయండి. ప్రాంతాన్ని ఎంచుకోవడానికి ఖాళీ ప్రదేశంలో లాగండి.
+	Select at most 1000 objects at a time.	ఒకేసారి గరిష్ఠంగా 1000 వస్తువులను ఎంచుకోండి.
+	Finish or discard the text being edited before selecting several objects.	అనేక వస్తువులను ఎంచుకునే ముందు వచన సవరణను పూర్తి చేయండి లేదా విస్మరించండి.
+	Move object	వస్తువును కదిలించు
+	Move objects	వస్తువులను కదిలించు
+	Vertical text cannot be moved with this selection.	ఈ ఎంపికతో నిలువు వచనాన్ని కదిలించలేరు.
+	Text used as a clipping path cannot be moved with this selection.	క్లిప్పింగ్ పాత్‌గా ఉపయోగించిన వచనాన్ని ఈ ఎంపికతో కదిలించలేరు.
+	These objects could not be moved. Select them again and try a smaller move.	ఈ వస్తువులను కదిలించలేకపోయాము. మళ్లీ ఎంచుకుని తక్కువ దూరం కదిలించడానికి ప్రయత్నించండి.
+	This page contains objects that cannot be selected together.	ఈ పేజీలో కలిసి ఎంచుకోలేని వస్తువులు ఉన్నాయి.
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	స్పేస్
+	Grid view	గ్రిడ్ వీక్షణ
+	List view	జాబితా వీక్షణ
+	Files are combined in the order shown. Drag them to change it.	ఫైల్‌లు చూపిన క్రమంలో కలపబడతాయి. క్రమాన్ని మార్చడానికి వాటిని లాగండి.
+	Preview unavailable: {e}	ప్రివ్యూ అందుబాటులో లేదు: {e}
+	Pages: {k} of {n}	పేజీలు: {n}లో {k}
+	Check the pages	పేజీలను తనిఖీ చేయండి
+	Switch to List view to change the pages it takes.	ఇది తీసుకునే పేజీలను మార్చడానికి జాబితా వీక్షణకు మారండి.
+	Larger pages	పెద్ద పేజీలు
+	Smaller pages	చిన్న పేజీలు
+	Reset page size	పేజీ పరిమాణాన్ని రీసెట్ చేయి
+	Expand all	అన్నీ విస్తరించు
+	Collapse all	అన్నీ ముడుచు
+	Remove page	పేజీని తీసివేయి
+	Remove {n} pages	{n} పేజీలను తీసివేయి
+
+# Shared panel docking
+	Reset panel layout	ప్యానెల్ అమరికను రీసెట్ చేయి
+	Float panel	ప్యానెల్‌ను తేలియాడేలా చేయి
+	Move to group	సమూహానికి తరలించు
+	Panels	ప్యానెల్‌లు
+	Resize panels	ప్యానెల్‌ల పరిమాణం మార్చు
+	Resize panel window	ప్యానెల్ విండో పరిమాణం మార్చు
+	Tools	సాధనాలు
+	Inspector	పరిశీలకుడు
+	Select page {label}	{label} పేజీని ఎంచుకోండి
+	Rotate page {label} counterclockwise	{label} పేజీని అపసవ్య దిశలో తిప్పండి
+	Rotate page {label} clockwise	{label} పేజీని సవ్య దిశలో తిప్పండి
+	Delete page {label}	{label} పేజీని తొలగించండి
+	Mouse wheel scroll speed	మౌస్ వీల్ స్క్రోల్ వేగం
+scroll speed	Slow	నెమ్మదిగా
+scroll speed	Normal	సాధారణం
+scroll speed	Fast	వేగంగా
+	Enhance camera image	కెమెరా చిత్రాన్ని మెరుగుపరచు
+	Drag the corners onto the document's edges, then choose Enhance page.	మూలలను పత్రం అంచుల వరకు లాగి, ఆపై పేజీని మెరుగుపరచు ఎంచుకోండి.
+	Enhance page	పేజీని మెరుగుపరచు
+	Clean-up	శుభ్రపరచడం
+	Original	అసలు
+	Greyscale	గ్రేస్కేల్
+	Black and white	నలుపు తెలుపు
+
+# Signature verification and explicit CCA trust
+	Verification	ధృవీకరణ
+	Intact	మార్పులేదు
+	Altered	మార్చబడింది
+	Trusted	విశ్వసనీయమైనది
+	Untrusted	విశ్వసనీయం కాదు
+	Not revoked	రద్దు కాలేదు
+	Not recorded	నమోదు కాలేదు
+	Trusted timestamp	విశ్వసనీయ సమయ ముద్ర
+	Signer claim	సంతకందారి ప్రకటన
+	Permitted	అనుమతించబడింది
+	Not permitted	అనుమతించబడలేదు
+	Trust CCA India roots…	CCA India మూల ధృవపత్రాలను విశ్వసించు…
+	These roots will be saved as trusted certificates and apply to all matching signers.	ఈ మూల ధృవపత్రాలు విశ్వసనీయ ధృవపత్రాలుగా భద్రపరచబడతాయి మరియు సరిపోలే సంతకందారులందరికీ వర్తిస్తాయి.
+	Integrity	సమగ్రత
+	Certificate	ధృవపత్రం
+	Revocation	రద్దు
+	Changes after signing	సంతకం తర్వాత మార్పులు
+	Recommended next steps	సిఫార్సు చేసిన తదుపరి చర్యలు

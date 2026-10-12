@@ -1,7 +1,7 @@
 //! The Print dialog in the real shell (egui_kittest): settings, preview sheets, Save as PDF.
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
 
 fn harness() -> Harness<'static, PdfCraftApp> {
@@ -189,4 +189,96 @@ fn print_dialog_shows_the_printer_driver_options() {
     h.state_mut().print_draft.driver_choices.insert("InputSlot".into(), "Tray2".into());
     h.state_mut().print_draft.printer = Some("Other_Queue".into());
     assert!(h.state().print_draft.job("form.pdf").options.is_empty());
+}
+
+/// The desktop app lists printers in the background (PowerShell on Windows takes a second or
+/// more): the dialog opens at once, then preselects the default when the list arrives — unless
+/// the user has already picked a printer.
+#[test]
+fn printers_listed_in_the_background_preselect_the_default_unless_one_was_picked() {
+    use pdfcraft_engine::print::spool::Printer;
+    use std::sync::{Arc, Mutex};
+    let mut h = harness();
+    // The source waits until the test lets it answer, so the dialog is seen while it looks.
+    let gate = Arc::new(Mutex::new(()));
+    let hold = gate.lock().unwrap();
+    let wait = gate.clone();
+    h.state_mut().printer_source = Some(Arc::new(move || {
+        let _open = wait.lock();
+        vec![Printer { name: "Office".into(), default: false }, Printer { name: "Front Desk".into(), default: true }]
+    }));
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::Print), "the dialog doesn't wait for the printers");
+    assert!(h.state().print_draft.printers_loading);
+    assert_eq!(h.state().print_draft.printer, None);
+    drop(hold);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while h.state().print_draft.printers_loading && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(!h.state().print_draft.printers_loading);
+    assert_eq!(h.state().print_draft.printers.len(), 2);
+    assert_eq!(h.state().print_draft.printer.as_deref(), Some("Front Desk"));
+
+    // Opened again: last time's list shows at once; a choice made before the fresh list
+    // arrives is kept.
+    h.state_mut().dialog = None;
+    let hold = gate.lock().unwrap();
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(2);
+    assert_eq!(h.state().print_draft.printers.len(), 2, "the last list shows while looking");
+    {
+        let d = &mut h.state_mut().print_draft;
+        d.printer = None;
+        d.printer_picked = true;
+    }
+    drop(hold);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while h.state().print_draft.printers_loading && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(!h.state().print_draft.printers_loading);
+    assert_eq!(h.state().print_draft.printer, None, "Save as PDF, as picked");
+}
+
+#[test]
+fn architectural_page_can_be_matched_at_100_percent() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1000.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        let bytes = app.session.create_blank(2592.0, 1728.0, 1).unwrap();
+        app.open_bytes("architectural.pdf", None, bytes.as_ref().clone()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    h.get_by_label("PDF page: 36.00 × 24.00 in");
+    h.get_by_label("Match page at 100%").click();
+    h.run_steps(3);
+    h.get_by_value("ARCH D (24 x 36 in)");
+    h.get_by_label("PDF scale: 100.00%");
+    h.get_by_label("36.00 × 24.00 in");
+    h.get_by_label("Printer paper and scaling may differ. Check driver settings.");
+    let settings = h.state().print_draft.settings(1, &[]).unwrap();
+    assert_eq!(settings.paper, (1728.0, 2592.0));
+    assert_eq!(settings.layout, pdfcraft_engine::print::Layout::Size(pdfcraft_engine::print::SizeMode::Actual));
+}
+
+#[test]
+fn custom_page_cannot_silently_match_a_standard_paper() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    // The 300 x 400 pt fixture is not a standard sheet.
+    assert!(pdfcraft_engine::print::matching_paper((300.0, 400.0)).is_none());
+    let before = h.state().print_draft.clone();
+    assert!(h.get_by_label("Match page at 100%").accesskit_node().is_disabled());
+    h.get_by_label("Match page at 100%").click();
+    h.run_steps(3);
+    assert_eq!(h.state().print_draft.paper, before.paper);
+    assert_eq!(h.state().print_draft.size, before.size);
 }

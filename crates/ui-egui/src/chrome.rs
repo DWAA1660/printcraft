@@ -6,11 +6,35 @@ use crate::canvas::{DocView, Fit, PageLayout};
 use crate::theme::{self, ThemePreference, Tokens};
 use crate::{Dialog, Mode, PdfCraftApp, PropsTab, RightPanel, icons, widgets};
 
+/// Height of the tab strip when it doubles as the macOS title bar (#789). AppKit draws the traffic
+/// lights itself, centred in the standard 28 pt title-bar band at the top of the window, and moving
+/// them takes AppKit calls the workspace forbids (`unsafe`). So on macOS the strip is that band:
+/// the lights sit vertically centred in it, and the controls beside them shrink to fit, as in
+/// WordCraft (storytold/wordcraft#255).
+pub const MAC_TITLE_BAR: f32 = 28.0;
+/// The traffic lights as AppKit lays them out: button diameter, centre-to-centre pitch and the
+/// first button's left edge (8–10 pt depending on the macOS version; the larger value keeps the
+/// gap after them from shrinking).
+const MAC_LIGHT: f32 = 12.0;
+const MAC_LIGHT_PITCH: f32 = 20.0;
+const MAC_LIGHTS_LEFT: f32 = 10.0;
+/// Where the strip's content starts to the right of the traffic lights: the end of the three
+/// lights plus the same gap the lights keep from the top of the window.
+pub const MAC_CONTENT_LEFT: f32 = MAC_LIGHTS_LEFT + 2.0 * MAC_LIGHT_PITCH + MAC_LIGHT + (MAC_TITLE_BAR - MAC_LIGHT) / 2.0;
+/// The strip and its controls everywhere else.
+const TAB_STRIP: f32 = 38.0;
+const TAB_HEIGHT: f32 = 30.0;
+const STRIP_BUTTON: f32 = 28.0;
+
 pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    let left = if cfg!(target_os = "macos") && app.integrated_titlebar { 80 } else { 8 };
+    // macOS: the strip is the 28 pt title bar, so the traffic lights are centred in it; tabs and
+    // buttons shrink to keep a margin above and below.
+    let mac = cfg!(target_os = "macos") && app.integrated_titlebar;
+    let left = if mac { MAC_CONTENT_LEFT as i8 } else { 8 };
+    let (tab_h, button) = if mac { (MAC_TITLE_BAR - 2.0, 24.0) } else { (TAB_HEIGHT, STRIP_BUTTON) };
     egui::Panel::top("tab_strip")
-        .exact_size(38.0)
+        .exact_size(if mac { MAC_TITLE_BAR } else { TAB_STRIP })
         .frame(egui::Frame::NONE.fill(t.titlebar).inner_margin(egui::Margin { left, right: 10, top: 0, bottom: 0 }))
         .show(ui, |ui| {
             let full = ui.max_rect();
@@ -24,12 +48,12 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             }
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
-                if icons::button(ui, "house", 28.0, app.active.is_none() && !app.combine_showing(), tl!("Home")).clicked() {
+                if icons::button(ui, "house", button, app.active.is_none() && !app.combine_showing(), tl!("Home")).clicked() {
                     app.active = None;
                     app.combine_tab.focused = false;
                 }
-                // Keep the two 28-point buttons, Discord's text/padding and three gaps outside the scrolling tabs.
-                let controls_width = ui.fonts_mut(|f| f.layout_no_wrap("Discord".into(), theme::medium(13.0), t.text).size().x) + 106.0;
+                // Keep the two icon buttons, Discord's text/padding and three gaps outside the scrolling tabs.
+                let controls_width = ui.fonts_mut(|f| f.layout_no_wrap("Discord".into(), theme::medium(13.0), t.text).size().x) + 2.0 * button + 50.0;
                 // Open stays in sight after the tabs: its icon, text and padding, and the gaps around it.
                 let open_width = ui.fonts_mut(|f| f.layout_no_wrap(tl!("Open").into(), theme::medium(13.0), t.text).size().x) + 38.0 + 12.0;
                 let mut tabs_width = (ui.available_width() - controls_width - open_width).max(0.0);
@@ -78,7 +102,20 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 let (name, dirty) = (doc.display_name(), doc.dirty);
                                 // A tab showing the document's title names its file on hover.
                                 let file = (name != doc.name).then_some(doc.name.as_str());
-                                let response = tab(ui, &t, "file-text", &name, file, dirty, app.active == Some(i), &mut close, i, cap);
+                                let response = tab(
+                                    ui,
+                                    ui.id().with(("document-tab", app.views[i].id)),
+                                    &t,
+                                    "file-text",
+                                    &name,
+                                    file,
+                                    dirty,
+                                    app.active == Some(i),
+                                    &mut close,
+                                    i,
+                                    cap,
+                                    tab_h,
+                                );
                                 if changed && app.active == Some(i) && !app.combine_showing() {
                                     response.scroll_to_me(Some(Align::Center));
                                 }
@@ -92,8 +129,20 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             if app.combine_tab.open {
                                 // After the document tabs; its index can't clash with theirs.
                                 let mut close = None;
-                                let response =
-                                    tab(ui, &t, "files", tl!("Combine files"), None, false, app.combine_showing(), &mut close, usize::MAX, cap);
+                                let response = tab(
+                                    ui,
+                                    ui.id().with("combine-tab"),
+                                    &t,
+                                    "files",
+                                    tl!("Combine files"),
+                                    None,
+                                    false,
+                                    app.combine_showing(),
+                                    &mut close,
+                                    usize::MAX,
+                                    cap,
+                                    tab_h,
+                                );
                                 if changed && app.combine_showing() {
                                     response.scroll_to_me(Some(Align::Center));
                                 }
@@ -118,23 +167,31 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 }
                 ui.add_space(4.0);
                 let tip = crate::commands::command_tip(ui.ctx(), tl!("Open a PDF ({key})"), "file.open");
-                if widgets::ghost_button(ui, "plus", tl!("Open")).on_hover_text(tip).clicked() {
+                if widgets::ghost_button_sized(ui, "plus", tl!("Open"), tab_h).on_hover_text(tip).clicked() {
                     app.open_dialog();
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let (icon, label) = match app.theme_preference {
-                        ThemePreference::System => ("settings", tl!("Use system setting")),
+                        ThemePreference::System => ("monitor", tl!("Use system setting")),
                         ThemePreference::Light => ("sun", tl!("Light gray")),
                         ThemePreference::Dark => ("moon", tl!("Dark gray")),
                     };
                     let tip = format!("{}: {label}", tl!("Display theme"));
-                    let response = icons::button(ui, icon, 28.0, false, &tip);
-                    egui::Popup::menu(&response).show(|ui| theme_menu(app, ui));
-                    if icons::button(ui, "circle-help", 28.0, false, tl!("Keyboard shortcuts")).clicked() {
+                    let response = icons::button(ui, icon, button, false, &tip);
+                    // A click cycles System, Light, Dark; a right-click opens the menu.
+                    if response.clicked() {
+                        app.execute(match app.theme_preference {
+                            ThemePreference::System => "view.theme.light",
+                            ThemePreference::Light => "view.theme.dark",
+                            ThemePreference::Dark => "view.theme.system",
+                        });
+                    }
+                    egui::Popup::context_menu(&response).id(response.id.with("theme_menu")).show(|ui| appearance_menu(app, ui));
+                    if icons::button(ui, "circle-help", button, false, tl!("Keyboard shortcuts")).clicked() {
                         app.dialog = Some(Dialog::Shortcuts);
                     }
                     // One click to the community, from anywhere in the app.
-                    if widgets::ghost_button(ui, "messages-square", "Discord").on_hover_text(pdfcraft_engine::links::DISCORD).clicked() {
+                    if widgets::ghost_button_sized(ui, "messages-square", "Discord", tab_h).on_hover_text(pdfcraft_engine::links::DISCORD).clicked() {
                         app.execute("help.discord");
                     }
                 });
@@ -153,6 +210,19 @@ fn theme_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             app.execute(command);
             ui.close();
         }
+    }
+    ui.separator();
+    if ui.button(tl!("Appearance settings…")).clicked() {
+        app.dialog = Some(Dialog::Preferences);
+        ui.close();
+    }
+}
+
+/// The right-click menu on the title bar's theme button.
+fn appearance_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    if ui.button(tl!("Appearance settings…")).clicked() {
+        app.dialog = Some(Dialog::Preferences);
+        ui.close();
     }
 }
 
@@ -212,6 +282,7 @@ fn tab_cap(natural: &[f32], budget: f32, gap: f32, min: f32) -> Option<f32> {
 #[allow(clippy::too_many_arguments)]
 fn tab(
     ui: &mut egui::Ui,
+    id: egui::Id,
     t: &Tokens,
     icon: &str,
     name: &str,
@@ -221,6 +292,7 @@ fn tab(
     close: &mut Option<usize>,
     index: usize,
     cap: Option<f32>,
+    height: f32,
 ) -> egui::Response {
     let font = theme::regular(13.0);
     let mut label = tab_name(name);
@@ -235,21 +307,28 @@ fn tab(
     let label = crate::bidi::visual(&label).into_owned();
     let text_w = ui.fonts_mut(|f| f.layout_no_wrap(label.clone(), font.clone(), t.text).size().x);
     let width = cap.map_or(text_w + TAB_CHROME, |cap| (text_w + TAB_CHROME).min(cap));
-    let (rect, resp) = ui.allocate_exact_size(vec2(width, 30.0), Sense::click());
+    let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
     let a11y = if dirty { format!("{name} (edited)") } else { name.to_string() };
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, &a11y));
-    let bg = if active {
-        t.chrome
-    } else if resp.hovered() {
-        t.hover
-    } else {
-        Color32::TRANSPARENT
-    };
-    ui.painter().rect_filled(rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, bg);
-    icons::paint(ui, Rect::from_min_size(rect.min + vec2(6.0, 7.0), vec2(16.0, 16.0)), icon, 15.0, if active { t.accent } else { t.text_muted });
-    ui.painter().text(rect.min + vec2(28.0, rect.height() / 2.0), Align2::LEFT_CENTER, label, font, if active { t.text } else { t.text_muted });
+    let resp = craft_ui::tabs::Tab::new(id, &a11y, active).focus_stroke(Stroke::new(1.0, t.accent)).show_at(ui, rect, |ui, resp| {
+        let bg = if active {
+            t.chrome
+        } else if resp.hovered() {
+            t.hover
+        } else {
+            Color32::TRANSPARENT
+        };
+        ui.painter().rect_filled(rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, bg);
+        icons::paint(
+            ui,
+            Rect::from_min_size(rect.min + vec2(6.0, (height - 16.0) / 2.0), vec2(16.0, 16.0)),
+            icon,
+            15.0,
+            if active { t.accent } else { t.text_muted },
+        );
+        ui.painter().text(rect.min + vec2(28.0, rect.height() / 2.0), Align2::LEFT_CENTER, label, font, if active { t.text } else { t.text_muted });
+    });
     let x_rect = Rect::from_center_size(rect.right_center() - vec2(16.0, 0.0), vec2(20.0, 20.0));
-    let x = ui.interact(x_rect, ui.id().with(("tabclose", index)), Sense::click());
+    let x = ui.interact(x_rect, id.with("close"), Sense::click());
     if x.hovered() {
         ui.painter().rect_filled(x_rect, CornerRadius::same(4), t.pressed);
     }
@@ -285,7 +364,7 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     [(Mode::AllTools, "All tools"), (Mode::Read, "Read"), (Mode::Edit, "Edit"), (Mode::Convert, "Convert"), (Mode::Sign, "E-Sign")]
                 {
                     if widgets::mode_tab(ui, tl!(label), app.mode == mode).clicked() {
-                        app.select_mode(mode);
+                        app.switch_mode(mode, true);
                     }
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -296,7 +375,8 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         if icons::button(ui, "printer", 32.0, false, &tip).clicked() {
                             app.run_command("print.dialog");
                         }
-                        if icons::button(ui, "save", 32.0, false, tl!("Save (M4)")).clicked() {
+                        let tip = crate::commands::command_tip(ui.ctx(), tl!("Save ({key})"), "file.save");
+                        if icons::button(ui, "save", 32.0, false, &tip).clicked() {
                             app.run_command("file.save");
                         }
                         let tip = crate::commands::command_tip(ui.ctx(), tl!("Document properties ({key})"), "file.properties");
@@ -419,7 +499,7 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
             let mut rail_button = |ui: &mut egui::Ui, panel: RightPanel, icon: &str, tip: &str, has: bool| {
-                let selected = app.right == Some(panel);
+                let selected = app.right == Some(panel) && (app.mode == Mode::Read || app.docking.exposed(crate::docking::Panel::Inspector));
                 let r = icons::button(ui, icon, 34.0, selected, tl!(tip));
                 if has && !selected {
                     let c = r.rect.right_top() + vec2(-8.0, 8.0);
@@ -519,6 +599,12 @@ fn page_display_menu(ui: &mut egui::Ui, view: &DocView) -> Option<&'static str> 
             picked = Some(l.command());
         }
     }
+    ui.separator();
+    // Continuous scrolling is an independent checkbox over the base layout, as in Acrobat (#752).
+    let mut continuous = view.continuous();
+    if ui.add(egui::Checkbox::new(&mut continuous, tl!("Continuous scrolling"))).changed() {
+        picked = Some("view.continuous");
+    }
     let mut cover = view.cover;
     if ui.add_enabled(view.cover_applies(), egui::Checkbox::new(&mut cover, tl!("Show cover page in two-page view"))).changed() {
         picked = Some("view.layout.cover");
@@ -566,7 +652,7 @@ fn rail_view_menu(ui: &mut egui::Ui, view: &mut DocView) -> Option<&'static str>
 
 #[cfg(test)]
 mod tab_widths {
-    use super::tab_cap;
+    use super::{MAC_CONTENT_LEFT, MAC_LIGHT, MAC_LIGHT_PITCH, MAC_LIGHTS_LEFT, MAC_TITLE_BAR, tab_cap};
 
     /// Tabs that fit keep their own widths.
     #[test]
@@ -601,5 +687,15 @@ mod tab_widths {
     fn tabs_stop_at_their_minimum() {
         assert_eq!(tab_cap(&[250.0; 12], 600.0, 4.0, 110.0), Some(110.0));
         assert_eq!(tab_cap(&[250.0; 3], 0.0, 4.0, 110.0), Some(110.0));
+    }
+
+    #[test]
+    fn the_mac_title_bar_centres_and_clears_the_traffic_lights() {
+        // The lights are centred in the bar, and content keeps the same gap after them (#789).
+        let margin = (MAC_TITLE_BAR - MAC_LIGHT) / 2.0;
+        let lights_end = MAC_LIGHTS_LEFT + 2.0 * MAC_LIGHT_PITCH + MAC_LIGHT;
+        assert_eq!(MAC_CONTENT_LEFT - lights_end, margin);
+        // `egui::Margin` is in `i8`.
+        assert!(MAC_CONTENT_LEFT <= f32::from(i8::MAX));
     }
 }

@@ -6,7 +6,7 @@ use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
-use pdfcraft_ui_egui::{CloseRequest, PdfCraftApp};
+use pdfcraft_ui_egui::{CloseRequest, Dialog, PdfCraftApp};
 
 /// An `n`-page document with a proper xref table; page `i` shows "Page i+1".
 fn fixture(n: usize) -> Vec<u8> {
@@ -48,6 +48,117 @@ fn harness(pages: usize, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harn
 
 fn organize(pages: usize) -> Harness<'static, PdfCraftApp> {
     harness(pages, |app| app.set_option("organize", "on").unwrap())
+}
+
+#[test]
+fn organize_tool_opens_the_overview_directly_and_can_be_reentered() {
+    let mut h = harness(12, |_| {});
+    assert!(!h.state().views[0].organize);
+    h.get_by_label("Organize pages").click();
+    h.run_steps(3);
+    assert!(h.state().views[0].organize);
+    h.get_by_label("Page 1");
+    h.get_by_label("Page 5");
+    h.get_by_label("Select page 2").click();
+    h.run_steps(2);
+    h.get_by_label("Close").click();
+    h.run_steps(2);
+    assert!(!h.state().views[0].organize);
+    h.state_mut().set_option("tool", "organize").unwrap();
+    h.state_mut().set_option("tool", "organize").unwrap();
+    h.run_steps(2);
+    assert!(h.state().views[0].organize, "entering the tool is idempotent");
+    assert_eq!(h.state().views[0].target_pages(), [1]);
+    h.state_mut().set_option("tool", "edit").unwrap();
+    h.run_steps(2);
+    assert!(!h.state().views[0].organize, "another tool returns to the document");
+}
+
+#[test]
+fn organize_tool_chosen_before_opening_a_document_shows_its_pages() {
+    let mut app = PdfCraftApp::new();
+    app.set_option("tool", "organize").unwrap();
+    app.open_bytes("doc.pdf", None, fixture(3)).unwrap();
+    assert!(app.views[0].organize);
+}
+
+#[test]
+fn organize_checkboxes_toggle_multiple_pages_without_modifiers() {
+    let mut h = organize(4);
+    h.get_by_label("Select page 1").click();
+    h.run_steps(2);
+    h.get_by_label("Select page 3").click();
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].target_pages(), [0, 2]);
+    h.get_by_label("Select page 1").click();
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].target_pages(), [2]);
+    h.get_by_label("Page 4").click_modifiers(Modifiers::SHIFT);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].target_pages(), [0, 1, 2, 3], "checkbox toggles update the range anchor");
+}
+
+#[test]
+fn organize_page_actions_rotate_only_the_named_page_and_undo() {
+    let mut h = organize(3);
+    h.get_by_label("Select page 1").click();
+    h.run_steps(2);
+    h.get_by_label("Select page 3").click();
+    h.run_steps(2);
+    h.get_by_label("Rotate page 1 clockwise").click();
+    h.run_steps(3);
+    let rotations = |h: &Harness<'static, PdfCraftApp>| {
+        h.state().session.get(h.state().views[0].id).unwrap().info.pages.iter().map(|p| p.rotation).collect::<Vec<_>>()
+    };
+    assert_eq!(rotations(&h), [90, 0, 0]);
+    assert_eq!(h.state().views[0].target_pages(), [0, 2], "a local action preserves the multi-selection");
+    h.get_by_label("Rotate counterclockwise").click();
+    h.run_steps(3);
+    assert_eq!(rotations(&h), [0, 0, 270], "toolbar actions apply to the selection");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    assert_eq!(rotations(&h), [90, 0, 0]);
+    h.get_by_label("Rotate page 1 counterclockwise").click();
+    h.run_steps(3);
+    assert_eq!(rotations(&h), [0, 0, 0]);
+}
+
+#[test]
+fn organize_hover_actions_delete_only_the_named_page_and_undo() {
+    let mut h = organize(3);
+    h.get_by_label("Page 2").hover();
+    h.run_steps(2);
+    h.get_by_label("Delete page 2").click();
+    h.run_steps(3);
+    assert_eq!(page_texts(h.state()), ["Page 1", "Page 3"]);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    assert_eq!(page_texts(h.state()), ["Page 1", "Page 2", "Page 3"]);
+    let single = organize(1);
+    assert!(single.get_by_label("Delete page 1").accesskit_node().is_disabled());
+}
+
+#[test]
+fn organize_local_actions_respect_document_permissions() {
+    let mut h = harness(3, |app| {
+        app.apply_edit(pdfcraft_engine::Edit::Protect(pdfcraft_engine::Protection {
+            permissions_password: Some("owner".into()),
+            changes: pdfcraft_engine::Changes::None,
+            ..Default::default()
+        }));
+        let bytes = app.session.save_bytes(app.views[0].id).unwrap();
+        app.open_bytes("restricted.pdf", None, bytes.as_ref().clone()).unwrap();
+        app.set_option("tool", "organize").unwrap();
+    });
+    h.get_by_label("Select page 2").click();
+    h.run_steps(2);
+    assert!(h.get_by_label("Rotate page 2 clockwise").accesskit_node().is_disabled());
+    assert!(h.get_by_label("Rotate page 2 counterclockwise").accesskit_node().is_disabled());
+    assert!(h.get_by_label("Delete page 2").accesskit_node().is_disabled());
+    let app = h.state();
+    let view = &app.views[app.active.unwrap()];
+    assert_eq!(view.target_pages(), [1]);
+    assert!(!app.session.get(view.id).unwrap().dirty);
 }
 
 /// Page labels of the active document, read back from its current bytes.
@@ -357,6 +468,46 @@ fn the_save_prompt_answers_to_the_keyboard() {
 }
 
 #[test]
+fn keys_leave_the_document_under_a_dialog_alone() {
+    // Issue #870: ⌘W with Preferences open closed the file underneath it, and in the page grid
+    // Delete deleted the selected page. While a dialog is open its keys are its own.
+    let mut h = organize(3);
+    h.get_by_label("Page 2").click();
+    h.run_steps(2);
+    h.get_by_label("Rotate clockwise").click();
+    h.run_steps(3);
+    assert!(h.state_mut().execute("app.preferences"));
+    h.run_steps(3);
+    let shift = Modifiers::COMMAND | Modifiers::SHIFT;
+    for (m, key) in [
+        (Modifiers::COMMAND, Key::W),
+        (shift, Key::W),
+        (Modifiers::COMMAND, Key::Z),
+        (Modifiers::COMMAND, Key::D),
+        (Modifiers::COMMAND, Key::F),
+        (Modifiers::NONE, Key::Delete),
+        (Modifiers::NONE, Key::Backspace),
+    ] {
+        h.key_press_modifiers(m, key);
+        h.run_steps(3);
+        let app = h.state();
+        assert_eq!(app.views.len(), 1, "{m:?}+{key:?} closed the file");
+        assert!(app.close_request.is_none(), "{m:?}+{key:?} asked to close the file");
+        assert!(app.session.get(app.views[0].id).unwrap().can_undo().is_some(), "{m:?}+{key:?} undid the rotation");
+        assert!(app.views[0].find.is_none(), "{m:?}+{key:?} opened Find");
+        assert_eq!(app.dialog, Some(Dialog::Preferences), "{m:?}+{key:?} replaced Preferences");
+    }
+    assert_eq!(page_texts(h.state()), ["Page 1", "Page 2", "Page 3"], "a page was deleted under the dialog");
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "Escape closes Preferences");
+    assert_eq!(h.state().views[0].target_pages(), [1], "Escape went to the dialog, not the page selection");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::W);
+    h.run_steps(3);
+    assert!(h.state().close_request.is_some(), "with the dialog closed, ⌘W closes the file again");
+}
+
+#[test]
 fn clean_tabs_close_without_asking() {
     let mut h = harness(1, |_| {});
     h.key_press_modifiers(Modifiers::COMMAND, Key::W);
@@ -661,6 +812,7 @@ fn combining_files_opens_a_new_unsaved_tab() {
 #[test]
 fn combine_files_takes_chosen_pages_in_the_order_listed() {
     let mut h = harness(1, |app| {
+        app.set_option("combine-view", "list").unwrap();
         app.use_files(pdfcraft_ui_egui::FilePurpose::Combine, vec![("one.pdf".into(), fixture(3)), ("two.pdf".into(), fixture(2))]);
     });
     h.run_steps(3);
@@ -694,7 +846,7 @@ fn combine_files_opens_in_its_own_tab() {
     h.state_mut().execute("page.combine");
     h.run_steps(3);
     assert!(h.state().combine_showing() && h.state().active.is_none());
-    h.get_by_label("Add the PDFs to combine");
+    h.get_by_label("Add the files to combine");
     // Back to the document, then to Combine through its tab.
     h.get_by_label("doc.pdf").click();
     h.run_steps(3);
@@ -727,6 +879,7 @@ fn closing_the_combine_tab_forgets_its_list() {
 #[test]
 fn combine_lists_size_and_warns_before_combining() {
     let mut h = harness(1, |app| {
+        app.set_option("combine-view", "list").unwrap();
         app.use_files(
             pdfcraft_ui_egui::FilePurpose::Combine,
             vec![
@@ -792,9 +945,13 @@ fn combine_names(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
     h.state().combine_draft.iter().map(|f| f.name.clone()).collect()
 }
 
+/// Files in the Combine tab's list view (the table: headings, page ranges, row links).
 fn combine_of(names: &[(&str, usize)]) -> Harness<'static, PdfCraftApp> {
     let files: Vec<(String, Vec<u8>)> = names.iter().map(|(n, p)| (n.to_string(), fixture(*p))).collect();
-    let mut h = harness(1, move |app| app.use_files(pdfcraft_ui_egui::FilePurpose::Combine, files));
+    let mut h = harness(1, move |app| {
+        app.set_option("combine-view", "list").unwrap();
+        app.use_files(pdfcraft_ui_egui::FilePurpose::Combine, files);
+    });
     h.run_steps(3);
     h
 }
@@ -887,6 +1044,7 @@ fn undo_and_redo_restore_the_combine_list() {
 #[test]
 fn protected_files_that_can_be_combined_are_flagged() {
     let mut h = harness(1, |app| {
+        app.set_option("combine-view", "list").unwrap();
         app.use_files(
             pdfcraft_ui_egui::FilePurpose::Combine,
             vec![("one.pdf".into(), fixture(1)), ("no-copy.pdf".into(), protected("", "owner", -1 ^ 16))],
@@ -944,31 +1102,91 @@ fn columns_resize_and_the_layout_is_kept_in_the_settings() {
 }
 
 #[test]
-fn a_folder_adds_its_pdfs_in_order_and_optionally_its_subfolders() {
+fn a_folder_adds_its_pdfs_images_and_text_in_order_and_optionally_its_subfolders() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-combine-folder-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("sub")).unwrap();
     for (name, pages) in [("page10.pdf", 1), ("page2.PDF", 2), ("sub/inner.pdf", 3)] {
         std::fs::write(dir.join(name), fixture(pages)).unwrap();
     }
-    std::fs::write(dir.join("notes.txt"), b"not a pdf").unwrap();
+    // #569: images and text files join too; other files are left out.
+    std::fs::write(dir.join("notes.txt"), b"Some notes").unwrap();
+    std::fs::write(dir.join("readme.md"), b"# not combinable").unwrap();
     let mut h = harness(1, |_| {});
     h.state_mut().execute("page.combine");
     h.run_steps(2);
     h.state_mut().pick_override = Some(vec![dir.to_string_lossy().into_owned()]);
     h.get_by_label("Add folder…").click();
     h.run_steps(4);
-    assert_eq!(combine_names(&h), ["page2.PDF", "page10.pdf"], "PDFs only, numbers by value");
+    assert_eq!(combine_names(&h), ["notes.txt", "page2.PDF", "page10.pdf"], "numbers by value");
     // The toolbar's menu: the folder and its subfolders, as one undo step.
     h.get_by_label("More ways to add files").click();
     h.run_steps(2);
     h.get_by_label("Add folder and subfolders…").click();
     h.run_steps(4);
-    assert_eq!(combine_names(&h), ["page2.PDF", "page10.pdf", "page2.PDF", "page10.pdf", "inner.pdf"]);
+    assert_eq!(combine_names(&h), ["notes.txt", "page2.PDF", "page10.pdf", "notes.txt", "page2.PDF", "page10.pdf", "inner.pdf"]);
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     h.run_steps(2);
-    assert_eq!(combine_names(&h).len(), 2);
+    assert_eq!(combine_names(&h).len(), 3);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #569: an image or a text file added to Combine files becomes a PDF as it joins the list, an
+/// ordinary row with its pages.
+#[test]
+fn images_and_text_files_join_the_combine_list_as_pdfs() {
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbImage::from_pixel(40, 20, image::Rgb([90, 120, 200])).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let mut h = combine_of(&[("one.pdf", 2)]);
+    h.state_mut()
+        .use_files(pdfcraft_ui_egui::FilePurpose::Combine, vec![("scan.png".into(), png.into_inner()), ("notes.txt".into(), b"Some notes".to_vec())]);
+    h.run_steps(3);
+    assert_eq!(combine_names(&h), ["one.pdf", "scan.png", "notes.txt"]);
+    let draft = &h.state().combine_draft;
+    assert!(draft.iter().all(|f| f.bytes.starts_with(b"%PDF-") && f.problem.is_none()), "made into PDFs");
+    assert_eq!(draft.iter().map(|f| f.pages).collect::<Vec<_>>(), [2, 1, 1]);
+    h.get_by_label("Combine").click();
+    h.run_steps(3);
+    assert_eq!(texts_of(h.state(), 1), ["Page 1", "Page 2", "", "Some notes"]);
+}
+
+/// A file that can't be read (a damaged image, a type that can't be made into a PDF) joins the
+/// list all the same, with why; Combine asks before leaving it out, and Cancel changes nothing.
+#[test]
+fn files_that_cannot_be_read_are_listed_and_left_out_once_the_user_agrees() {
+    let mut h = combine_of(&[("one.pdf", 2)]);
+    let bad = vec![("broken.jpg".to_string(), b"\xff\xd8\xff\xe0 not a JPEG".to_vec()), ("report.docx".to_string(), b"PK\x03\x04".to_vec())];
+    h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::Combine, bad);
+    h.run_steps(3);
+    assert_eq!(combine_names(&h), ["one.pdf", "broken.jpg", "report.docx"]);
+    for f in &h.state().combine_draft[1..] {
+        let why = f.problem.as_deref().expect("why it can't be combined");
+        assert!(why.starts_with("Can't be read: ") && !why.contains(&f.name), "{why}");
+        assert!(f.lock.is_none() && f.pages == 0);
+    }
+    h.get_by_label_contains("this file type can't be converted");
+    // One readable file is not enough to combine.
+    assert!(h.get_by_label("Combine").accesskit_node().is_disabled());
+    h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::Combine, vec![("two.pdf".into(), fixture(1))]);
+    h.run_steps(3);
+    assert!(!h.get_by_label("Combine").accesskit_node().is_disabled());
+    // Combine asks first, naming the files left out; Cancel leaves everything as it was.
+    h.get_by_label("Combine").click();
+    h.run_steps(3);
+    h.get_by_label("Leave out files that can't be read?");
+    h.get_by_label("• broken.jpg");
+    h.get_by_label("• report.docx");
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Leave out files that can't be read?").is_none());
+    assert_eq!(h.state().views.len(), 1, "nothing combined");
+    assert_eq!(combine_names(&h).len(), 4);
+    // Asked again: Combine the rest.
+    h.get_by_label("Combine").click();
+    h.run_steps(3);
+    h.get_by_label("Combine the rest").click();
+    h.run_steps(3);
+    assert_eq!(texts_of(h.state(), 1), ["Page 1", "Page 2", "Page 1"]);
 }
 
 fn type_password(h: &mut Harness<'static, PdfCraftApp>, password: &str) {
@@ -1294,7 +1512,9 @@ fn zoomed_pages_in_view_are_rendered_at_the_size_drawn() {
         app.set_option("organize", "on").unwrap();
         app.set_option("grid-zoom", "300").unwrap();
     });
-    let drawn = 146.0 * 3.0 * h.ctx.pixels_per_point();
+    // The 200 × 300 fixture fits by height; keep its aspect ratio instead of stretching
+    // it to the full cell width. Request enough pixels for that actual preview width.
+    let drawn = 194.0 * 3.0 * (200.0 / 300.0) * h.ctx.pixels_per_point();
     let sharp = |h: &Harness<'static, PdfCraftApp>, page| h.state().views[0].grid_page_pixels(page);
     for _ in 0..200 {
         if sharp(&h, 0).is_some_and(|w| w as f32 >= drawn * 0.9) {
@@ -1309,7 +1529,7 @@ fn zoomed_pages_in_view_are_rendered_at_the_size_drawn() {
     // Zoomed out again, thumbnails are enough and the sharp renders are dropped.
     h.state_mut().set_option("grid-zoom", "50").unwrap();
     h.run_steps(3);
-    assert!(sharp(&h, 0).is_none());
+    assert!(sharp(&h, 0).is_none(), "page 0 still has a sharp render: {:?}", sharp(&h, 0));
 }
 
 #[test]
@@ -1381,6 +1601,28 @@ fn split_dialog_writes_one_file_per_part() {
 }
 
 #[test]
+fn split_at_bookmarks_with_equal_titles_keeps_every_part() {
+    let dir = temp_path("split-dup-titles");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut h = organize(3);
+    h.state_mut().export_dir_override = Some(dir.to_string_lossy().into_owned());
+    for (index, title) in [(0, "Same"), (1, "Same"), (2, "same")] {
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::AddBookmark { parent: vec![], index, title: title.into(), page: index });
+    }
+    h.state_mut().split_draft.mode = pdfcraft_ui_egui::SplitMode::Bookmarks;
+    h.state_mut().run_command("page.split");
+    h.run_steps(3);
+    h.get_by_label_contains("Creates 3 files from 3 pages");
+    h.get_by_label("Split").click();
+    h.run_steps(3);
+    let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    assert_eq!(names, ["doc - Same (2).pdf", "doc - Same.pdf", "doc - same (3).pdf"]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn split_before_selected_pages() {
     let dir = temp_path("split-sel");
     let _ = std::fs::remove_dir_all(&dir);
@@ -1445,6 +1687,90 @@ fn password_prompt_opens_and_security_tab_reports_the_details() {
     h.get_by_label("User password");
 }
 
+/// #785: the notice's message used to be laid out before its buttons, so in a narrow document
+/// area (a side panel open) it ran under "Security settings" and on into the panel, and it sat
+/// off the buttons' centre line.
+#[test]
+fn the_security_notice_wraps_beside_its_buttons_and_lines_up_with_them() {
+    // Wide: one line. Narrower: wrapped. Narrowest: cut short (the full text is on hover).
+    for (width, wraps) in [(1700.0, false), (1250.0, true), (900.0, false)] {
+        let mut h = Harness::builder().with_size(egui::vec2(width, 800.0)).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("locked.pdf", None, protected("", "owner", 0b0100)).unwrap();
+            app.set_option("panel", "bookmarks").unwrap();
+            app
+        });
+        h.run_steps(4);
+        let msg = h.get_by_label_contains("This document is secured").rect();
+        let button = h.get_by_label("Security settings").rect();
+        let dismiss = h.get_by_label("Dismiss").rect();
+        assert!(msg.right() <= button.left() + 0.5, "{width}: the message stops before the buttons: {msg:?} vs {button:?}");
+        assert!(button.right() <= dismiss.left() + 0.5, "{width}: {button:?} vs {dismiss:?}");
+        assert!((button.center().y - dismiss.center().y).abs() <= 0.5, "{width}: the buttons share a centre line");
+        assert!(msg.top() >= button.top(), "{width}: the message stays inside the bar: {msg:?} vs {button:?}");
+        let lines = (msg.height() / 14.0).floor().max(1.0);
+        let first_line = msg.top() + msg.height() / lines / 2.0;
+        assert!((first_line - button.center().y).abs() <= 1.5, "{width}: first line centred on the buttons: {msg:?} vs {button:?}");
+        assert_eq!(msg.height() > button.height(), wraps, "{width}: {msg:?}");
+    }
+}
+
+/// #995, #1077: a file with only a permissions password opens without asking, restricted. Its
+/// notice offers Unlock…, which takes the permissions password and lifts the restrictions.
+#[test]
+fn the_security_notice_unlocks_with_the_permissions_password() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("locked.pdf", None, protected("", "owner", 0b0100)).unwrap();
+        app
+    });
+    h.run_steps(4);
+    h.get_by_label_contains("This document is secured");
+    h.get_by_label("Unlock…").click();
+    h.run_steps(2);
+    h.get_by_label_contains("Enter its permissions password");
+    type_password(&mut h, "wrong");
+    h.get_by_label("Incorrect password. Try again.");
+    type_password(&mut h, "owner");
+    assert!(h.state().unlock_prompt.is_none());
+    assert!(h.query_by_label_contains("This document is secured").is_none(), "the restrictions are lifted");
+    h.state_mut().set_option("dialog", "properties").unwrap();
+    h.run_steps(2);
+    h.get_by_label("Security").click();
+    h.run_steps(3);
+    h.get_by_label("Owner password (no restrictions apply)");
+    assert!(!h.state().session.get(h.state().active_ids().unwrap().1).unwrap().dirty, "unlocking is not an edit");
+}
+
+/// Changing a restricted document's security asks for its permissions password first (Acrobat
+/// does too), then carries on.
+#[test]
+fn remove_security_asks_for_the_permissions_password_first() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("locked.pdf", None, protected("", "owner", 0b0100)).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("protect.remove"));
+    h.run_steps(2);
+    assert!(h.state().unlock_prompt.is_some(), "asks for the password");
+    // Cancelling changes nothing.
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().unlock_prompt.is_none());
+    let id = h.state().active_ids().unwrap().1;
+    assert!(!h.state().session.get(id).unwrap().dirty);
+    assert!(h.state_mut().execute("protect.remove"));
+    h.run_steps(2);
+    type_password(&mut h, "owner");
+    let doc = h.state().session.get(id).unwrap();
+    assert!(doc.dirty && doc.security_summary().is_none(), "security is removed (written by the next save)");
+}
+
 #[test]
 fn restricted_documents_show_a_notice_and_block_page_changes() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
@@ -1471,6 +1797,78 @@ fn restricted_documents_show_a_notice_and_block_page_changes() {
     h.get_by_label("Security settings").click();
     h.run_steps(3);
     assert!(h.query_all_by_label("Not allowed").count() >= 4);
+}
+
+/// Table 22, bit 5 (#568): a document whose security withholds copying keeps its text and images
+/// in. ⌘C, snapshots and exports are refused with a notice; the owner password lifts that.
+#[test]
+fn copying_out_of_a_document_honours_its_security() {
+    fn open(password: &'static str) -> Harness<'static, PdfCraftApp> {
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.system_clipboard = false;
+            app.open_bytes("no-copy.pdf", None, protected("pw", "owner", -1 ^ 0b1_0000)).unwrap();
+            app.submit_password(Some(password.into()));
+            app
+        });
+        // Select the page's text once its text layer is loaded.
+        for _ in 0..40 {
+            h.run_steps(2);
+            if h.state_mut().views[0].select_all() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(h.state().views[0].selected_text().as_deref(), Some("Page 1"));
+        h
+    }
+    fn copy(h: &mut Harness<'static, PdfCraftApp>) -> bool {
+        h.state_mut().toast = None;
+        h.event(egui::Event::Copy);
+        let mut copied = false;
+        for _ in 0..4 {
+            h.step();
+            copied |= h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == "Page 1"));
+        }
+        copied
+    }
+    fn snapshot(h: &mut Harness<'static, PdfCraftApp>) {
+        // Around "Page 1", at (20, 150) on the 200 × 300 pt page.
+        let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+        let at = |x: f32, y: f32| egui::pos2(r.left() + x / 200.0 * r.width(), r.top() + (300.0 - y) / 300.0 * r.height());
+        let (a, b) = (at(15.0, 175.0), at(120.0, 140.0));
+        h.hover_at(a);
+        h.run_steps(1);
+        h.drag_at(a);
+        h.run_steps(1);
+        h.hover_at(b);
+        h.run_steps(1);
+        h.drop_at(b);
+        h.run_steps(3);
+    }
+    let refused = Some("The document's security settings don't allow copying text and images");
+
+    let mut h = open("pw");
+    assert!(!copy(&mut h), "⌘C copies nothing");
+    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), refused);
+    for command in ["edit.snapshot", "export.image", "export.text", "export.docx", "export.html", "export.rtf", "export.all_images"] {
+        h.state_mut().toast = None;
+        assert!(!h.state_mut().execute(command), "{command} is refused");
+        assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), refused, "{command} says why");
+    }
+    assert_eq!(h.state().dialog, None, "no export dialog");
+    // The snapshot tool, chosen on another tab, takes nothing here either.
+    h.state_mut().set_option("quick", "snapshot").unwrap();
+    snapshot(&mut h);
+    assert!(h.state().last_snapshot.is_none());
+    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), refused);
+
+    let mut h = open("owner");
+    assert!(copy(&mut h), "the owner may copy");
+    assert!(h.state_mut().execute("edit.snapshot"));
+    snapshot(&mut h);
+    assert!(h.state().last_snapshot.is_some());
 }
 
 #[test]
@@ -1503,7 +1901,7 @@ fn extract_options_and_rotate_pages_dialog() {
     h.state_mut().views[0].select_pages(&[1, 2]);
     h.state_mut().run_command("page.extract");
     h.run_steps(2);
-    h.state_mut().extract_draft = pdfcraft_ui_egui::ExtractDraft { separate: true, delete: true };
+    h.state_mut().extract_draft = pdfcraft_ui_egui::ExtractDraft { separate: true, delete: true, ..Default::default() };
     h.get_all_by_label("Extract").last().unwrap().click();
     h.run_steps(3);
     let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
@@ -2134,4 +2532,25 @@ fn the_delete_key_deletes_pages_picked_in_the_pages_panel_but_never_every_page()
     h.run_steps(4);
     assert_eq!(page_texts(h.state()), ["Page 1"]);
     assert_eq!(h.state().views[0].current, 0);
+}
+
+#[test]
+fn host_dirty_hears_when_unsaved_work_appears_and_goes() {
+    let reports = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = reports.clone();
+    let mut h = harness(2, move |app| {
+        app.set_option("organize", "on").unwrap();
+        app.host_dirty = Some(Box::new(move |dirty| sink.lock().unwrap().push(dirty)));
+    });
+    assert_eq!(reports.lock().unwrap().last(), Some(&false), "a freshly opened document has nothing unsaved");
+    h.get_by_label("Rotate clockwise").click();
+    h.run_steps(3);
+    assert_eq!(reports.lock().unwrap().last(), Some(&true), "an edit is unsaved work");
+
+    let out = temp_path("host-dirty.pdf");
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::S);
+    h.run_steps(3);
+    assert_eq!(reports.lock().unwrap().last(), Some(&false), "saving clears it");
+    let _ = std::fs::remove_file(out);
 }

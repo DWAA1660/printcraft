@@ -60,7 +60,7 @@ pub enum OptimizeKind {
 
 impl OptimizeKind {
     /// The suffix of the saved copy's name ("notes (reduced).pdf").
-    fn suffix(self) -> &'static str {
+    pub(crate) fn suffix(self) -> &'static str {
         match self {
             OptimizeKind::Reduce => "reduced",
             OptimizeKind::Advanced => "optimized",
@@ -91,17 +91,15 @@ fn stage_label(stage: OptimizeStage) -> String {
 /// What the saved notice adds after the size: images optimized and items discarded.
 fn summary(r: &OptimizeReport) -> String {
     let o = &r.optimize;
+    let lang = crate::i18n::current();
     let mut parts = Vec::new();
-    if o.images_resampled + o.images_recompressed > 0 {
-        parts.push(format!(
-            "{} image{} optimized",
-            o.images_resampled + o.images_recompressed,
-            if o.images_resampled + o.images_recompressed == 1 { "" } else { "s" }
-        ));
+    let images = o.images_resampled + o.images_recompressed;
+    if images > 0 {
+        parts.push(crate::i18n::trn(lang, images as u64, "{n} image optimized", "{n} images optimized"));
     }
     let discarded: usize = r.discarded.iter().map(|(_, n)| n).sum();
     if discarded > 0 {
-        parts.push(format!("{discarded} item{} discarded", if discarded == 1 { "" } else { "s" }));
+        parts.push(crate::i18n::trn(lang, discarded as u64, "{n} item discarded", "{n} items discarded"));
     }
     if parts.is_empty() { String::new() } else { format!("; {}", parts.join(", ")) }
 }
@@ -159,7 +157,7 @@ fn discard_box(ui: &mut egui::Ui, list: &mut Vec<Hidden>, h: Hidden, label: &str
 pub(crate) fn body(ui: &mut egui::Ui, d: &mut OptimizeDraft, t: &Tokens) -> (bool, bool) {
     ui.label(egui::RichText::new(tl!("PDF Optimizer")).font(theme::semibold(18.0)));
     ui.add_space(6.0);
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         for (tab, label) in [
             (OptimizeTab::Images, tl!("Images")),
             (OptimizeTab::DiscardObjects, tl!("Discard Objects")),
@@ -282,7 +280,7 @@ impl PdfCraftApp {
         }
         let job = match self.session.optimize_job(id, settings, discard) {
             Ok(job) => job,
-            Err(e) => return self.save_optimized(id, kind.suffix(), Err(e)),
+            Err(e) => return self.save_optimized(id, kind, Err(e)),
         };
         let progress = Arc::new(Mutex::new(OptimizeProgress::default()));
         let p = progress.clone();
@@ -352,7 +350,7 @@ impl PdfCraftApp {
                     let detail = if kind == OptimizeKind::Advanced { summary(&r) } else { String::new() };
                     (b, detail)
                 });
-                self.save_optimized(doc, kind.suffix(), result);
+                self.save_optimized(doc, kind, result);
             }
         }
     }

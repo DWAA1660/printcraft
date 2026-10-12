@@ -19,12 +19,17 @@ pub enum FilePurpose {
     Ocr,
     /// Create a PDF ▸ Multiple files (PDFs, images and text).
     CreateMultiple,
+    /// Find text and redact ▸ Import list: a text file with one word or phrase per line.
+    RedactWords,
 }
 
 /// The picker for `purpose`: PDFs, and for Create and Insert also what they convert.
 fn files_picker(purpose: FilePurpose) -> rfd::AsyncFileDialog {
     let dialog = rfd::AsyncFileDialog::new();
-    if !matches!(purpose, FilePurpose::CreateMultiple | FilePurpose::InsertPages) {
+    if purpose == FilePurpose::RedactWords {
+        return dialog.add_filter(tl!("Text"), &["txt"]);
+    }
+    if !matches!(purpose, FilePurpose::CreateMultiple | FilePurpose::InsertPages | FilePurpose::Combine) {
         return dialog.add_filter("PDF", &["pdf"]);
     }
     let all: Vec<&str> = std::iter::once("pdf").chain(pdfcraft_engine::CONVERTIBLE).collect();
@@ -115,6 +120,37 @@ pub struct ExtractDraft {
     pub separate: bool,
     /// Delete the pages after extracting them.
     pub delete: bool,
+    /// The name the extracted pages are saved under, without `.pdf` (#737). The dialog fills in
+    /// the document's name when it opens; empty means that name too. As separate files each
+    /// page is `<name> (page N).pdf`, and a single page the user renamed is `<name>.pdf`.
+    pub name: String,
+}
+
+/// `name` made safe as a file name on every platform: no path separators, reserved or control
+/// characters, no trailing dots or spaces (Windows drops them), no `.pdf` (added back on
+/// writing), at most 200 characters. Empty when nothing usable is left.
+pub(crate) fn file_stem_from_user(name: &str) -> String {
+    let name = name.trim();
+    // Any case of ".pdf": it's added back on writing.
+    let name =
+        name.len().checked_sub(4).and_then(|i| name.get(i..).filter(|ext| ext.eq_ignore_ascii_case(".pdf")).and(name.get(..i))).unwrap_or(name);
+    let cleaned: String =
+        name.chars().map(|c| if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c }).collect();
+    // At most 200 bytes, so " (page N).pdf" still fits the usual 255-byte file name limit.
+    let mut end = cleaned.len().min(200);
+    while !cleaned.is_char_boundary(end) {
+        end -= 1;
+    }
+    let cleaned = cleaned.get(..end).unwrap_or_default();
+    // Trimming trailing dots also leaves "." and ".." empty.
+    let stem = cleaned.trim().trim_end_matches(['.', ' ']).trim_start();
+    // Windows reserves these device names whatever the extension: "NUL.pdf" writes nowhere.
+    let device = stem.split('.').next().unwrap_or_default().to_ascii_uppercase();
+    let reserved = matches!(device.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (device.len() == 4
+            && (device.starts_with("COM") || device.starts_with("LPT"))
+            && device.as_bytes().get(3).is_some_and(|d| (b'1'..=b'9').contains(d)));
+    if reserved { format!("_{stem}") } else { stem.to_string() }
 }
 
 /// Pages ▸ Rotate Pages.
@@ -133,6 +169,16 @@ pub struct RotateDraft {
 impl Default for RotateDraft {
     fn default() -> Self {
         RotateDraft { degrees: 90, which: 0, from: 1, to: 1, parity: Default::default(), orientation: Default::default() }
+    }
+}
+
+/// A picked file's name and bytes, or its name and why it can't be read.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_named(path: &std::path::Path) -> Result<(String, Vec<u8>), (String, String)> {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file.pdf".into());
+    match std::fs::read(path) {
+        Ok(bytes) => Ok((name, bytes)),
+        Err(e) => Err((name, e.to_string())),
     }
 }
 
@@ -170,7 +216,7 @@ impl PdfCraftApp {
         self.pick_files(FilePurpose::InsertPages, true);
     }
 
-    fn pick_files(&mut self, purpose: FilePurpose, multiple: bool) {
+    pub(crate) fn pick_files(&mut self, purpose: FilePurpose, multiple: bool) {
         #[cfg(not(target_arch = "wasm32"))]
         self.pick(crate::pickers::PickFor::Files(purpose), files_picker(purpose), multiple);
         #[cfg(target_arch = "wasm32")]
@@ -203,10 +249,21 @@ impl PdfCraftApp {
     /// Read the picked files and use them.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn use_paths(&mut self, purpose: FilePurpose, paths: &[std::path::PathBuf]) {
+        if purpose == FilePurpose::CreateMultiple {
+            // Each file is read when its turn comes, so the selection's bytes are not all held at once.
+            if !paths.is_empty() {
+                self.stage_create_multiple(paths.iter().map(|p| read_named(p)));
+            }
+            return;
+        }
         let mut files = Vec::new();
         let mut modified = Vec::new();
         for p in paths {
             let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file.pdf".into());
+            if purpose == FilePurpose::RedactWords && std::fs::metadata(p).is_ok_and(|m| m.len() > crate::redact_ui::MAX_WORD_LIST_BYTES as u64) {
+                self.notify_fmt("{name} is too large for a word list (at most 1 MB).", &[("name", &name)]);
+                return;
+            }
             match std::fs::read(p) {
                 Ok(b) => files.push((name, b)),
                 Err(e) => {
@@ -319,7 +376,16 @@ impl PdfCraftApp {
                 }
             }
             FilePurpose::Ocr => self.ocr_files(files),
-            FilePurpose::CreateMultiple => self.stage_create_multiple(files),
+            FilePurpose::CreateMultiple => self.stage_create_multiple(files.into_iter().map(Ok)),
+            FilePurpose::RedactWords => {
+                let Some((name, bytes)) = files.into_iter().next() else { return };
+                if bytes.len() > crate::redact_ui::MAX_WORD_LIST_BYTES {
+                    self.notify_fmt("{name} is too large for a word list (at most 1 MB).", &[("name", &name)]);
+                    return;
+                }
+                self.redact_search.words = pdfcraft_engine::redact_word_list(&pdfcraft_engine::decode_text(&bytes)).join("\n");
+                self.redact_search.mode = crate::redact_ui::SearchMode::Words;
+            }
         }
     }
 
@@ -357,13 +423,29 @@ impl PdfCraftApp {
     /// Insert the pages of `files` (PDFs, images, text), in order, at the gap a "+" in the page
     /// grid chose, or else after the selection (or the current page); then select them.
     pub fn insert_files(&mut self, files: Vec<(String, Vec<u8>)>) {
+        self.insert_each(files.into_iter().map(Ok));
+    }
+
+    /// [`Self::insert_files`] for files read as their turn comes: one that can't be read is skipped
+    /// and named.
+    pub(crate) fn insert_each<I>(&mut self, files: I)
+    where
+        I: IntoIterator<Item = Result<(String, Vec<u8>), (String, String)>>,
+    {
         let Some(view) = self.active.and_then(|i| self.views.get_mut(i)) else { return };
         let (id, chosen) = (view.id, view.insert_at.take());
         let after = view.target_pages().last().map_or(0, |p| p + 1);
         let count = self.session.get(id).map_or(0, |d| d.info.pages.len());
         let start = chosen.unwrap_or(after).min(count);
         let mut at = start;
-        for (name, bytes) in files {
+        for file in files {
+            let (name, bytes) = match file {
+                Ok(file) => file,
+                Err((name, error)) => {
+                    self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &error)]);
+                    continue;
+                }
+            };
             let converted =
                 self.session.convert_to_pdf(&name, &Arc::new(bytes)).and_then(|(_, pdf)| Ok((self.session.page_count_of(&name, &pdf)?, pdf)));
             match converted {
@@ -382,6 +464,13 @@ impl PdfCraftApp {
         }
     }
 
+    /// Show Extract pages, its file name filled in with the active document's (#737).
+    pub fn open_extract_dialog(&mut self) {
+        self.extract_draft.name =
+            self.active_ids().and_then(|(_, id)| self.session.get(id)).map(|d| strip_pdf(&d.name).to_string()).unwrap_or_default();
+        self.dialog = Some(crate::Dialog::Extract);
+    }
+
     /// Copy the selected pages (or the current page) into a new unsaved document tab.
     pub fn extract_selection(&mut self) {
         // What's typed in a form field is part of the document (#166).
@@ -392,12 +481,18 @@ impl PdfCraftApp {
         let pages = self.views[i].target_pages();
         let stem = self.session.get(id).map(|d| strip_pdf(&d.name).to_string()).unwrap_or_default();
         let opts = self.extract_draft.clone();
+        // The name typed in the dialog (#737), else the document's.
+        let chosen = file_stem_from_user(&opts.name);
+        let renamed = !chosen.is_empty() && chosen != file_stem_from_user(&stem);
+        let base = if chosen.is_empty() { stem.clone() } else { chosen };
         if opts.separate {
             // Each page as its own file, in a chosen folder.
             let mut named = Vec::new();
             for &p in &pages {
                 match self.session.extract(id, &[p]) {
-                    Ok(bytes) => named.push((format!("{stem} (page {}).pdf", p + 1), bytes)),
+                    // One page the user named is saved under exactly that name.
+                    Ok(bytes) if renamed && pages.len() == 1 => named.push((format!("{base}.pdf"), bytes)),
+                    Ok(bytes) => named.push((format!("{base} (page {}).pdf", p + 1), bytes)),
                     Err(e) => {
                         self.notify_fmt("Couldn't extract pages: {e}", &[("e", &e.to_string())]);
                         return;
@@ -429,7 +524,9 @@ impl PdfCraftApp {
                     } else {
                         crate::i18n::fmt(tl!("Extracted {n} pages"), &[("n", &pages.len().to_string())])
                     };
-                    self.open_created(&format!("{stem} (extract).pdf"), bytes, &message)
+                    // Save As offers the tab's name, so a name typed in the dialog is kept.
+                    let name = if renamed { format!("{base}.pdf") } else { format!("{stem} (extract).pdf") };
+                    self.open_created(&name, bytes, &message)
                 }
                 Err(e) => {
                     self.notify_fmt("Couldn't extract pages: {e}", &[("e", &e.to_string())]);
@@ -533,6 +630,7 @@ impl PdfCraftApp {
             }
         };
         let safe = |t: &str| t.chars().map(|c| if c.is_alphanumeric() || " -_.,()".contains(c) { c } else { '_' }).collect::<String>();
+        let mut used = std::collections::HashSet::new();
         let named: Vec<(String, Arc<Vec<u8>>)> = parts
             .into_iter()
             .map(|(a, b, bytes)| {
@@ -543,7 +641,14 @@ impl PdfCraftApp {
                     None if a == b => format!("{stem} (page {a}).pdf"),
                     None => format!("{stem} (pages {a}-{b}).pdf"),
                 };
-                (name, bytes)
+                // Equal titles (or titles that sanitize alike) get (2), (3), ... so no part overwrites another; compared case-insensitively.
+                let mut unique = name.clone();
+                let mut n = 1;
+                while !used.insert(unique.to_lowercase()) {
+                    n += 1;
+                    unique = format!("{} ({n}).pdf", name.trim_end_matches(".pdf"));
+                }
+                (unique, bytes)
             })
             .collect();
         self.write_files(&named, "Choose a folder for the split files");
@@ -613,6 +718,9 @@ impl PdfCraftApp {
             return;
         }
         let Some((_, id)) = self.active_ids() else { return };
+        if !self.may_copy(id) {
+            return;
+        }
         let Some(doc) = self.session.get(id) else { return };
         let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
         let ext = format.extension();
@@ -752,5 +860,26 @@ impl PdfCraftApp {
             }
             Err(e) => self.notify_error(e),
         }
+    }
+}
+
+#[cfg(test)]
+mod stem_tests {
+    use super::file_stem_from_user;
+
+    #[test]
+    fn user_file_names_stay_inside_the_folder_and_writable_everywhere() {
+        assert_eq!(file_stem_from_user("../../etc/passwd"), ".._.._etc_passwd");
+        assert_eq!(file_stem_from_user(".."), "");
+        assert_eq!(file_stem_from_user("Report.PDF"), "Report");
+        // Windows device names, in any case and with any extension, get a prefix.
+        assert_eq!(file_stem_from_user("nul"), "_nul");
+        assert_eq!(file_stem_from_user("COM1.pdf"), "_COM1");
+        assert_eq!(file_stem_from_user("lpt9.tar"), "_lpt9.tar");
+        assert_eq!(file_stem_from_user("COM10"), "COM10");
+        assert_eq!(file_stem_from_user("Console"), "Console");
+        // At most 200 bytes, cut on a character boundary.
+        let long = file_stem_from_user(&"文".repeat(300));
+        assert!(long.len() <= 200 && long.chars().all(|c| c == '文'), "{}", long.len());
     }
 }

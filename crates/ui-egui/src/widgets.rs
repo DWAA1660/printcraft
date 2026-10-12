@@ -5,6 +5,104 @@ use egui::{Align2, Color32, CornerRadius, Rect, Response, Sense, Stroke, vec2};
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons};
 
+/// Horizontal and vertical inset of a single-line field.
+const FIELD_MARGIN: egui::Margin = egui::Margin::symmetric(10, 6);
+/// Outer height of a single-line field, including its inset.
+const FIELD_MIN_HEIGHT: f32 = 30.0;
+/// Padding inside every modal.
+const DIALOG_PAD_X: i8 = 20;
+const DIALOG_PAD_Y: i8 = 16;
+
+fn dialog_frame(ctx: &egui::Context) -> egui::Frame {
+    let t = Tokens::get(ctx);
+    egui::Frame::new()
+        .fill(t.card)
+        .stroke(Stroke::new(1.0, t.border))
+        .corner_radius(CornerRadius::same(10))
+        .inner_margin(egui::Margin::symmetric(DIALOG_PAD_X, DIALOG_PAD_Y))
+        .shadow(ctx.global_style().visuals.window_shadow)
+}
+
+/// A modal with the card fill, a 10-point corner and room around its contents.
+pub fn modal(ctx: &egui::Context, id: impl std::hash::Hash + std::fmt::Debug) -> egui::Modal {
+    egui::Modal::new(egui::Id::new(id)).frame(dialog_frame(ctx))
+}
+
+/// Show [`modal`], outline its controls, and remember the card rect for layout checks.
+pub fn show_modal<R>(ctx: &egui::Context, id: &str, content: impl FnOnce(&mut egui::Ui) -> R) -> egui::ModalResponse<R> {
+    let stored = egui::Id::new(id);
+    modal(ctx, id).show(ctx, |ui| {
+        begin_dialog(ui);
+        let inner = content(ui);
+        // The frame's stroke sits outside this content rect; the stored card is the fill.
+        let card = ui.min_rect().expand2(egui::vec2(f32::from(DIALOG_PAD_X), f32::from(DIALOG_PAD_Y)));
+        ui.ctx().data_mut(|d| d.insert_temp(stored.with("card"), card));
+        inner
+    })
+}
+
+/// Outlined controls at a shared 30-point height, with a focus stroke and 4-point corners.
+///
+/// Dialog fills match the theme's field colour, so radio buttons, check boxes, combo boxes
+/// and number fields need the border or they disappear into the card.
+pub fn begin_dialog(ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    let w = &mut ui.visuals_mut().widgets;
+    w.inactive.bg_stroke = Stroke::new(1.0, t.border);
+    w.inactive.weak_bg_fill = t.field;
+    // Slider rails and check-box interiors use the plain fill.
+    w.inactive.bg_fill = t.hover;
+    w.hovered.bg_stroke = Stroke::new(1.0, t.text_muted);
+    for state in [&mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
+        state.corner_radius = CornerRadius::same(4);
+    }
+    ui.visuals_mut().selection.stroke = Stroke::new(1.5, t.accent);
+    ui.spacing_mut().interact_size.y = FIELD_MIN_HEIGHT;
+}
+
+/// A single-line field tall enough to read and to click.
+pub fn line(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
+    egui::TextEdit::singleline(text).margin(FIELD_MARGIN).min_size(vec2(0.0, FIELD_MIN_HEIGHT))
+}
+
+/// A multiline field with the same horizontal inset as [`line`].
+pub fn block(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
+    egui::TextEdit::multiline(text).margin(egui::Margin::symmetric(10, 6))
+}
+
+/// One line that stays within `max_width`, cut on a character boundary with an ellipsis.
+/// Only the first 160 characters are measured, so a huge name cannot lay out thousands of candidates.
+pub(crate) fn fit_line(text: &str, max_width: f32, mut width_of: impl FnMut(&str) -> f32) -> String {
+    if !max_width.is_finite() || max_width <= 0.0 {
+        return String::new();
+    }
+    let mut s: String = text.chars().take(160).collect();
+    if s.len() == text.len() && width_of(text) <= max_width {
+        return text.to_owned();
+    }
+    loop {
+        s.pop();
+        if s.is_empty() {
+            return if width_of("\u{2026}") <= max_width { "\u{2026}".into() } else { String::new() };
+        }
+        let candidate = format!("{s}\u{2026}");
+        if width_of(&candidate) <= max_width {
+            return candidate;
+        }
+    }
+}
+
+pub(crate) fn text_width(ui: &egui::Ui, text: &str, font: &egui::FontId) -> f32 {
+    ui.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), font.clone(), Color32::WHITE).size().x)
+}
+
+/// Draw `text` from `pos` (left, vertically centered) so it never runs past `max_width`.
+pub(crate) fn paint_left(ui: &egui::Ui, pos: egui::Pos2, text: &str, font: egui::FontId, color: Color32, max_width: f32) {
+    let shown = fit_line(text, max_width, |s| text_width(ui, s, &font));
+    let clip = Rect::from_min_size(egui::pos2(pos.x, pos.y - 14.0), vec2(max_width.max(0.0), 28.0));
+    ui.painter().with_clip_rect(clip).text(pos, Align2::LEFT_CENTER, shown, font, color);
+}
+
 /// A mode-bar tab: text with an underline when active.
 pub fn mode_tab(ui: &mut egui::Ui, label: &str, active: bool) -> Response {
     let t = Tokens::get(ui.ctx());
@@ -42,15 +140,20 @@ pub fn pill_button(ui: &mut egui::Ui, label: &str, primary: bool) -> Response {
 
 /// Icon + label, transparent until hovered.
 pub fn ghost_button(ui: &mut egui::Ui, icon: &str, label: &str) -> Response {
+    ghost_button_sized(ui, icon, label, 30.0)
+}
+
+/// [`ghost_button`] at a given height (the macOS title bar is shorter than the tab strip elsewhere).
+pub fn ghost_button_sized(ui: &mut egui::Ui, icon: &str, label: &str, height: f32) -> Response {
     let t = Tokens::get(ui.ctx());
     let font = theme::medium(13.0);
     let w = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font.clone(), t.text).size().x);
-    let (rect, resp) = ui.allocate_exact_size(vec2(w + 38.0, 30.0), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(w + 38.0, height), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
     if resp.hovered() {
         ui.painter().rect_filled(rect, CornerRadius::same(6), t.hover);
     }
-    icons::paint(ui, Rect::from_min_size(rect.min + vec2(6.0, 6.0), vec2(18.0, 18.0)), icon, 17.0, t.icon);
+    icons::paint(ui, Rect::from_min_size(rect.min + vec2(6.0, (height - 18.0) / 2.0), vec2(18.0, 18.0)), icon, 17.0, t.icon);
     ui.painter().text(rect.left_center() + vec2(30.0, 0.0), Align2::LEFT_CENTER, label, font, t.text);
     resp
 }
@@ -63,7 +166,7 @@ pub fn search_box(ui: &mut egui::Ui, placeholder: &str, width: f32) -> Response 
     let fill = if resp.hovered() { t.hover } else { t.field };
     ui.painter().rect(rect, CornerRadius::same(16), fill, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
     icons::paint(ui, Rect::from_min_size(rect.min + vec2(10.0, 8.0), vec2(16.0, 16.0)), "search", 15.0, t.text_muted);
-    let shortcut = ui.ctx().format_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::K));
+    let shortcut = crate::commands::command_shortcut_label(ui.ctx(), "view.palette");
     let shortcut = ui.painter().layout_no_wrap(shortcut, theme::regular(11.5), t.text_faint);
     let shortcut_pos = rect.right_center() - vec2(12.0 + shortcut.size().x, shortcut.size().y * 0.5);
     // Reserve the measured shortcut width in every language; long translations are elided
@@ -312,25 +415,32 @@ mod tests {
 
     #[test]
     fn search_placeholder_never_overlaps_the_shortcut() {
-        for width in [260.0, 160.0, 90.0] {
-            let ctx = egui::Context::default();
-            ctx.set_fonts(theme::font_definitions());
-            let placeholder = "Werkzeuge und Befehle suchen";
-            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                search_box(ui, placeholder, width);
-            });
-            let text_shapes: Vec<_> = output
-                .shapes
-                .iter()
-                .filter_map(|shape| if let egui::Shape::Text(text) = &shape.shape { Some((shape.clip_rect, text)) } else { None })
-                .collect();
-            let (clip, hint) = text_shapes.iter().find(|(_, text)| text.galley.job.text == placeholder).unwrap();
-            let (_, shortcut) = text_shapes.iter().find(|(_, text)| text.galley.job.text.contains('K')).unwrap();
-            assert!(clip.right() <= shortcut.pos.x - 9.0, "hint must leave a gap before the shortcut at width {width}");
-            assert!(hint.galley.elided, "the long original German hint must be elided at width {width}");
-            assert_eq!(hint.galley.rows.len(), 1);
-            output.drop_without_applying_deltas();
+        let previous = crate::i18n::current();
+        for (code, expected) in [("en", "Ctrl+K"), ("de", "Strg+K")] {
+            crate::i18n::set_current(crate::i18n::Lang::from_code(code).unwrap());
+            for width in [260.0, 160.0, 90.0] {
+                let ctx = egui::Context::default();
+                ctx.set_os(egui::os::OperatingSystem::Nix);
+                ctx.set_fonts(theme::font_definitions());
+                let placeholder = "Werkzeuge und Befehle suchen";
+                let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    search_box(ui, placeholder, width);
+                });
+                let text_shapes: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| if let egui::Shape::Text(text) = &shape.shape { Some((shape.clip_rect, text)) } else { None })
+                    .collect();
+                let (clip, hint) = text_shapes.iter().find(|(_, text)| text.galley.job.text == placeholder).unwrap();
+                let (_, shortcut) = text_shapes.iter().find(|(_, text)| text.galley.job.text.contains('K')).unwrap();
+                assert_eq!(shortcut.galley.job.text, expected);
+                assert!(clip.right() <= shortcut.pos.x - 9.0, "hint must leave a gap before the shortcut at width {width}");
+                assert!(hint.galley.elided, "the long original German hint must be elided at width {width}");
+                assert_eq!(hint.galley.rows.len(), 1);
+                output.drop_without_applying_deltas();
+            }
         }
+        crate::i18n::set_current(previous);
     }
 
     fn toast_rect(app: &mut PdfCraftApp, ctx: &egui::Context, width: f32, now: &mut f64) -> Rect {
@@ -367,5 +477,31 @@ mod tests {
         app.notify("Saved");
         let again = toast_rect(&mut app, &ctx, 1280.0, &mut now);
         assert!((again.width() - short.width()).abs() < 1.0, "long notices must not impose a permanent minimum width");
+    }
+
+    #[test]
+    fn line_field_is_at_least_thirty_points_tall() {
+        let ctx = egui::Context::default();
+        let mut text = String::new();
+        let mut height = 0.0;
+        ctx.run_ui(egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 200.0))), ..Default::default() }, |ui| {
+            begin_dialog(ui);
+            height = ui.add(line(&mut text)).rect.height();
+        })
+        .drop_without_applying_deltas();
+        assert!(height >= FIELD_MIN_HEIGHT, "field height {height}");
+    }
+
+    #[test]
+    fn fit_line_keeps_short_text_and_ellipsizes_the_rest() {
+        let width = |s: &str| s.chars().count() as f32;
+        assert_eq!(fit_line("localhost", 20.0, width), "localhost");
+        let long = "Apple Worldwide Developer Relations Certification Authority";
+        let fitted = fit_line(long, 24.0, width);
+        assert!(fitted.ends_with('\u{2026}'), "{fitted}");
+        assert!(fitted.chars().count() <= 24, "{fitted}");
+        assert!(long.starts_with(fitted.trim_end_matches('\u{2026}')));
+        assert_eq!(fit_line(long, 0.0, width), "");
+        assert_eq!(fit_line("ééé", 2.0, width), "é\u{2026}");
     }
 }

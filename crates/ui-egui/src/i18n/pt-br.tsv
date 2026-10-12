@@ -18,6 +18,9 @@
 	Preferences	Preferências
 	Preferences…	Preferências…
 	Interface language	Idioma da interface
+	Interface size	Tamanho da interface
+	Auto ({percent}%)	Automático ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	Automático segue o tamanho do texto do sistema. As páginas sempre são exibidas na resolução total da tela.
 	Identity	Identidade
 	Name on new comments	Nome nos novos comentários
 	Open…	Abrir…
@@ -51,6 +54,7 @@
 	Fit visible	Ajustar ao visível
 	Marquee zoom	Zoom por seleção
 	Take a snapshot	Capturar instantâneo
+	Column select	Seleção de coluna
 	Full screen mode	Modo de tela cheia
 	Read mode	Modo de leitura
 	Switch light / dark theme	Alternar tema claro / escuro
@@ -73,6 +77,8 @@
 	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	O PdfCraft está desenhando sem processador gráfico, por isso pode ficar lento. Atualizar o driver de vídeo pode ajudar.
 	Go to page…	Ir para a página…
 	Reopen the files that were open when PdfCraft last closed	Reabrir os arquivos que estavam abertos quando o PdfCraft foi fechado pela última vez
+	Margins	Margens
+	For page sizes and margins.	Para tamanhos de página e margens.
 	Open	Abrir
 	Open file	Abrir arquivo
 	Home	Início
@@ -333,7 +339,7 @@
 	Centre	Centralizar
 	Align right	Alinhar à direita
 	Justify	Justificar
-	Standard fonts; text outside Windows-1252 isn't supported yet.	Fontes padrão; texto fora de Windows-1252 ainda não é suportado.
+	Thai and Arabic use regular fallback fonts when available.	O tailandês e o árabe usam fontes alternativas de estilo normal quando disponíveis.
 	Edit image	Editar imagem
 	Rotate counterclockwise	Girar no sentido anti-horário
 	Rotate clockwise	Girar no sentido horário
@@ -419,6 +425,7 @@
 	Rotation	Rotação
 	Appear behind page	Exibir atrás da página
 	Appear on top of page	Exibir sobre a página
+	Offset from centre	Deslocamento a partir do centro
 	From colour	A partir da cor
 	Page Range Options	Opções de intervalo de páginas
 	Preview: page {p} of {n}	Pré-visualização: página {p} de {n}
@@ -482,6 +489,10 @@
 	The signature will be invisible.	A assinatura será invisível.
 	Distinguished name	Nome distinto
 	Labels	Rótulos
+	Graphic	Gráfico
+	Signer's name	Nome do signatário
+	Fill & Sign signature	Assinatura de Preencher e assinar
+	Choose image…	Escolher imagem…
 	Permitted actions after certifying	Ações permitidas após a certificação
 	No changes allowed	Nenhuma alteração permitida
 	Annotations, form fill-in, and digital signatures	Anotações, preenchimento de formulário e assinaturas digitais
@@ -730,7 +741,13 @@
 	Dates	Datas
 	Text in images isn't found; recognise text (OCR) first.	Texto em imagens não é encontrado; reconheça o texto (OCR) primeiro.
 	No matches.	Nenhuma correspondência.
+	Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth.	Alguns marcadores não são mostrados aqui: o painel lista um número limitado, com profundidade limitada.
 	{n} match(es) marked for redaction.	{n} correspondência(s) marcada(s) para ocultação.
+	Multiple words or phrases	Várias palavras ou frases
+	One word or phrase per line	Uma palavra ou frase por linha
+	Import list…	Importar lista…
+	{n} word(s) or phrase(s)	{n} palavra(s) ou frase(s)
+	{name} is too large for a word list (at most 1 MB).	{name} é grande demais para uma lista de palavras (no máximo 1 MB).
 	Redaction Tool Properties	Propriedades da ferramenta de ocultação
 	Redacted area fill colour:	Cor de preenchimento da área ocultada:
 	Use overlay text	Usar texto de sobreposição
@@ -1021,8 +1038,14 @@
 	Open a PDF ({key})	Abrir um PDF ({key})
 	Dark gray theme	Tema cinza escuro
 	Light theme	Tema claro
+	Appearance mode	Modo de aparência
+	Light	Claro
+	Dark	Escuro
+	Active	Ativo
+	Dark theme	Tema escuro
+	Appearance settings…	Configurações de aparência…
 	Print ({key})	Imprimir ({key})
-	Save (M4)	Salvar (M4)
+	Save ({key})	Salvar ({key})
 	Document properties ({key})	Propriedades do documento ({key})
 	Action Wizard…	Assistente de ações…
 	Add Bates numbering…	Adicionar numeração Bates…
@@ -1384,6 +1407,8 @@
 	Right Edge	Borda direita
 	Language	Idioma
 	Saved {place}: {before} → {after} ({pct}% smaller){detail}	Salvo {place}: {before} → {after} ({pct}% menor){detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	Este arquivo já está o menor possível ({size}). Nenhuma cópia foi salva.
+	Saved {place}: {before} → {after} (not smaller){detail}	Salvo {place}: {before} → {after} (não ficou menor){detail}
 	Couldn't save the image: {e}	Não foi possível salvar a imagem: {e}
 	Adding images arrives on the web with file pickers for images	A adição de imagens chegará à Web com seletores de arquivo para imagens
 	Replacing images on page {p} arrives on the web with image pickers ({i})	A substituição de imagens na página {p} chegará à Web com seletores de imagem ({i})
@@ -1447,6 +1472,8 @@
 	{file} is too large for a stamp (at most {n} MB)	{file} é muito grande para um carimbo (no máximo {n} MB)
 	Sent to {printer}	Enviado para {printer}
 	Sent to {printer}: {msg}	Enviado para {printer}: {msg}
+	Looking for printers…	Procurando impressoras…
+	Sending to {printer}…	Enviando para {printer}…
 	Choose a folder for the searchable files	Escolha uma pasta para os arquivos pesquisáveis
 	Files are combined in this order. Leave Pages empty to take every page.	Os arquivos são combinados nesta ordem. Deixe Páginas em branco para incluir todas as páginas.
 	Pages of {name} to combine, e.g. 1-3, 6	Páginas de {name} a combinar, ex.: 1-3, 6
@@ -1521,8 +1548,14 @@
 	watermark	marca-d'água
 	background	plano de fundo
 	This document isn't password-protected	Este documento não está protegido por senha
-	Only the document's owner can change its security (open it with the permissions password)	Somente o proprietário do documento pode alterar sua segurança (abra-o com a senha de permissões)
+	Enter permissions password…	Digitar senha de permissões…
+	Permissions password	Senha de permissões
+	“{name}” has security restrictions. Enter its permissions password to lift them.	“{name}” tem restrições de segurança. Digite a senha de permissões para removê-las.
+	Restrictions lifted	Restrições removidas
+	Couldn't unlock {name}: {e}	Não foi possível desbloquear {name}: {e}
+	This document has no restrictions to lift	Este documento não tem restrições a remover
 	The document's security settings don't allow this change	As configurações de segurança do documento não permitem esta alteração
+	The document's security settings don't allow copying text and images	As configurações de segurança do documento não permitem copiar texto e imagens
 	Open a document first	Abra um documento primeiro
 	Security will be removed when you save	A segurança será removida ao salvar
 	Click text or an image to edit it	Clique no texto ou em uma imagem para editá-lo
@@ -1613,6 +1646,7 @@
 	Security properties…	Propriedades de segurança…
 	Organize pages	Organizar páginas
 	New bookmark	Novo marcador
+	New bookmarks from structure	Novos marcadores a partir da estrutura
 	Rotate pages clockwise	Girar páginas em sentido horário
 	Rotate pages counterclockwise	Girar páginas em sentido anti-horário
 	Delete pages	Excluir páginas
@@ -1926,14 +1960,14 @@
 	Add open documents	Adicionar documentos abertos
 	All open documents	Todos os documentos abertos
 	No documents are open	Nenhum documento está aberto
-	Add the PDFs to combine	Adicionar os PDFs para combinar
-	Drop PDFs or folders here, or choose them.	Solte PDFs ou pastas aqui, ou escolha-os.
+	Add the files to combine	Adicionar os arquivos para combinar
+	Drop PDFs, images, text files or folders here, or choose them.	Solte PDFs, imagens, arquivos de texto ou pastas aqui, ou escolha-os.
 	Add folder…	Adicionar pasta…
 	More ways to add files	Mais formas de adicionar arquivos
 	Add folder	Adicionar pasta
-	Every PDF in the folder	Todo PDF da pasta
+	Every PDF, image and text file in the folder	Todo PDF, imagem e arquivo de texto da pasta
 	Add folder and subfolders…	Adicionar pasta e subpastas…
-	Every PDF in the folder and the folders inside it	Todo PDF da pasta e das pastas dentro dela
+	Every PDF, image and text file in the folder and the folders inside it	Todo PDF, imagem e arquivo de texto da pasta e das pastas dentro dela
 	Add folder and subfolders	Adicionar pasta e subpastas
 	PDF, images and text	PDF, imagens e texto
 	Files are combined from top to bottom. Leave Pages empty to take every page.	Os arquivos são combinados de cima para baixo. Deixe Páginas em branco para incluir todas as páginas.
@@ -1952,6 +1986,10 @@
 	Opened, but its security settings don't allow combining. Enter the permissions password.	Aberto, mas as configurações de segurança dele não permitem combinar. Digite a senha de permissões.
 	Its security settings don't allow copying pages	As configurações de segurança dele não permitem copiar páginas
 	Can't be read: {e}	Não é possível ler: {e}
+	Leave out files that can't be read?	Deixar de fora os arquivos que não podem ser lidos?
+	These files can't be read, so they won't be in the combined PDF:	Estes arquivos não podem ser lidos, então não estarão no PDF combinado:
+	Combine the rest	Combinar os demais
+	and {n} more	e mais {n}
 	Unlocked: the combined file won't be password-protected	Desbloqueado: o arquivo combinado não será protegido por senha
 	Protected: the combined file won't keep its security settings	Protegido: o arquivo combinado não manterá as configurações de segurança
 	Unlock {name}	Desbloquear {name}
@@ -1993,7 +2031,10 @@
 	This web address mixes letters from different alphabets, a common way to imitate another site's name.	Este endereço da web mistura letras de alfabetos diferentes, uma forma comum de imitar o nome de outro site.
 	This web address uses letters from another alphabet, which can look like familiar ones.	Este endereço da web usa letras de outro alfabeto, que podem parecer familiares.
 	Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.	Continue apenas se você confiar neste documento. Um endereço pode carregar informações do documento, como o que você digitou no formulário dele.
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	As fontes de texto PDF não podem exibir “{c}” ({code}). Escolha um texto compatível.
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	As fontes padrão não conseguem desenhar “{c}” ({code}). Por enquanto, apenas caracteres da Europa Ocidental podem ser adicionados como texto.
+	This field's font can't draw “{c}” ({code}), so PdfCraft shows ? in its place. The value is saved, and other PDF viewers redraw the field from it.	A fonte deste campo não consegue desenhar “{c}” ({code}), então o PdfCraft mostra ? no lugar. O valor foi salvo, e outros leitores de PDF redesenham o campo a partir dele.
+	The fonts PdfCraft writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.	As fontes que o PdfCraft usa para escrever não conseguem desenhar “{c}” ({code}), então ele aparece como ? em qualquer leitor de PDF. O texto foi salvo.
 	Line ending	Fim de linha
 	Show	Mostrar
 	Sort	Classificar
@@ -2025,7 +2066,7 @@ action wizard	Start	Iniciar
 	A script	Um script
 	About	Sobre
 	Add {what}	Adicionar {what}
-	Added the first {n} PDFs in {folder}	Adicionados os primeiros {n} PDFs de {folder}
+	Added the first {n} files in {folder}	Adicionados os primeiros {n} arquivos de {folder}
 	Align fields	Alinhar campos
 	Another file dialog is still open. Finish with it first.	Outra janela de arquivos ainda está aberta. Conclua-a primeiro.
 	Basic constraints	Restrições básicas
@@ -2066,7 +2107,7 @@ action wizard	Start	Iniciar
 	Model	Modelo
 	Models	Modelos
 	Name (A–Z)	Nome (A–Z)
-	No PDFs found in {folder}	Nenhum PDF encontrado em {folder}
+	No PDFs, images or text files found in {folder}	Nenhum PDF, imagem ou arquivo de texto encontrado em {folder}
 	None of those files can be made into a PDF; use PDFs, images or .txt files	Nenhum desses arquivos pode virar PDF; use PDFs, imagens ou arquivos .txt
 	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	Abre as preferências do driver da impressora. Elas valem para toda impressão deste computador; as cópias, frente e verso, escala de cinza e papel escolhidos aqui continuam valendo.
 	Optimization cancelled	Otimização cancelada
@@ -2136,3 +2177,109 @@ comment menu	Edit	Editar
 	The field {name} no longer exists.	O campo {name} não existe mais.
 	A selected field has no widget on any page, so the fields can't be edited together.	Um campo selecionado não tem widget em nenhuma página, então os campos não podem ser editados juntos.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} a {dpi} dpi, o maior tamanho em que podem ser desenhadas)
+
+# Multi-object selection and movement (#844)
+@plural	{n} object selected|{n} objects selected	{n} objeto selecionado|{n} objetos selecionados
+	Drag the selection to move it. Esc clears the selection.	Arraste a seleção para movê-la. Esc limpa a seleção.
+	Shift-click to select several objects. Drag empty space to select an area.	Use Shift e clique para selecionar vários objetos. Arraste em um espaço vazio para selecionar uma área.
+	Select at most 1000 objects at a time.	Selecione no máximo 1000 objetos por vez.
+	Finish or discard the text being edited before selecting several objects.	Conclua ou descarte a edição do texto antes de selecionar vários objetos.
+	Move object	Mover objeto
+	Move objects	Mover objetos
+	Vertical text cannot be moved with this selection.	O texto vertical não pode ser movido com esta seleção.
+	Text used as a clipping path cannot be moved with this selection.	O texto usado como caminho de recorte não pode ser movido com esta seleção.
+	These objects could not be moved. Select them again and try a smaller move.	Não foi possível mover estes objetos. Selecione-os novamente e tente um deslocamento menor.
+	This page contains objects that cannot be selected together.	Esta página contém objetos que não podem ser selecionados juntos.
+	Fill colour	Cor de preenchimento
+	No fill	Sem preenchimento
+	Fill colour: none	Cor de preenchimento: nenhuma
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	Espaço
+	Grid view	Exibição em grade
+	List view	Exibição em lista
+	Files are combined in the order shown. Drag them to change it.	Os arquivos são combinados na ordem mostrada. Arraste-os para mudá-la.
+	Preview unavailable: {e}	Pré-visualização indisponível: {e}
+	Pages: {k} of {n}	Páginas: {k} de {n}
+	Check the pages	Verifique as páginas
+	Switch to List view to change the pages it takes.	Mude para a exibição em lista para alterar as páginas incluídas.
+	Expand all	Expandir tudo
+	Collapse all	Recolher tudo
+	Remove page	Remover página
+	Remove {n} pages	Remover {n} páginas
+
+# Shared panel docking
+	Reset panel layout	Redefinir disposição dos painéis
+	Float panel	Tornar painel flutuante
+	Move to group	Mover para grupo
+	Panels	Painéis
+	Resize panels	Redimensionar painéis
+	Resize panel window	Redimensionar janela do painel
+	Tools	Ferramentas
+	Inspector	Inspetor
+
+# Architectural print controls (follow-up to #599).
+	PDF page: {size}	Página PDF: {size}
+	Match page at 100%	Ajustar papel à página a 100%
+	PDF scale: {scale}%	Escala do PDF: {scale}%
+	Printer paper and scaling may differ. Check driver settings.	O papel e a escala da impressora podem variar. Confira as configurações do driver.
+	Drawing scale changes. Use Actual size for full-scale plans.	A escala do desenho muda. Use Tamanho real para plantas em escala.
+	Reload documents when their files change on disk	Recarregar documentos quando os arquivos mudarem no disco
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Este arquivo foi alterado no disco. Recarregue-o para ver a nova versão; suas alterações não salvas serão perdidas.
+	Reload	Recarregar
+	Couldn't reload {name}: {e}	Não foi possível recarregar {name}: {e}
+	Select page {label}	Selecionar página {label}
+	Rotate page {label} counterclockwise	Girar página {label} no sentido anti-horário
+	Rotate page {label} clockwise	Girar página {label} no sentido horário
+	Delete page {label}	Excluir página {label}
+calendar date	January	janeiro
+calendar date	February	fevereiro
+calendar date	March	março
+calendar date	April	abril
+calendar date	May	maio
+calendar date	June	junho
+calendar date	July	julho
+calendar date	August	agosto
+calendar date	September	setembro
+calendar date	October	outubro
+calendar date	November	novembro
+calendar date	December	dezembro
+	Mouse wheel scroll speed	Velocidade de rolagem da roda do mouse
+scroll speed	Slow	Lenta
+scroll speed	Normal	Normal
+scroll speed	Fast	Rápida
+	Enhance camera image	Aprimorar foto da câmera
+	Drag the corners onto the document's edges, then choose Enhance page.	Arraste os cantos até as bordas do documento e escolha Aprimorar página.
+	Enhance page	Aprimorar página
+	Done adding text	Concluir a adição de texto
+	Discard this text (Esc)	Descartar este texto (Esc)
+	Clean-up	Limpeza
+	Original	Original
+	Greyscale	Escala de cinza
+	Black and white	Preto e branco
+
+# Signature verification and explicit CCA trust
+	Verification	Verificação
+	Intact	Íntegro
+	Altered	Alterado
+	Trusted	Confiável
+	Untrusted	Não confiável
+	Not revoked	Não revogado
+	Not recorded	Não registrado
+	Trusted timestamp	Carimbo de tempo confiável
+	Signer claim	Declaração do signatário
+	Permitted	Permitido
+	Not permitted	Não permitido
+	Trust CCA India roots…	Confiar nas raízes CCA India…
+	These roots will be saved as trusted certificates and apply to all matching signers.	Estas raízes serão salvas como certificados confiáveis e se aplicarão a todos os signatários correspondentes.
+	Integrity	Integridade
+	Certificate	Certificado
+	Revocation	Revogação
+	Changes after signing	Alterações após a assinatura
+	Recommended next steps	Próximas etapas recomendadas

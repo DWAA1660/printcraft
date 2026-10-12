@@ -58,6 +58,9 @@
 	Preferences	首选项
 	Preferences…	首选项…
 	Interface language	界面语言
+	Interface size	界面大小
+	Auto ({percent}%)	自动 ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	“自动”会跟随系统的文字大小。页面始终以显示器的完整分辨率渲染。
 	Identity	身份
 	Name on new comments	新注释的作者姓名
 	Open…	打开…
@@ -115,6 +118,7 @@
 	Rotate view clockwise	顺时针旋转视图
 	Rotate view counterclockwise	逆时针旋转视图
 	Take a snapshot	拍摄快照
+	Column select	列选择
 	Full screen mode	全屏模式
 	Read mode	阅读模式
 	Switch light / dark theme	切换浅色/深色主题
@@ -387,7 +391,7 @@
 	Centre	居中
 	Align right	右对齐
 	Justify	两端对齐
-	Standard fonts; text outside Windows-1252 isn't supported yet.	标准字体；尚不支持 Windows-1252 之外的文本。
+	Thai and Arabic use regular fallback fonts when available.	泰语和阿拉伯语使用可用的常规样式备用字体。
 	Edit image	编辑图像
 	Rotate counterclockwise	逆时针旋转
 	Rotate clockwise	顺时针旋转
@@ -458,7 +462,7 @@
 	{verb} Header and Footer	{verb}页眉和页脚
 	{verb} Watermark	{verb}水印
 	{verb} Background	{verb}背景
-	Margins (in)	边距（英寸）
+	Margins	边距
 	Left Header Text	左页眉文本
 	Center Header Text	居中页眉文本
 	Right Header Text	右页眉文本
@@ -473,6 +477,7 @@
 	Rotation	旋转
 	Appear behind page	显示在页面后面
 	Appear on top of page	显示在页面上层
+	Offset from centre	与中心的偏移
 	From colour	使用颜色
 	Page Range Options	页面范围选项
 	Preview: page {p} of {n}	预览：第 {p} 页，共 {n} 页
@@ -537,6 +542,10 @@
 	The signature will be invisible.	签名将不可见。
 	Distinguished name	可分辨名称
 	Labels	标签
+	Graphic	图形
+	Signer's name	签名者姓名
+	Fill & Sign signature	填写与签名中的签名
+	Choose image…	选择图像…
 	Permitted actions after certifying	认证后允许的操作
 	No changes allowed	不允许任何更改
 	Annotations, form fill-in, and digital signatures	注释、填写表单和数字签名
@@ -793,7 +802,13 @@
 	Dates	日期
 	Text in images isn't found; recognise text (OCR) first.	图像中的文本无法找到；请先识别文本（OCR）。
 	No matches.	无匹配。
+	Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth.	此处未显示部分书签：面板列出的书签数量和嵌套深度有限。
 	{n} match(es) marked for redaction.	已标记 {n} 个匹配以待密文。
+	Multiple words or phrases	多个单词或短语
+	One word or phrase per line	每行一个单词或短语
+	Import list…	导入列表…
+	{n} word(s) or phrase(s)	{n} 个单词或短语
+	{name} is too large for a word list (at most 1 MB).	{name} 太大，无法用作单词列表（最大 1 MB）。
 	Redaction Tool Properties	密文工具属性
 	Redacted area fill colour:	密文区域填充颜色：
 	Use overlay text	使用覆盖文本
@@ -1086,8 +1101,14 @@
 	Open a PDF ({key})	打开 PDF ({key})
 	Dark gray theme	深灰色主题
 	Light theme	浅色主题
+	Appearance mode	外观模式
+	Light	浅色
+	Dark	深色
+	Active	当前
+	Dark theme	深色主题
+	Appearance settings…	外观设置…
 	Print ({key})	打印 ({key})
-	Save (M4)	保存 (M4)
+	Save ({key})	保存 ({key})
 	Document properties ({key})	文档属性 ({key})
 	Action Wizard…	操作向导…
 	Add Bates numbering…	添加贝茨编号…
@@ -1450,6 +1471,8 @@
 	Right Edge	右边缘
 	Language	语言
 	Saved {place}: {before} → {after} ({pct}% smaller){detail}	已保存{place}：{before} → {after}（缩小了{pct}%）{detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	此文件已经是最小的了（{size}）。未保存副本。
+	Saved {place}: {before} → {after} (not smaller){detail}	已保存{place}：{before} → {after}（未缩小）{detail}
 	Couldn't save the image: {e}	无法保存图像：{e}
 	Adding images arrives on the web with file pickers for images	Web 端添加图像将使用图像文件选择器
 	Replacing images on page {p} arrives on the web with image pickers ({i})	在 Web 端替换第{p}页的图像将使用图像选择器（{i}）
@@ -1522,6 +1545,8 @@
 	{file} is too large for a stamp (at most {n} MB)	{file} 对于图章来说太大了（最大 {n} MB）
 	Sent to {printer}	已发送到{printer}
 	Sent to {printer}: {msg}	已发送到{printer}：{msg}
+	Looking for printers…	正在查找打印机…
+	Sending to {printer}…	正在发送到{printer}…
 	Choose a folder for the searchable files	选择可搜索文件的文件夹
 	Files are combined from top to bottom. Leave Pages empty to take every page.	文件按从上到下的顺序合并。页码留空表示取全部页面。
 	Unlock…	解锁…
@@ -1539,16 +1564,16 @@
 	Opened, but its security settings don't allow combining. Enter the permissions password.	已打开，但其安全设置不允许合并。请输入权限密码。
 	Unlocked: the combined file won't be password-protected	已解锁：合并后的文件将不受密码保护
 	Unlocked {n} of {m} files	已解锁 {m} 个文件中的 {n} 个
-	Drop PDFs or folders here, or choose them.	将 PDF 或文件夹拖放到此处，或选择它们。
+	Drop PDFs, images, text files or folders here, or choose them.	将 PDF、图像、文本文件或文件夹拖放到此处，或选择它们。
 	Add folder…	添加文件夹…
 	Add folder and subfolders…	添加文件夹及子文件夹…
 	More ways to add files	更多添加文件的方式
-	Every PDF in the folder	文件夹中的所有 PDF
-	Every PDF in the folder and the folders inside it	文件夹及其子文件夹中的所有 PDF
+	Every PDF, image and text file in the folder	文件夹中的所有 PDF、图像和文本文件
+	Every PDF, image and text file in the folder and the folders inside it	文件夹及其子文件夹中的所有 PDF、图像和文本文件
 	Add folder	添加文件夹
 	Add folder and subfolders	添加文件夹及子文件夹
-	No PDFs found in {folder}	在 {folder} 中未找到 PDF
-	Added the first {n} PDFs in {folder}	已添加 {folder} 中的前 {n} 个 PDF
+	No PDFs, images or text files found in {folder}	在 {folder} 中未找到 PDF、图像或文本文件
+	Added the first {n} files in {folder}	已添加 {folder} 中的前 {n} 个文件
 	Click to sort, drag to move the column. Drag its edge to resize it.	单击以排序，拖动以移动列。拖动列边缘可调整宽度。
 	Reset columns	重置列
 	Remove {n} files	删除 {n} 个文件
@@ -1566,7 +1591,7 @@
 	{n} files need attention	{n} 个文件需要处理
 	{name} can't be combined: {why}	无法合并 {name}：{why}
 	Check the pages of {name}: {why}	请检查 {name} 的页码：{why}
-	Add the PDFs to combine	添加要合并的 PDF
+	Add the files to combine	添加要合并的文件
 	File name	文件名
 	Warnings	警告
 	Drag to reorder	拖动以重新排序
@@ -1579,6 +1604,10 @@
 	Password-protected	受密码保护
 	Its security settings don't allow copying pages	其安全设置不允许复制页面
 	Can't be read: {e}	无法读取：{e}
+	Leave out files that can't be read?	要排除无法读取的文件吗？
+	These files can't be read, so they won't be in the combined PDF:	这些文件无法读取，因此不会包含在合并后的 PDF 中：
+	Combine the rest	合并其余文件
+	and {n} more	以及另外 {n} 个
 	Includes unsaved changes	包含未保存的更改
 	Pages of {name} to combine, e.g. 1-3, 6	要合并的{name}的页面，例如 1-3、6
 	Remove {name}	删除{name}
@@ -1654,8 +1683,14 @@
 	watermark	水印
 	background	背景
 	This document isn't password-protected	本文档未受密码保护
-	Only the document's owner can change its security (open it with the permissions password)	只有文档所有者才能更改安全性（请使用权限密码打开）
+	Enter permissions password…	输入权限密码…
+	Permissions password	权限密码
+	“{name}” has security restrictions. Enter its permissions password to lift them.	“{name}”有安全限制。请输入其权限密码以解除限制。
+	Restrictions lifted	已解除限制
+	Couldn't unlock {name}: {e}	无法解锁 {name}：{e}
+	This document has no restrictions to lift	此文档没有可解除的限制
 	The document's security settings don't allow this change	文档安全设置不允许此更改
+	The document's security settings don't allow copying text and images	文档安全设置不允许复制文本和图像
 	Open a document first	请先打开文档
 	Security will be removed when you save	保存时将删除安全性设置
 	Click text or an image to edit it	单击文本或图像进行编辑
@@ -1746,6 +1781,7 @@
 	Security properties…	安全性属性…
 	Organize pages	组织页面
 	New bookmark	新建书签
+	New bookmarks from structure	从结构新建书签
 	Rotate pages clockwise	顺时针旋转页面
 	Rotate pages counterclockwise	逆时针旋转页面
 	Delete pages	删除页面
@@ -2020,6 +2056,10 @@
 	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	用于打开 PDF 时。如果启动参数或控制通道明确指定了模式，则本次会话优先使用该模式。
 	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	PDF 未指定布局或缩放时使用。连续滚动时页面不会逐页吸附。
 	Reopen the files that were open when PdfCraft last closed	重新打开上次关闭 PdfCraft 时打开的文件
+	Reload documents when their files change on disk	文件在磁盘上更改时重新加载对应的文档
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	此文件已在磁盘上更改。请重新加载以查看新版本；未保存的更改将会丢失。
+	Reload	重新加载
+	Couldn't reload {name}: {e}	无法重新加载{name}：{e}
 	Write this email?	是否撰写此邮件？
 	{who} in this document wants to open this address in your browser:	此文档中的{who}请求在浏览器中打开以下地址：
 	{who} in this document wants to open your email app with this address:	此文档中的{who}请求打开邮件应用并使用以下地址：
@@ -2059,7 +2099,11 @@
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	选择 PNG 或 JPEG 图像（最大 4 MiB）。透明度会保留。
 	Couldn't import the signature image: {e}	无法导入签名图像：{e}
 	Go to page…	转到页面…
+	For page sizes and margins.	用于页面尺寸和边距。
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	PDF 文本字体无法显示“{c}”（{code}）。请选择受支持的文本。
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	标准字体无法显示“{c}”（{code}）。目前只能添加西欧字符作为文本。
+	This field's font can't draw “{c}” ({code}), so PdfCraft shows ? in its place. The value is saved, and other PDF viewers redraw the field from it.	此字段的字体无法显示“{c}”（{code}），PdfCraft 会在该处显示 ?。值已保存，其他 PDF 阅读器会根据该值重新绘制此字段。
+	The fonts PdfCraft writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.	PdfCraft 写入时使用的字体无法显示“{c}”（{code}），因此它在所有 PDF 阅读器中都会显示为 ?。文本已保存。
 	Larger pages	放大页面
 	Smaller pages	缩小页面
 	Reset page size	重置页面大小
@@ -2099,3 +2143,93 @@
 	The field {name} no longer exists.	字段 {name} 已不存在。
 	A selected field has no widget on any page, so the fields can't be edited together.	某个所选字段在任何页面上都没有控件，因此无法一起编辑这些字段。
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	（{n} 张以可绘制的最大尺寸 {dpi} dpi 导出）
+
+# Multi-object selection and movement (#844)
+@plural	{n} object selected|{n} objects selected	已选择 {n} 个对象
+	Drag the selection to move it. Esc clears the selection.	拖动选区即可移动。按 Esc 清除选择。
+	Shift-click to select several objects. Drag empty space to select an area.	按住 Shift 单击可选择多个对象。拖动空白区域可框选。
+	Select at most 1000 objects at a time.	一次最多选择 1000 个对象。
+	Finish or discard the text being edited before selecting several objects.	请先完成或放弃正在编辑的文本，再选择多个对象。
+	Move object	移动对象
+	Move objects	移动多个对象
+	Vertical text cannot be moved with this selection.	无法随此选区移动竖排文本。
+	Text used as a clipping path cannot be moved with this selection.	无法随此选区移动用作剪切路径的文本。
+	These objects could not be moved. Select them again and try a smaller move.	无法移动这些对象。请重新选择并尝试较小的移动距离。
+	This page contains objects that cannot be selected together.	此页面包含无法一起选择的对象。
+	Fill colour	填充颜色
+	No fill	无填充
+	Fill colour: none	填充颜色：无
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	空格
+	Grid view	网格视图
+	List view	列表视图
+	Files are combined in the order shown. Drag them to change it.	文件按显示的顺序合并。拖动可更改顺序。
+	Preview unavailable: {e}	无法预览：{e}
+	Pages: {k} of {n}	页面：{k}/{n}
+	Check the pages	请检查页码
+	Switch to List view to change the pages it takes.	切换到列表视图以更改要使用的页面。
+	Expand all	全部展开
+	Collapse all	全部折叠
+	Remove page	删除页面
+	Remove {n} pages	删除 {n} 页
+
+# Shared panel docking
+	Reset panel layout	重置面板布局
+	Float panel	浮动面板
+	Move to group	移到组中
+	Panels	面板
+	Resize panels	调整面板大小
+	Resize panel window	调整面板窗口大小
+	Tools	工具
+	Inspector	检查器
+
+# Architectural print controls (follow-up to #599).
+	PDF page: {size}	PDF 页面：{size}
+	Match page at 100%	匹配页面并设为 100%
+	PDF scale: {scale}%	PDF 缩放：{scale}%
+	Printer paper and scaling may differ. Check driver settings.	打印机纸张和缩放可能不同。请检查驱动程序设置。
+	Drawing scale changes. Use Actual size for full-scale plans.	图纸比例发生变化。按原比例打印图纸时请使用实际大小。
+	Select page {label}	选择页面 {label}
+	Rotate page {label} counterclockwise	逆时针旋转页面 {label}
+	Rotate page {label} clockwise	顺时针旋转页面 {label}
+	Delete page {label}	删除页面 {label}
+	Mouse wheel scroll speed	鼠标滚轮滚动速度
+scroll speed	Slow	慢
+scroll speed	Normal	正常
+scroll speed	Fast	快
+	Enhance camera image	增强相机图像
+	Drag the corners onto the document's edges, then choose Enhance page.	将四个角拖到文档边缘，然后选择“增强页面”。
+	Enhance page	增强页面
+	Done adding text	完成添加文本
+	Discard this text (Esc)	放弃此文本 (Esc)
+	Clean-up	清理
+	Original	原始
+	Greyscale	灰度
+	Black and white	黑白
+
+# Signature verification and explicit CCA trust
+	Verification	验证
+	Intact	完整
+	Altered	已更改
+	Trusted	受信任
+	Untrusted	不受信任
+	Not revoked	未吊销
+	Not recorded	未记录
+	Trusted timestamp	受信任的时间戳
+	Signer claim	签名者声明
+	Permitted	允许
+	Not permitted	不允许
+	Trust CCA India roots…	信任 CCA India 根证书…
+	These roots will be saved as trusted certificates and apply to all matching signers.	这些根证书将保存为受信任证书，并适用于所有匹配的签名者。
+	Integrity	完整性
+	Certificate	证书
+	Revocation	吊销
+	Changes after signing	签名后的更改
+	Recommended next steps	建议的后续步骤

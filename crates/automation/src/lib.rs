@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use pdfcraft_engine::{DocId, Document, Edit, Session, commands};
+use pdfcraft_engine::{CombineSource, DocId, Document, Edit, Session, commands};
 use pdfcraft_platform::staging::{StagingName, create_staging, staging_suffixes};
 use pdfcraft_render::{PageRenderer, PageText, RenderConfig, RenderRequest, RequestKind};
 use serde_json::{Value, json};
@@ -73,9 +73,26 @@ fn failed(e: impl std::fmt::Display) -> ToolError {
     ToolError::Failed(e.to_string())
 }
 
+impl From<pdfcraft_engine::EditError> for ToolError {
+    fn from(e: pdfcraft_engine::EditError) -> Self {
+        failed(e)
+    }
+}
+
 /// Default and maximum resolution for `page_render`.
 const DEFAULT_DPI: f64 = 96.0;
 const MAX_DPI: f64 = 600.0;
+/// How far a watermark may be moved from the page centre, in points (a page is at most 14,400).
+const WATERMARK_MAX_OFFSET: f64 = 20_000.0;
+
+/// Bookmarks in one page of the bookmark list, by default and at most.
+const BOOKMARK_PAGE: usize = 100;
+const MAX_BOOKMARK_PAGE: usize = 1000;
+
+/// `text_find` extracts this many pages first, doubling each batch up to [`FIND_MAX_BATCH`], so a
+/// match near the start returns without touching the rest of a long document (#971).
+const FIND_FIRST_BATCH: usize = 8;
+const FIND_MAX_BATCH: usize = 128;
 
 /// Page texts of one document version: (the working bytes, one slot per page).
 type TextCache = (Arc<Vec<u8>>, Vec<Option<Arc<PageText>>>);
@@ -148,7 +165,11 @@ impl Automation {
         let out = match name {
             "doc_open" => self.doc_open(&a)?,
             "doc_list" => json!({ "documents": self.session.docs().iter().map(summary).collect::<Vec<_>>() }),
-            "doc_info" => info(self.doc(&a)?),
+            "doc_info" => {
+                let id = self.doc(&a)?.id;
+                self.session.refresh_fonts(id);
+                info(self.doc(&a)?)
+            }
             "doc_close" => self.doc_close(&a)?,
             "doc_save" => self.doc_save(&a)?,
             "doc_set_info" => {
@@ -190,6 +211,38 @@ impl Automation {
                 out["rotated"] = json!(n);
                 out
             }
+            "page_enhance_camera" => {
+                let page = self.page(&a)?;
+                let given = a.nums::<8>("corners")?;
+                let doc = self.doc(&a)?;
+                let (id, info) = (doc.id, doc.info.pages.get(page).cloned().ok_or_else(|| failed("no such page"))?);
+                let corners = match given {
+                    Some(c) => [0, 1, 2, 3].map(|i| {
+                        let [x, y] = info.view_to_user(c[2 * i] as f32, c[2 * i + 1] as f32);
+                        [x as f64, y as f64]
+                    }),
+                    None => self.session.detect_camera_corners(id, page).ok_or_else(|| {
+                        failed("the document's edges could not be found on this page: pass `corners` [x1, y1, x2, y2, x3, y3, x4, y4]")
+                    })?,
+                };
+                let level = match a.opt_int("level")? {
+                    None => 0,
+                    Some(l @ 0..=100) => l as u8,
+                    Some(l) => return Err(ToolError::InvalidArgs(format!("level must be between 0 and 100, not {l}"))),
+                };
+                let look = match a.opt_str("mode")? {
+                    None => pdfcraft_engine::camera_clean::Look::Colour,
+                    Some(m) => pdfcraft_engine::camera_clean::Look::from_name(m)
+                        .ok_or_else(|| ToolError::InvalidArgs(format!("unknown mode {m:?} (original, colour, greyscale, bw)")))?,
+                };
+                self.session.enhance_camera_page_at(id, page, corners, look, level).map_err(failed)?;
+                let r = |v: f32| (v * 100.0).round() / 100.0;
+                let used: Vec<f32> = corners.iter().flat_map(|&[x, y]| info.user_to_view(x as f32, y as f32)).map(r).collect();
+                let mut out = summary(self.doc(&a)?);
+                out["corners"] = json!(used);
+                out["detected"] = json!(given.is_none());
+                out
+            }
             "page_delete" => {
                 let pages = self.pages(&a, "pages")?;
                 self.apply(&a, Edit::DeletePages { pages })?
@@ -207,12 +260,12 @@ impl Automation {
             "doc_split" => self.doc_split(&a)?,
             "edit_undo" => {
                 let id = self.doc(&a)?.id;
-                let label = self.session.undo(id).map_err(failed)?;
+                let label = self.session.undo(id).map_err(failed)?.to_string();
                 json!({ "undone": label, "document": summary(self.doc(&a)?) })
             }
             "edit_redo" => {
                 let id = self.doc(&a)?.id;
-                let label = self.session.redo(id).map_err(failed)?;
+                let label = self.session.redo(id).map_err(failed)?.to_string();
                 json!({ "redone": label, "document": summary(self.doc(&a)?) })
             }
             "command_list" => self.command_list(&a)?,
@@ -242,7 +295,7 @@ impl Automation {
                 out["labels"] = json!(self.doc(&a)?.info.pages.iter().map(|p| p.label.clone()).collect::<Vec<_>>());
                 out
             }
-            "bookmark_list" => json!({ "bookmarks": bookmark_tree(&self.doc(&a)?.info.outline, &[]) }),
+            "bookmark_list" => self.bookmark_listing(&a)?,
             "bookmark_add" => {
                 let page = self.page(&a)?;
                 let parent = a.opt_path("parent")?.unwrap_or_default();
@@ -267,6 +320,13 @@ impl Automation {
             "bookmark_set_page" => {
                 let (path, page) = (a.path("path")?, self.page(&a)?);
                 self.apply(&a, Edit::SetBookmarkPage { path, page })?
+            }
+            "bookmark_from_structure" => {
+                let mut out = self.apply(&a, Edit::BookmarksFromStructure)?;
+                let listing = self.bookmark_listing(&a)?;
+                out["bookmarks"] = listing["bookmarks"].clone();
+                out["next"] = listing["next"].clone();
+                out
             }
             "doc_protect" => self.doc_protect(&a)?,
             "page_replace" => {
@@ -298,8 +358,12 @@ impl Automation {
                 let before = self.doc(&a)?.bytes.len();
                 let path = self.resolve(a.str("path")?, true)?;
                 let (bytes, merged) = self.session.reduced_bytes(id).map_err(failed)?;
-                write_atomic(&path, &bytes)?;
-                json!({ "path": path.to_string_lossy(), "bytes_before": before, "bytes_after": bytes.len(), "merged_objects": merged })
+                // As in the app, a copy that isn't smaller is not written (#490).
+                let written = bytes.len() < before;
+                if written {
+                    write_atomic(&path, &bytes)?;
+                }
+                json!({ "path": path.to_string_lossy(), "written": written, "bytes_before": before, "bytes_after": bytes.len(), "merged_objects": merged })
             }
             "doc_optimize" => self.doc_optimize(&a)?,
             "doc_initial_view" => self.doc_initial_view(&a)?,
@@ -394,7 +458,7 @@ impl Automation {
             }
             "text_paragraphs" => {
                 let page = self.page(&a)?;
-                let doc = self.doc(&a)?;
+                let doc = self.doc_to_copy(&a)?;
                 let info = &doc.info.pages[page];
                 let r = |x: f32| (x as f64 * 100.0).round() / 100.0;
                 let blocks: Vec<Value> = doc
@@ -528,6 +592,8 @@ impl Automation {
             "link_delete" => self.link_delete(&a)?,
             "links_from_urls" => self.links_from_urls(&a)?,
             "links_remove" => self.links_remove(&a)?,
+            "object_list" => self.object_list(&a)?,
+            "object_move" => self.object_move(&a)?,
             "content_list" => self.content_list(&a)?,
             "page_add_text" => self.page_add_text(&a)?,
             "page_add_image" => self.page_add_image(&a)?,
@@ -535,6 +601,7 @@ impl Automation {
             "content_delete" => self.content_delete(&a)?,
             "doc_print" => self.doc_print(&a)?,
             "doc_remove_hidden" => self.doc_remove_hidden(&a)?,
+            "doc_audit_redactions" => self.doc_audit_redactions(&a)?,
             "fill_sign_add" => self.fill_sign_add(&a)?,
             "fill_sign_date_format" => self.fill_sign_date_format(&a)?,
             "measure_distance" => self.measurement_add(&a, pdfcraft_engine::measure::Kind::Distance)?,
@@ -592,14 +659,23 @@ impl Automation {
             }
             "sign_windows_ids" => {
                 #[cfg(target_os = "windows")]
-                let ids: Vec<Value> = pdfcraft_engine::sign::windows::identities()
-                    .map_err(failed)?
-                    .iter()
-                    .map(|id| json!({ "id": pdfcraft_engine::sign::windows::reference(&id.certificate), "certificate": signing::cert_json(&id.certificate) }))
-                    .collect();
+                let (ids, unusable): (Vec<Value>, Vec<Value>) = {
+                    let listing = pdfcraft_engine::sign::windows::list().map_err(failed)?;
+                    let ids = listing
+                        .ids
+                        .iter()
+                        .map(|id| json!({ "id": pdfcraft_engine::sign::windows::reference(&id.certificate), "certificate": signing::cert_json(&id.certificate) }))
+                        .collect();
+                    let unusable = listing
+                        .unusable
+                        .iter()
+                        .map(|u| json!({ "subject": u.subject, "sha256": u.fingerprint, "reason": u.reason, "no_private_key": u.no_private_key }))
+                        .collect();
+                    (ids, unusable)
+                };
                 #[cfg(not(target_os = "windows"))]
-                let ids: Vec<Value> = Vec::new();
-                json!({ "count": ids.len(), "ids": ids })
+                let (ids, unusable): (Vec<Value>, Vec<Value>) = (Vec::new(), Vec::new());
+                json!({ "count": ids.len(), "ids": ids, "unusable": unusable })
             }
             "sign_trust" => self.sign_trust(&a)?,
             "comment_mark" => self.comment_mark(&a)?,
@@ -615,10 +691,35 @@ impl Automation {
 
     // ---- documents ---------------------------------------------------------------------------
 
+    /// One page of a document's bookmarks: `offset` (from 0) and `limit` (1 to `MAX_BOOKMARK_PAGE`).
+    fn bookmark_listing(&self, a: &Args) -> Result<Value> {
+        let id = a.int("doc")?;
+        let id = DocId(u64::try_from(id).map_err(|_| ToolError::InvalidArgs("doc must be positive".into()))?);
+        let offset = a.opt_int("offset")?.unwrap_or(0);
+        let offset = usize::try_from(offset).map_err(|_| ToolError::InvalidArgs("offset must be 0 or more".into()))?;
+        let limit = a.opt_int("limit")?.unwrap_or(BOOKMARK_PAGE as i64);
+        let limit = usize::try_from(limit)
+            .ok()
+            .filter(|l| (1..=MAX_BOOKMARK_PAGE).contains(l))
+            .ok_or_else(|| ToolError::InvalidArgs(format!("limit must be from 1 to {MAX_BOOKMARK_PAGE}")))?;
+        let page = self
+            .session
+            .bookmark_page(id, offset, limit)
+            .ok_or_else(|| ToolError::Failed(format!("no open document with id {} (see doc_list)", id.0)))?;
+        Ok(json!({ "bookmarks": nest_rows(&page.rows), "next": page.next, "truncated": page.truncated }))
+    }
+
     fn doc(&self, a: &Args) -> Result<&Document> {
         let id = a.int("doc")?;
         let id = u64::try_from(id).map_err(|_| ToolError::InvalidArgs("doc must be positive".into()))?;
         self.session.get(DocId(id)).ok_or_else(|| ToolError::Failed(format!("no open document with id {id} (see doc_list)")))
+    }
+
+    /// The document, if its security allows copying text and images out of it (Table 22, bit 5).
+    fn doc_to_copy(&self, a: &Args) -> Result<&Document> {
+        let doc = self.doc(a)?;
+        doc.check_copying().map_err(failed)?;
+        Ok(doc)
     }
 
     fn doc_open(&mut self, a: &Args) -> Result<Value> {
@@ -847,6 +948,7 @@ impl Automation {
             "invalid_links": o.invalid_links,
             "invalid_bookmarks": o.invalid_bookmarks,
             "unreferenced_dests": o.unreferenced_dests,
+            "unused_xobjects": o.unused_xobjects,
             "merged_objects": r.merged,
             "discarded": r.discarded.iter().map(|(h, n)| json!({ "category": h.id(), "count": n })).collect::<Vec<_>>(),
         }))
@@ -868,7 +970,13 @@ impl Automation {
     fn apply(&mut self, a: &Args, edit: Edit) -> Result<Value> {
         let id = self.doc(a)?.id;
         self.session.apply(id, edit).map_err(failed)?;
-        Ok(summary(self.doc(a)?))
+        let doc = self.doc(a)?;
+        let mut out = summary(doc);
+        // Text the edit stored as typed but drew with `?` (its font can't draw it): said, not silent.
+        if !doc.edit_notices.is_empty() {
+            out["warnings"] = json!(doc.edit_notices.iter().map(ToString::to_string).collect::<Vec<_>>());
+        }
+        Ok(out)
     }
 
     fn marks(&mut self, tool: &str, a: &Args) -> Result<Value> {
@@ -916,7 +1024,10 @@ impl Automation {
                     opacity: a.opt_num("opacity")?.unwrap_or(d.opacity),
                     rotation: a.opt_num("rotation")?.unwrap_or(d.rotation),
                     behind: a.opt_bool("behind")?.unwrap_or(false),
-                    offset: [0.0; 2],
+                    offset: [
+                        a.opt_num("offset_x")?.unwrap_or(0.0).clamp(-WATERMARK_MAX_OFFSET, WATERMARK_MAX_OFFSET),
+                        a.opt_num("offset_y")?.unwrap_or(0.0).clamp(-WATERMARK_MAX_OFFSET, WATERMARK_MAX_OFFSET),
+                    ],
                 };
                 Edit::AddWatermark { pages, settings: wm, replace, file }
             }
@@ -945,7 +1056,7 @@ impl Automation {
     }
 
     fn export(&mut self, tool: &str, a: &Args) -> Result<Value> {
-        let doc = self.doc(a)?;
+        let doc = self.doc_to_copy(a)?;
         let pages = match a.opt_ints("pages")? {
             Some(_) => self.pages(a, "pages")?,
             None => (0..doc.info.pages.len()).collect(),
@@ -1028,11 +1139,17 @@ impl Automation {
                     (None, Some(p)) => {
                         let path = self.resolve(p, false)?;
                         let t = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
-                        (path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(), String::from_utf8_lossy(&t).into_owned())
+                        (path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(), pdfcraft_engine::decode_text(&t))
                     }
                     (None, None) => return Err(ToolError::InvalidArgs("text needs `text` or `path`".into())),
                 };
-                (format!("{title}.pdf"), self.session.create_from_text(&title, &text).map_err(failed)?)
+                // The page font is Helvetica/WinAnsi: text it would turn into `?` is refused (with
+                // its line) by `pdfcraft_create::from_text`, as for every other caller.
+                let bytes = self.session.create_from_text(&title, &text).map_err(|e| match e {
+                    pdfcraft_engine::EditError::Create(pdfcraft_engine::CreateError::Invalid(m)) => ToolError::InvalidArgs(m),
+                    e => failed(e),
+                })?;
+                (format!("{title}.pdf"), bytes)
             }
             other => return Err(ToolError::InvalidArgs(format!("unknown source {other:?}"))),
         };
@@ -1168,8 +1285,8 @@ impl Automation {
 
     fn doc_create_multiple(&mut self, a: &Args) -> Result<Value> {
         let paths = a.strs("paths")?;
-        if paths.is_empty() || paths.len() > pdfcraft_engine::MAX_CREATE_FILES {
-            return Err(ToolError::InvalidArgs(format!("paths must list 1 to {} files", pdfcraft_engine::MAX_CREATE_FILES)));
+        if paths.is_empty() {
+            return Err(ToolError::InvalidArgs("paths must list at least one file".into()));
         }
         let separate = match a.opt_str("mode")? {
             None | Some("combine") => false,
@@ -1184,16 +1301,16 @@ impl Automation {
             Some(Value::Array(v)) if v.len() == paths.len() => v.iter().map(|x| x.as_str().map(str::to_owned)).collect(),
             Some(_) => return Err(ToolError::InvalidArgs("pages must list a range (or null) for each path".into())),
         };
-        let mut sources = Vec::new();
-        for (p, range) in paths.into_iter().zip(ranges) {
+        // Each file is read, converted and copied in turn, so a long list holds one file at a time.
+        let sources = paths.into_iter().zip(ranges).map(|(p, range)| -> std::result::Result<pdfcraft_engine::CombineSource, ToolError> {
             let path = self.resolve(p, false)?;
             let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             let (_, pdf) = self.session.convert_to_pdf(&name, &Arc::new(bytes)).map_err(failed)?;
             let title = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            sources.push((title, pdf, range));
-        }
-        let bytes = self.session.combine_ranges(&sources).map_err(failed)?;
+            Ok((title, pdf, range))
+        });
+        let bytes = self.session.combine_each(sources)?.ok_or_else(|| ToolError::InvalidArgs("paths must list at least one file".into()))?;
         self.deliver(a, "Combined", bytes)
     }
 
@@ -1276,15 +1393,61 @@ impl Automation {
             }
             Some(_) => return Err(ToolError::InvalidArgs("passwords must list a password (or null) for each path".into())),
         };
-        let mut sources = Vec::new();
-        for (p, range) in paths.into_iter().zip(ranges) {
+        // Entries sharing a group number are one file split into parts placed apart.
+        let groups: Option<Vec<Option<u64>>> = match a.get("groups") {
+            None | Some(Value::Null) => None,
+            Some(Value::Array(v)) if v.len() == paths.len() && v.iter().all(|x| x.is_u64() || x.is_null()) => {
+                Some(v.iter().map(Value::as_u64).collect())
+            }
+            Some(_) => return Err(ToolError::InvalidArgs("groups must list a number (or null) for each path".into())),
+        };
+        let mut sources: Vec<CombineSource> = Vec::new();
+        let mut firsts: Vec<(u64, PathBuf, usize)> = Vec::new();
+        for (i, (p, range)) in paths.into_iter().zip(ranges).enumerate() {
             let path = self.resolve(p, false)?;
-            let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+            let group = groups.as_ref().and_then(|g| g.get(i).copied().flatten());
+            let first = group.and_then(|g| firsts.iter().find(|f| f.0 == g));
+            let bytes = match first {
+                Some((g, first_path, at)) => {
+                    if *first_path != path {
+                        return Err(ToolError::InvalidArgs(format!("groups[{i}]: group {g} is {}, not {}", first_path.display(), path.display())));
+                    }
+                    sources.get(*at).map(|s| s.1.clone()).ok_or_else(|| failed("group source missing"))?
+                }
+                None => {
+                    if let Some(g) = group {
+                        firsts.push((g, path.clone(), sources.len()));
+                    }
+                    let bytes = Arc::new(std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?);
+                    // Images and text files are made into PDFs first (#569), as in the Combine files tab.
+                    let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    self.session.as_pdf(&file_name, &bytes).map_err(failed)?
+                }
+            };
             let name = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            sources.push((name, Arc::new(bytes), range));
+            sources.push((name, bytes, range));
         }
         let passwords: Vec<Option<&str>> = passwords.iter().map(Option::as_deref).collect();
-        let bytes = self.session.combine_unlocked(&sources, &passwords).map_err(failed)?;
+        let bytes = match groups {
+            None => self.session.combine_unlocked(&sources, &passwords),
+            Some(groups) => {
+                // A path without a group is a file of its own: give it a key no group uses.
+                let mut next = groups.iter().flatten().max().map_or(Some(0), |m| m.checked_add(1));
+                let mut keys = Vec::with_capacity(groups.len());
+                for g in &groups {
+                    keys.push(match g {
+                        Some(g) => *g,
+                        None => {
+                            let own = next.ok_or_else(|| ToolError::InvalidArgs("group numbers are too large".into()))?;
+                            next = own.checked_add(1);
+                            own
+                        }
+                    });
+                }
+                self.session.combine_grouped(&sources, &keys, &passwords)
+            }
+        }
+        .map_err(failed)?;
         self.deliver(a, "Combined", bytes)
     }
 
@@ -1324,13 +1487,21 @@ impl Automation {
         let dir = self.resolve(a.str("out_dir")?, true)?;
         std::fs::create_dir_all(&dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
         let mut files = Vec::new();
+        let mut used = std::collections::HashSet::new();
         for (i, (first, last, bytes)) in parts.iter().enumerate() {
             let safe = |t: &str| t.chars().map(|c| if c.is_alphanumeric() || " -_.,()".contains(c) { c } else { '_' }).collect::<String>();
             let file = match titles.iter().find(|t| t.0 + 1 == *first) {
                 Some((_, t)) => format!("{stem}-{}.pdf", safe(t)),
                 None => format!("{stem}-part{}.pdf", i + 1),
             };
-            let path = child(&dir, &file);
+            // Equal titles (or titles that sanitize alike) get -2, -3, ... so no part overwrites another; compared case-insensitively.
+            let mut unique = file.clone();
+            let mut n = 1;
+            while !used.insert(unique.to_lowercase()) {
+                n += 1;
+                unique = format!("{}-{n}.pdf", file.trim_end_matches(".pdf"));
+            }
+            let path = child(&dir, &unique);
             write_atomic(&path, bytes)?;
             files.push(json!({ "path": path.to_string_lossy(), "first_page": first, "last_page": last }));
         }
@@ -1382,7 +1553,14 @@ impl Automation {
         if !(1.0..=MAX_DPI).contains(&dpi) {
             return Err(ToolError::InvalidArgs(format!("dpi must be between 1 and {MAX_DPI}")));
         }
-        let out = self.renderer(id)?.render(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: (dpi / 72.0) as f32, tag: 0 });
+        let out = self.renderer(id)?.render(RenderRequest {
+            page,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: (dpi / 72.0) as f32,
+            tag: 0,
+            preview: false,
+        });
         if let Some(e) = out.error {
             return Err(failed(format!("page {} could not be rendered: {e}", page + 1)));
         }
@@ -1421,33 +1599,63 @@ impl Automation {
     }
 
     fn text_extract(&mut self, a: &Args) -> Result<Value> {
-        let doc = self.doc(a)?;
+        let doc = self.doc_to_copy(a)?;
         let id = doc.id;
         let pages = match a.opt_ints("pages")? {
             Some(_) => self.pages(a, "pages")?,
             None => (0..doc.info.pages.len()).collect(),
         };
+        // Column select (#740): only the text inside the rectangle, row by row.
+        let rect = a.nums::<4>("rect")?.map(|r| r.map(|v| v as f32));
         let texts = self.page_texts(id, &pages)?;
-        let out: Vec<Value> = pages.iter().zip(texts).map(|(p, t)| json!({ "page": p + 1, "text": t.plain_text() })).collect();
+        let text = |t: &PageText| match rect {
+            Some(r) => t.column_text(&t.glyphs_in(r)),
+            None => t.plain_text(),
+        };
+        let out: Vec<Value> = pages.iter().zip(texts).map(|(p, t)| json!({ "page": p + 1, "text": text(&t) })).collect();
         Ok(json!({ "pages": out }))
     }
 
+    /// Matches in document order, extracting page text in growing batches and stopping as soon as
+    /// `limit` is reached, so a bounded search doesn't extract (and cache) the whole document
+    /// (#971). One match past the limit is looked for, so `complete` is true only when no more
+    /// exist; otherwise `next` holds the arguments that continue the search.
     fn text_find(&mut self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let (id, n) = (doc.id, doc.info.pages.len());
         let query = a.str("query")?;
-        let limit = a.opt_int("limit")?.unwrap_or(500).max(1) as usize;
-        let texts = self.page_texts(id, &(0..n).collect::<Vec<_>>())?;
+        let limit = usize::try_from(a.opt_int("limit")?.unwrap_or(500).max(1)).unwrap_or(usize::MAX);
+        let start = match a.opt_int("start_page")? {
+            None => 0,
+            Some(p) if p >= 1 && usize::try_from(p).is_ok_and(|p| p <= n) => usize::try_from(p - 1).unwrap_or(0),
+            Some(p) => return Err(ToolError::InvalidArgs(format!("start_page {p} is out of range: the document has {n} pages"))),
+        };
+        let skip = usize::try_from(a.opt_int("skip")?.unwrap_or(0).max(0)).unwrap_or(usize::MAX);
         let mut matches = Vec::new();
-        'pages: for (p, text) in texts.iter().enumerate() {
-            for r in text.find(query) {
-                if matches.len() == limit {
-                    break 'pages;
+        let mut next = None;
+        let (mut first, mut batch) = (start, FIND_FIRST_BATCH);
+        'search: while first < n {
+            let end = first.saturating_add(batch).min(n);
+            let pages: Vec<usize> = (first..end).collect();
+            let texts = self.page_texts(id, &pages)?;
+            for (p, text) in pages.iter().zip(&texts) {
+                let skip_here = if *p == start { skip } else { 0 };
+                for (k, r) in text.find(query).into_iter().enumerate().skip(skip_here) {
+                    if matches.len() == limit {
+                        next = Some(json!({ "start_page": p + 1, "skip": k }));
+                        break 'search;
+                    }
+                    matches.push(json!({ "page": p + 1, "text": text.text_of(r.clone()), "rects": text.line_rects(r) }));
                 }
-                matches.push(json!({ "page": p + 1, "text": text.text_of(r.clone()), "rects": text.line_rects(r) }));
             }
+            first = end;
+            batch = batch.saturating_mul(2).min(FIND_MAX_BATCH);
         }
-        Ok(json!({ "query": query, "count": matches.len(), "matches": matches }))
+        let mut out = json!({ "query": query, "count": matches.len(), "complete": next.is_none(), "matches": matches });
+        if let (Some(next), Some(o)) = (next, out.as_object_mut()) {
+            o.insert("next".into(), next);
+        }
+        Ok(out)
     }
 
     fn command_list(&self, a: &Args) -> Result<Value> {
@@ -1629,17 +1837,36 @@ impl Args<'_> {
     }
 }
 
-/// The bookmark tree as JSON, with 1-based paths and pages.
-fn bookmark_tree(items: &[pdfcraft_render::OutlineItem], parent: &[usize]) -> Vec<Value> {
-    items
-        .iter()
-        .enumerate()
-        .map(|(i, o)| {
-            let mut path = parent.to_vec();
-            path.push(i + 1);
-            json!({ "path": path, "title": o.title, "page": o.page.map(|p| p + 1), "open": o.open, "children": bookmark_tree(&o.children, &path) })
-        })
-        .collect()
+/// Bookmark rows in listing order as JSON: a row holds the rows that follow it on the page at the
+/// next level down in `children`, and paths and pages are 1-based.
+fn nest_rows(rows: &[pdfcraft_engine::BookmarkRow]) -> Vec<Value> {
+    // The open rows, outermost first, with their depth and the children gathered so far.
+    let mut open: Vec<(usize, Value, Vec<Value>)> = Vec::new();
+    let mut roots = Vec::new();
+    for row in rows {
+        let depth = row.path.len().saturating_sub(1);
+        while open.last().is_some_and(|(d, _, _)| *d >= depth) {
+            close_row(&mut open, &mut roots);
+        }
+        let path: Vec<usize> = row.path.iter().map(|p| p.saturating_add(1)).collect();
+        let fields = json!({ "path": path, "title": row.title, "page": row.page.map(|p| p.saturating_add(1)), "open": row.open });
+        open.push((depth, fields, Vec::new()));
+    }
+    while !open.is_empty() {
+        close_row(&mut open, &mut roots);
+    }
+    roots
+}
+
+/// Closes the innermost open row: it joins the row above it as a child, or the top level.
+fn close_row(open: &mut Vec<(usize, Value, Vec<Value>)>, roots: &mut Vec<Value>) {
+    if let Some((_, mut fields, children)) = open.pop() {
+        fields["children"] = Value::Array(children);
+        match open.last_mut() {
+            Some((_, _, siblings)) => siblings.push(fields),
+            None => roots.push(fields),
+        }
+    }
 }
 
 fn one_based(pages: &[i64]) -> Result<Vec<usize>> {
@@ -1709,6 +1936,7 @@ fn info(d: &Document) -> Value {
             "page": n + 1, "label": p.label, "width": p.width, "height": p.height, "rotation": p.rotation,
         })).collect::<Vec<_>>(),
         "outline": outline(&i.outline),
+        "outline_more": i.outline_more,
         // Rectangles use the tools' convention (top-left of the displayed page, like
         // comment_list and link_list), not raw PDF user space, so they can be fed back to
         // geometry-taking tools (#129).
@@ -1782,7 +2010,7 @@ fn encode_png(width: u32, height: u32, premultiplied: &[u8]) -> Result<Vec<u8>> 
 /// Extract the text of `pages` (0-based) with one renderer per worker thread.
 fn extract_parallel(bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[usize]) -> Vec<(usize, std::result::Result<PageText, String>)> {
     let extract = |r: &mut PageRenderer, p: usize| {
-        let out = r.render(RenderRequest { page: p, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0 });
+        let out = r.render(RenderRequest { page: p, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false });
         match out.error {
             Some(e) => Err(e),
             None => Ok(out.text.map(|t| (*t).clone()).unwrap_or_default()),
@@ -1874,6 +2102,85 @@ fn write_atomic_with(path: &Path, bytes: &[u8], suffixes: impl IntoIterator<Item
 mod tests {
     use super::*;
     use pdfcraft_platform::staging::STAGING_ATTEMPTS;
+
+    /// `n` pages, page i showing "Page i".
+    fn numbered_pages(n: usize) -> Vec<u8> {
+        let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
+        let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
+        objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 200 300] >>", kids.join(" ")));
+        objs.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into());
+        for i in 0..n {
+            objs.push(format!("<< /Type /Page /Parent 2 0 R /Contents {} 0 R /Resources << /Font << /F1 3 0 R >> >> >>", 5 + 2 * i));
+            let body = format!("BT /F1 24 Tf 20 150 Td (Page {}) Tj ET", i + 1);
+            objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()));
+        }
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    fn json(a: &mut Automation, tool: &str, args: Value) -> Value {
+        match a.call(tool, &args).map(|mut c| c.remove(0)) {
+            Ok(Content::Json(v)) => v,
+            other => panic!("{tool} {args}: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_bounded_text_find_reads_only_the_pages_it_needs_and_says_it_stopped() {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-automation-find-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("long.pdf"), numbered_pages(200)).unwrap();
+        let mut a = Automation::new().with_root(&dir).unwrap();
+        let doc = json(&mut a, "doc_open", json!({ "path": "long.pdf" }))["doc"].clone();
+        let extracted = |a: &Automation| a.texts.values().map(|(_, pages)| pages.iter().filter(|t| t.is_some()).count()).sum::<usize>();
+
+        // #971: the first match is on page 1 and the next on page 10, so the rest of the 200 pages
+        // aren't extracted or cached.
+        let first = json(&mut a, "text_find", json!({ "doc": doc, "query": "Page 1", "limit": 1 }));
+        assert_eq!(first["count"], 1);
+        assert_eq!(first["matches"][0]["page"], 1);
+        assert_eq!(first["complete"], false, "{first}");
+        assert_eq!(first["next"], json!({ "start_page": 10, "skip": 0 }));
+        assert!(extracted(&a) <= 3 * FIND_FIRST_BATCH, "{} pages extracted for one match", extracted(&a));
+
+        // Following `next` returns every match exactly once, in order, and then says it's complete.
+        // "1" appears twice on pages like 11 and 101, so continuing has to skip within a page.
+        let all = json(&mut a, "text_find", json!({ "doc": doc, "query": "1", "limit": 10_000 }));
+        assert_eq!(all["complete"], true);
+        assert!(all.get("next").is_none());
+        let mut pieced = Vec::new();
+        let mut args = json!({ "doc": doc, "query": "1", "limit": 3 });
+        loop {
+            let found = json(&mut a, "text_find", args.clone());
+            pieced.extend(found["matches"].as_array().unwrap().iter().map(|m| (m["page"].clone(), m["rects"].clone())));
+            if found["complete"] == true {
+                break;
+            }
+            args["start_page"] = found["next"]["start_page"].clone();
+            args["skip"] = found["next"]["skip"].clone();
+        }
+        let expected: Vec<_> = all["matches"].as_array().unwrap().iter().map(|m| (m["page"].clone(), m["rects"].clone())).collect();
+        assert_eq!(all["count"], expected.len());
+        assert_eq!(pieced, expected);
+
+        // A search that runs to the end below its limit is complete; a start page past the end is refused.
+        let few = json(&mut a, "text_find", json!({ "doc": doc, "query": "Page 200", "start_page": 150 }));
+        assert_eq!((few["count"].clone(), few["complete"].clone()), (json!(1), json!(true)));
+        assert!(a.call("text_find", &json!({ "doc": doc, "query": "x", "start_page": 201 })).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn dot_dot_resolves_by_name_and_never_climbs_above_the_start() {

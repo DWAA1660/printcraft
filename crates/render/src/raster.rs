@@ -156,6 +156,10 @@ pub struct RenderRequest {
     pub scale: f32,
     /// Caller-defined tag, echoed back (used for zoom generations / thumbnail vs page).
     pub tag: u64,
+    /// Low-detail render for previews (page backdrops, thumbnails): images covering only a
+    /// few device pixels are skipped. Never set it for a final render (tiles, whole pages,
+    /// print, export): previews may differ by those pixels.
+    pub preview: bool,
 }
 
 /// What a render that panicked or overran the watchdog is remembered by: its page and kind. Not
@@ -331,7 +335,10 @@ fn render_page<'a>(
         // Rendered straight into a buffer of whole pixels, which the GUI takes over as is.
         let (w, h) = render_size(page, &rs);
         let mut pixels = Pixels::zeroed(w.into(), h.into()).ok_or_else(|| format!("page {} is too large to render", req.page + 1))?;
-        render_into(page, cache, settings, &rs, pixels.bytes_mut());
+        // Previews render at low detail (tiny images are skipped); finals always draw all.
+        let mut preview_settings = settings.clone();
+        preview_settings.preview = req.preview;
+        render_into(page, cache, &preview_settings, &rs, pixels.bytes_mut());
         Ok((w.into(), h.into(), pixels, None))
     }));
     match result {
@@ -467,6 +474,24 @@ struct BusyPublishGate {
     release: Arc<Mutex<Receiver<()>>>,
 }
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[derive(Clone)]
+struct RenderGate {
+    page: usize,
+    shared_generation: bool,
+    claimed: Arc<std::sync::atomic::AtomicBool>,
+    entered: Arc<std::sync::Barrier>,
+    release: Arc<std::sync::Barrier>,
+    finished: Arc<std::sync::Barrier>,
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[derive(Clone)]
+struct ParseGate {
+    entered: Arc<std::sync::Barrier>,
+    release: Arc<std::sync::Barrier>,
+}
+
 /// State shared by the pool and its workers.
 #[derive(Default)]
 struct Shared {
@@ -483,9 +508,18 @@ struct Shared {
     /// can receive its answer (the pool was dropped, or the watchdog gave up on the render).
     /// Lock `busy` first when holding both.
     stop: Mutex<Vec<Arc<std::sync::atomic::AtomicBool>>>,
-    /// Test hook: make one page slow.
-    #[cfg(test)]
+    /// Test hook: hold one worker at the render boundary until the test releases it.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    render_gates: Mutex<Vec<RenderGate>>,
+    /// Test hook: hold parser initialization until the test releases it.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    parse_gate: Mutex<Option<ParseGate>>,
+    /// Test hook: make rendering this page take this long (cancellable).
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     slow_page: Mutex<Option<(usize, std::time::Duration)>>,
+    /// Test hook: make parser initialization take this long.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    slow_parse: Mutex<Option<std::time::Duration>>,
     /// Test hook: count parser initializations, including failed parses.
     #[cfg(all(test, not(target_arch = "wasm32")))]
     parses: std::sync::atomic::AtomicUsize,
@@ -493,8 +527,6 @@ struct Shared {
     parser: PoolParser,
     #[cfg(all(test, not(target_arch = "wasm32")))]
     panic_page: Mutex<Option<usize>>,
-    #[cfg(all(test, not(target_arch = "wasm32")))]
-    slow_parse: Mutex<Option<std::time::Duration>>,
     #[cfg(all(test, not(target_arch = "wasm32")))]
     render_started: std::sync::atomic::AtomicUsize,
     #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -511,6 +543,8 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn same_request(a: RenderRequest, b: RenderRequest) -> bool {
+    // `preview` is excluded on purpose: it names the same work for cancellation, only the
+    // detail level of the result differs.
     a.page == b.page && a.kind == b.kind && a.tile == b.tile && a.scale.to_bits() == b.scale.to_bits() && a.tag == b.tag
 }
 
@@ -858,6 +892,48 @@ impl RenderPool {
     }
 }
 
+/// A pool's threads after [`RenderPool::retire`]. Idle ones exit at once; one still rendering is
+/// told to stop at its next drawing operator and exits when its render returns, which a single
+/// long operator (such as decoding a huge image) can delay.
+pub struct Retiring(Vec<JoinHandle<()>>);
+
+impl Retiring {
+    /// The threads that haven't exited yet.
+    pub fn running(&mut self) -> usize {
+        self.0.retain(|h| !h.is_finished());
+        self.0.len()
+    }
+
+    /// Whether every thread has exited.
+    pub fn exited(&self) -> bool {
+        self.0.iter().all(JoinHandle::is_finished)
+    }
+}
+
+impl RenderPool {
+    /// No replacement threads: when the watchdog gives up on a render, the request (and any
+    /// later one) is answered with an error instead of starting another thread. For a caller that
+    /// bounds how many render threads exist at once: the stuck thread keeps running until its
+    /// operator returns, and a replacement would run beside it.
+    pub fn without_replacements(self) -> Self {
+        *lock(&self.replacements_left) = 0;
+        self
+    }
+
+    /// This pool's threads that haven't exited (workers and replacements; 0 when rendering inline).
+    pub fn threads(&self) -> usize {
+        lock(&self._workers).iter().filter(|h| !h.is_finished()).count()
+    }
+
+    /// Drop the pool but keep its threads' handles, for a caller that bounds how many render
+    /// threads run at once: a render the watchdog gave up on can outlive its pool.
+    pub fn retire(self) -> Retiring {
+        let handles = std::mem::take(&mut *lock(&self._workers));
+        drop(self);
+        Retiring(handles)
+    }
+}
+
 impl Drop for RenderPool {
     fn drop(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
@@ -965,6 +1041,10 @@ fn worker(
                             #[cfg(test)]
                             {
                                 shared.parses.fetch_add(1, Ordering::Relaxed);
+                                if let Some(gate) = lock(&shared.parse_gate).clone() {
+                                    gate.entered.wait();
+                                    gate.release.wait();
+                                }
                                 let delay = *lock(&shared.slow_parse);
                                 if let Some(delay) = delay {
                                     std::thread::sleep(delay);
@@ -1050,6 +1130,20 @@ fn worker(
                         }
                     }
                 }
+                #[cfg(all(test, not(target_arch = "wasm32")))]
+                let render_gate = lock(&shared.render_gates)
+                    .iter()
+                    .find(|gate| {
+                        gate.page == req.page
+                            && gate.shared_generation == *shared_generation
+                            && gate.claimed.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok()
+                    })
+                    .cloned();
+                #[cfg(all(test, not(target_arch = "wasm32")))]
+                if let Some(gate) = &render_gate {
+                    gate.entered.wait();
+                    gate.release.wait();
+                }
                 let settings = warning_settings(&worker_settings(&config, &request_cancelled), warnings.clone());
                 lock(&warnings).clear();
                 let r = catch_unwind(AssertUnwindSafe(|| {
@@ -1068,6 +1162,10 @@ fn worker(
                 // and started a replacement: drop the late result and retire.
                 let abandoned = lock(&shared.busy).get_mut(id).is_none_or(|slot| slot.take().is_none());
                 if abandoned {
+                    #[cfg(all(test, not(target_arch = "wasm32")))]
+                    if let Some(gate) = render_gate {
+                        gate.finished.wait();
+                    }
                     return;
                 }
                 let panicked = matches!(r, Err((_, true)));
@@ -1098,6 +1196,25 @@ fn worker(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(target_arch = "wasm32"))]
+    fn render_gate(page: usize, shared_generation: bool) -> super::RenderGate {
+        let barrier = || std::sync::Arc::new(std::sync::Barrier::new(2));
+        super::RenderGate {
+            page,
+            shared_generation,
+            claimed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            entered: barrier(),
+            release: barrier(),
+            finished: barrier(),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn parse_gate() -> super::ParseGate {
+        let barrier = || std::sync::Arc::new(std::sync::Barrier::new(2));
+        super::ParseGate { entered: barrier(), release: barrier() }
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn receive_before_deadline(pool: &RenderPool) -> RenderedPage {
         // Generous: a loaded CI machine runs many render tests at once.
@@ -1230,15 +1347,75 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
+    fn a_retired_pool_counts_its_threads_until_they_exit() {
+        // Idle: its thread leaves as soon as the pool is gone.
+        let mut idle = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 1, RenderConfig::default()).retire();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while idle.running() > 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(idle.running(), 0);
+        // Busy in a step that can't be interrupted: still counted after the pool is dropped.
+        let pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 1, RenderConfig::default());
+        *lock(&pool.shared.slow_page) = Some((0, std::time::Duration::from_secs(2)));
+        pool.set_queue(vec![RenderRequest { page: 0, scale: 1.0, ..Default::default() }]);
+        while pool.shared.render_started.load(Ordering::Relaxed) == 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let mut busy = pool.retire();
+        assert_eq!(busy.running(), 1, "the render is still under way");
+        while busy.running() > 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(busy.running(), 0, "and the thread exits when it returns");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_pool_without_replacements_never_runs_a_second_thread() {
+        // The watchdog gives up on a render stuck in one long step; with no replacement, the
+        // request is answered with an error and the stuck thread is the only one.
+        let mut pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 1, RenderConfig::default()).without_replacements();
+        pool.set_stuck_after(std::time::Duration::from_millis(50));
+        *lock(&pool.shared.slow_page) = Some((0, std::time::Duration::from_secs(2)));
+        pool.set_queue(vec![RenderRequest { page: 0, scale: 1.0, ..Default::default() }]);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let answer = loop {
+            assert!(pool.threads() <= 1, "{} render threads", pool.threads());
+            if let Some(page) = pool.try_recv() {
+                break page;
+            }
+            assert!(std::time::Instant::now() < deadline, "the stuck render is answered");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert!(answer.error.is_some(), "answered with an error, not a second attempt");
+        assert!(pool.threads() <= 1);
+        let mut retired = pool.retire();
+        while retired.running() > 0 {
+            assert!(std::time::Instant::now() < deadline, "the stuck thread exits when its step ends");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
     fn page_panic_retires_shared_generation_and_healthy_pages_use_private_parsers() {
         let pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 3, RenderConfig::default());
         *lock(&pool.shared.panic_page) = Some(0);
-        *lock(&pool.shared.slow_page) = Some((1, std::time::Duration::from_millis(50)));
+        // Hold page 1 at the shared render boundary until page 0 has crashed, so it can't finish
+        // in the shared generation first (then only one parse would happen).
+        let gate = render_gate(1, true);
+        *lock(&pool.shared.render_gates) = vec![gate.clone()];
         pool.set_queue(vec![
             RenderRequest { page: 0, scale: 1.0, ..Default::default() },
             RenderRequest { page: 1, scale: 1.0, ..Default::default() },
         ]);
-        let mut pages = [receive_before_deadline(&pool), receive_before_deadline(&pool)];
+        let crashed = receive_before_deadline(&pool);
+        if gate.claimed.load(Ordering::Acquire) {
+            gate.entered.wait();
+            gate.release.wait();
+        }
+        let mut pages = [crashed, receive_before_deadline(&pool)];
         pages.sort_by_key(|page| page.request.page);
         assert!(pages[0].error.as_deref().is_some_and(|message| message.contains("crashed")));
         assert!(pages[1].error.is_none(), "{:?}", pages[1].error);
@@ -1271,7 +1448,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_slow_parse_is_not_a_timeout_and_its_pages_render() {
-        use std::time::{Duration, Instant};
+        use std::time::Duration;
         // Shared, then the private parsers used after a shared failure.
         for private in [false, true] {
             let mut pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 2, RenderConfig::default());
@@ -1279,33 +1456,31 @@ mod tests {
                 *lock(&pool.shared.parser.state) = ParserState::Private;
                 pool.shared.parser.valid.store(false, Ordering::Release);
             }
-            // The parse takes 2 s against a 10 ms limit: the watchdog must leave it alone.
-            *lock(&pool.shared.slow_parse) = Some(Duration::from_secs(2));
-            pool.set_stuck_after(Duration::from_millis(10));
-            pool.set_queue(vec![
-                RenderRequest { page: 0, scale: 1.0, tag: 60, ..Default::default() },
-                RenderRequest { page: 1, scale: 1.0, tag: 61, ..Default::default() },
-            ]);
-            let started = Instant::now();
-            while pool.shared.parses.load(Ordering::Relaxed) == 0 {
-                assert!(started.elapsed() < Duration::from_secs(5), "parsing did not start");
-                std::thread::sleep(Duration::from_millis(2));
-            }
-            // Run the watchdog well past its limit while the parse is still sleeping.
-            for _ in 0..20 {
-                assert!(pool.try_recv().is_none(), "nothing may be given up on while parsing");
-                std::thread::sleep(Duration::from_millis(10));
-            }
+            let gate = parse_gate();
+            *lock(&pool.shared.parse_gate) = Some(gate.clone());
+            pool.set_stuck_after(Duration::ZERO);
+            let requests = if private {
+                vec![RenderRequest { page: 0, scale: 1.0, tag: 60, ..Default::default() }]
+            } else {
+                vec![
+                    RenderRequest { page: 0, scale: 1.0, tag: 60, ..Default::default() },
+                    RenderRequest { page: 1, scale: 1.0, tag: 61, ..Default::default() },
+                ]
+            };
+            pool.set_queue(requests.clone());
+            gate.entered.wait();
+            assert!(pool.try_recv().is_none(), "the watchdog must leave parsing alone");
             assert!(lock(&pool.shared.stuck).is_empty());
             assert_eq!(*lock(&pool.retired_workers), 0);
             assert!(!matches!(*lock(&pool.shared.parser.state), ParserState::Failed));
-            // Rendering is timed from the end of parsing: give it a limit it can't miss.
+            // Rendering gets its own deadline after initialization completes.
             pool.set_stuck_after(Duration::from_secs(60));
-            let mut pages = [receive_before_deadline(&pool), receive_before_deadline(&pool)];
+            gate.release.wait();
+            let mut pages: Vec<_> = (0..requests.len()).map(|_| receive_before_deadline(&pool)).collect();
             pages.sort_by_key(|page| page.request.page);
-            for (page, tag) in pages.iter().zip([60, 61]) {
+            for (page, request) in pages.iter().zip(&requests) {
                 assert!(page.error.is_none(), "{:?}", page.error);
-                assert_eq!((page.width, page.height, page.request.tag), (100, 50, tag));
+                assert_eq!((page.width, page.height, page.request.tag), (100, 50, request.tag));
             }
             if !private {
                 assert_eq!(pool.shared.parses.load(Ordering::Relaxed), 1, "one shared parse");
@@ -1319,22 +1494,32 @@ mod tests {
     fn shared_timeouts_retry_healthy_pages_privately_before_blacklisting() {
         use std::time::Duration;
         let mut pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 2, RenderConfig::default());
-        // Limits and delays far apart, so a loaded machine can't flip the outcome: a healthy
-        // page renders privately well within 1 s, the injected delays are 3 s and 6 s.
-        pool.set_stuck_after(Duration::from_secs(1));
-        // Both shared workers wait as if behind the same cold decode. Only page0
-        // remains pathological in an independent parser; page1 must recover.
-        *lock(&pool.shared.shared_render_delay) = Some(Duration::from_secs(3));
-        *lock(&pool.shared.slow_page) = Some((0, Duration::from_secs(6)));
+        pool.set_stuck_after(Duration::ZERO);
+        let shared_bad = render_gate(0, true);
+        let shared_healthy = render_gate(1, true);
+        let private_bad = render_gate(0, false);
+        *lock(&pool.shared.render_gates) = vec![shared_bad.clone(), shared_healthy.clone(), private_bad.clone()];
         pool.set_queue(vec![
             RenderRequest { page: 0, scale: 1.0, tag: 40, ..Default::default() },
             RenderRequest { page: 1, scale: 1.0, tag: 41, ..Default::default() },
         ]);
-        let mut pages = [receive_before_deadline(&pool), receive_before_deadline(&pool)];
-        pages.sort_by_key(|page| page.request.page);
-        assert!(pages[0].error.as_deref().is_some_and(|message| message.contains("took longer")));
-        assert!(pages[1].error.is_none(), "{:?}", pages[1].error);
-        assert_eq!((pages[1].width, pages[1].height, pages[1].request.tag), (100, 50, 41));
+        shared_bad.entered.wait();
+        shared_healthy.entered.wait();
+        assert!(pool.try_recv().is_none(), "shared timeouts retry instead of answering yet");
+        shared_bad.release.wait();
+        shared_healthy.release.wait();
+        shared_bad.finished.wait();
+        shared_healthy.finished.wait();
+        private_bad.entered.wait();
+        let healthy = pool.results.recv_timeout(Duration::from_secs(30)).expect("healthy private retry");
+        assert!(healthy.error.is_none(), "{:?}", healthy.error);
+        assert_eq!((healthy.request.page, healthy.width, healthy.height, healthy.request.tag), (1, 100, 50, 41));
+        pool.watchdog();
+        let bad = pool.results.recv_timeout(Duration::from_secs(30)).expect("the held private retry times out");
+        assert!(bad.error.as_deref().is_some_and(|message| message.contains("took longer")));
+        assert_eq!(bad.request.page, 0);
+        private_bad.release.wait();
+        private_bad.finished.wait();
         assert!(lock(&pool.shared.stuck).contains(&RequestFailureKey::from(RenderRequest { page: 0, scale: 1.0, tag: 40, ..Default::default() })));
         assert!(!lock(&pool.shared.stuck).contains(&RequestFailureKey::from(RenderRequest { page: 1, scale: 1.0, tag: 41, ..Default::default() })));
         assert!((2..=3).contains(&pool.shared.parses.load(Ordering::Relaxed)), "one shared parser and one or two reusable private parsers");
@@ -1346,10 +1531,18 @@ mod tests {
     fn exhausted_private_retry_budget_reports_pending_and_future_requests() {
         use std::time::Duration;
         let mut pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 1, RenderConfig::default());
-        pool.set_stuck_after(Duration::from_millis(300));
-        *lock(&pool.shared.slow_page) = Some((0, Duration::from_secs(3)));
+        pool.set_stuck_after(Duration::ZERO);
+        let shared = render_gate(0, true);
+        let private = render_gate(0, false);
+        *lock(&pool.shared.render_gates) = vec![shared.clone(), private.clone()];
         let bad = RenderRequest { page: 0, scale: 1.0, tag: 50, ..Default::default() };
         let healthy = RenderRequest { page: 1, scale: 1.0, tag: 51, ..Default::default() };
+        pool.set_queue(vec![bad]);
+        shared.entered.wait();
+        assert!(pool.try_recv().is_none(), "shared timeout schedules the private retry");
+        shared.release.wait();
+        shared.finished.wait();
+        private.entered.wait();
         pool.set_queue(vec![bad, healthy]);
         let bad_result = receive_before_deadline(&pool);
         assert_eq!(bad_result.request, bad);
@@ -1367,6 +1560,8 @@ mod tests {
         assert!(result.error.as_deref().is_some_and(|message| message.contains("all render workers")));
         assert_eq!(pool.shared.parses.load(Ordering::Relaxed), 2, "exhaustion performs no parser work on the consumer");
         let workers = std::mem::take(&mut *lock(&pool._workers));
+        private.release.wait();
+        private.finished.wait();
         for worker in workers {
             worker.join().unwrap();
         }
@@ -1396,24 +1591,23 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn replacing_a_request_during_initialization_skips_its_obsolete_render() {
-        use std::time::{Duration, Instant};
-        let pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 1, RenderConfig::default());
-        *lock(&pool.shared.slow_parse) = Some(Duration::from_millis(200));
-        *lock(&pool.shared.slow_page) = Some((0, Duration::from_secs(10)));
+        use std::time::Duration;
+        let mut pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 1, RenderConfig::default());
+        let gate = parse_gate();
+        *lock(&pool.shared.parse_gate) = Some(gate.clone());
+        pool.set_stuck_after(Duration::ZERO);
         pool.set_queue(vec![RenderRequest { page: 0, scale: 1.0, tag: 10, ..Default::default() }]);
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while pool.shared.parses.load(Ordering::Relaxed) == 0 {
-            assert!(Instant::now() < deadline, "first request did not start parsing");
-            std::thread::sleep(Duration::from_millis(2));
-        }
-        let replaced = Instant::now();
+        gate.entered.wait();
         pool.set_queue(vec![RenderRequest { page: 1, scale: 1.0, tag: 11, ..Default::default() }]);
+        assert!(pool.try_recv().is_none(), "parsing is still held");
+        pool.set_stuck_after(Duration::from_secs(60));
+        gate.release.wait();
         let page = receive_before_deadline(&pool);
         assert_eq!((page.request.page, page.request.tag), (1, 11));
         assert!(page.error.is_none(), "{:?}", page.error);
         assert_eq!((page.width, page.height), (100, 50));
-        assert!(replaced.elapsed() < Duration::from_secs(8), "obsolete page (10 s) delayed the replacement request");
         assert_eq!(pool.shared.parses.load(Ordering::Relaxed), 1, "the useful parser is retained");
+        assert_eq!(pool.shared.render_started.load(Ordering::Relaxed), 1, "obsolete page was skipped before rendering");
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1570,7 +1764,11 @@ mod tests {
         let object = Object::from_bytes(data.as_bytes()).unwrap();
         assert_eq!(Function::new(&object).unwrap().eval([0.5].into_iter().collect()).unwrap().as_slice(), &[0.5]);
         let over = format!("<< /FunctionType 3 /Domain [0 1] /Functions [{data}] /Bounds [] /Encode [0 1] >>");
-        assert!(Function::new(&Object::from_bytes(over.as_bytes()).unwrap()).is_none());
+        // The 64 functions above nest exactly 128 levels (each dictionary and its /Functions
+        // array, then the leaf's /Domain array), the parser's nesting cap. 65 nest 130, so the
+        // parser refuses them before the function-depth guard sees them (a refusal either way).
+        // `function_limits_depth_guard_refuses_a_chain_of_references` tests the guard itself.
+        assert!(Object::from_bytes(over.as_bytes()).is_none(), "the parser refuses direct nesting past its cap");
 
         // One root plus 10,000 leaves is one node past the common budget. This input remains
         // below a megabyte and does not attempt excessive recursion or an allocation failure.
@@ -1584,6 +1782,43 @@ mod tests {
             );
             let object = Object::from_bytes(data.as_bytes()).unwrap();
             assert_eq!(Function::new(&object).is_some(), children == 9999);
+        }
+    }
+    /// Stitching functions that each name the next through `N 0 R` nest no direct objects, so
+    /// the parser's nesting cap doesn't stop them and the function-depth guard does.
+    #[test]
+    fn function_limits_depth_guard_refuses_a_chain_of_references() {
+        use hayro::hayro_interpret::Function;
+        use hayro_syntax::object::{Object, ObjectIdentifier};
+        for functions in [64, 65] {
+            // Objects 4 onwards: each stitching function names the next one; the last is a leaf.
+            let objects: String = (4..4 + functions)
+                .map(|number| {
+                    let body = if number < 3 + functions {
+                        format!("<< /FunctionType 3 /Domain [0 1] /Functions [{} 0 R] /Bounds [] /Encode [0 1] >>", number + 1)
+                    } else {
+                        "<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>".to_owned()
+                    };
+                    format!("{number} 0 obj {body} endobj\n")
+                })
+                .collect();
+            let parsed = hayro_syntax::Pdf::new(
+                format!(
+                    "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                     2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                     3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 20 20] >> endobj\n\
+                     {objects}trailer << /Root 1 0 R >>\n%%EOF"
+                )
+                .into_bytes(),
+            )
+            .unwrap();
+            let object = parsed.xref().get::<Object<'_>>(ObjectIdentifier::new(4, 0)).unwrap();
+            let function = Function::new(&object);
+            if functions == 64 {
+                assert_eq!(function.unwrap().eval([0.5].into_iter().collect()).unwrap().as_slice(), &[0.5]);
+            } else {
+                assert!(function.is_none(), "65 functions are one past the function-depth guard");
+            }
         }
     }
     #[test]
@@ -1663,7 +1898,7 @@ mod tests {
         )
         .into_bytes();
         let mut renderer = PageRenderer::new(Arc::new(bytes), RenderConfig::default());
-        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
         assert!(page.error.is_none(), "{:?}", page.error);
         assert_eq!((page.width, page.height), (20, 20));
         let (pixels, remainder) = page.rgba.as_chunks::<4>();
@@ -1678,34 +1913,27 @@ mod tests {
         // contention gets one isolated attempt, covered by the tests above.
         *lock(&pool.shared.parser.state) = ParserState::Private;
         pool.shared.parser.valid.store(false, Ordering::Release);
-        pool.set_stuck_after(std::time::Duration::from_millis(1000));
-        *lock(&pool.shared.slow_page) = Some((0, std::time::Duration::from_secs(4)));
-        let req = |page| RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: 0.5, tag: 0 };
+        pool.set_stuck_after(std::time::Duration::ZERO);
+        let gate = render_gate(0, false);
+        *lock(&pool.shared.render_gates) = vec![gate.clone()];
+        let req = |page| RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: 0.5, tag: 0, ..Default::default() };
         pool.set_queue(vec![req(0)]);
-        let recv = |pool: &RenderPool| {
-            let t = std::time::Instant::now();
-            loop {
-                if let Some(p) = pool.try_recv() {
-                    return p;
-                }
-                assert!(t.elapsed() < std::time::Duration::from_secs(8), "no result");
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-        };
-        let started = std::time::Instant::now();
-        let first = recv(&pool);
-        assert!(started.elapsed() < std::time::Duration::from_millis(3000), "the watchdog answers before the render ends");
+        gate.entered.wait();
+        let first = pool.try_recv().expect("the watchdog answers while the render is held");
         assert!(first.error.as_deref().is_some_and(|e| e.contains("took longer")), "{:?}", first.error);
+        // A zero allowance would give up on the healthy page 2 as well.
+        pool.set_stuck_after(std::time::Duration::from_secs(60));
         // The single worker is stuck, yet page 2 still renders (on the replacement worker).
         pool.set_queue(vec![req(1)]);
-        let second = recv(&pool);
+        let second = receive_before_deadline(&pool);
         assert!(second.error.is_none() && second.request.page == 1, "{:?}", second.error);
         // Asking for the stuck page again fails fast instead of trapping another worker.
         pool.set_queue(vec![req(0)]);
-        let again = recv(&pool);
+        let again = receive_before_deadline(&pool);
         assert!(again.error.as_deref().is_some_and(|e| e.contains("skipped earlier")), "{:?}", again.error);
-        // The stuck worker's late result is dropped, not delivered twice.
-        std::thread::sleep(std::time::Duration::from_millis(4200));
+        // The released worker notices its slot was cleared; its late result is dropped.
+        gate.release.wait();
+        gate.finished.wait();
         assert!(pool.try_recv().is_none());
     }
 
@@ -1713,32 +1941,22 @@ mod tests {
     fn a_request_being_rendered_is_not_rendered_again() {
         use super::*;
         let pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 2, RenderConfig::default());
-        *lock(&pool.shared.slow_page) = Some((0, std::time::Duration::from_millis(1000)));
-        let req = |page| RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: 0.5, tag: 0 };
+        let gate = render_gate(0, true);
+        *lock(&pool.shared.render_gates) = vec![gate.clone()];
+        let req = |page| RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: 0.5, tag: 0, ..Default::default() };
         pool.set_queue(vec![req(0)]);
-        let t = std::time::Instant::now();
-        while !lock(&pool.shared.busy).iter().flatten().any(|busy| busy.request.page == 0) {
-            assert!(t.elapsed() < std::time::Duration::from_secs(8), "page 1 never started");
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
+        gate.entered.wait();
         // What the canvas sends next: the page it is still waiting for, then another one.
         pool.set_queue(vec![req(0), req(1)]);
-        assert!(lock(&pool.shared.busy).iter().flatten().any(|busy| { busy.request == req(0) && !busy.cancelled.load(Ordering::Acquire) }));
-        let mut answers = Vec::new();
-        let t = std::time::Instant::now();
-        while answers.len() < 2 || lock(&pool.shared.busy).iter().any(Option::is_some) {
-            assert!(t.elapsed() < std::time::Duration::from_secs(8), "answers so far: {answers:?}");
-            if let Some(p) = pool.try_recv() {
-                assert!(p.error.is_none(), "{:?}", p.error);
-                answers.push(p.request.page);
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-        while let Some(p) = pool.try_recv() {
-            answers.push(p.request.page);
-        }
+        let other = receive_before_deadline(&pool);
+        assert!(other.error.is_none(), "{:?}", other.error);
+        assert_eq!(other.request.page, 1);
         // Page 2 went to the idle worker instead of waiting behind a second copy of page 1.
-        assert_eq!(answers, vec![1, 0]);
+        assert_eq!(pool.shared.render_started.load(Ordering::Relaxed), 2, "each page rendered once");
+        gate.release.wait();
+        let first = receive_before_deadline(&pool);
+        assert!(first.error.is_none(), "{:?}", first.error);
+        assert_eq!(first.request.page, 0);
         assert_eq!(pool.shared.render_started.load(Ordering::Relaxed), 2, "each page rendered once");
     }
 
@@ -1847,8 +2065,9 @@ mod tests {
         }
         pdf += "trailer << /Root 1 0 R >>\n%%EOF";
         let pool = RenderPool::new(Arc::new(pdf.into_bytes()), 3, RenderConfig::default());
-        let wanted: Vec<RenderRequest> =
-            (0..pages).map(|page| RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: 2.0, tag: 2000 }).collect();
+        let wanted: Vec<RenderRequest> = (0..pages)
+            .map(|page| RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: 2.0, tag: 2000, ..Default::default() })
+            .collect();
         // The canvas's loop: take what arrived, then queue every page still missing whenever
         // that list changes (requests already rendering included).
         let mut got = vec![0; pages];
@@ -1890,48 +2109,59 @@ mod tests {
     // Metadata-only: the test budget is 128 pixels and no image buffer is allocated.
     #[test]
     fn image_resampling_rejects_anisotropic_target_growth() {
-        assert_eq!(hayro::image_resampling_size(16, 1, 1, 16, 0.5, 32.0, 128), None);
-        assert_eq!(hayro::image_resampling_size(16, 1, 3, 48, 0.5, 32.0, 128), None);
-        assert_eq!(hayro::image_resampling_size(16, 1, 4, 64, 0.5, 32.0, 128), None);
+        assert_eq!(hayro::image_resampling_size(16, 1, 1, 16, 0.5, 32.0, 128, true), None);
+        assert_eq!(hayro::image_resampling_size(16, 1, 3, 48, 0.5, 32.0, 128, true), None);
+        assert_eq!(hayro::image_resampling_size(16, 1, 4, 64, 0.5, 32.0, 128, true), None);
     }
 
     #[test]
     fn image_resampling_bounds_intermediate_before_planning() {
         // Source and destination are each 128 pixels, but their crossed dimensions are 256.
-        assert_eq!(hayro::image_resampling_size(16, 8, 4, 512, 0.5, 2.0, 128), None);
+        assert_eq!(hayro::image_resampling_size(16, 8, 4, 512, 0.5, 2.0, 128, true), None);
     }
 
     #[test]
     fn image_resampling_rejects_invalid_sources_and_scales() {
-        assert_eq!(hayro::image_resampling_size(4, 4, 3, 47, 0.5, 0.5, 128), None);
-        assert_eq!(hayro::image_resampling_size(4, 4, 3, 49, 0.5, 0.5, 128), None);
+        assert_eq!(hayro::image_resampling_size(4, 4, 3, 47, 0.5, 0.5, 128, true), None);
+        assert_eq!(hayro::image_resampling_size(4, 4, 3, 49, 0.5, 0.5, 128, true), None);
         for scale in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.0, 0.0] {
-            assert_eq!(hayro::image_resampling_size(4, 4, 3, 48, 0.5, scale, 128), None);
+            assert_eq!(hayro::image_resampling_size(4, 4, 3, 48, 0.5, scale, 128, true), None);
         }
     }
 
     #[test]
     fn image_resampling_keeps_valid_sizes_and_exact_limits() {
-        assert_eq!(hayro::image_resampling_size(16, 8, 1, 128, 0.5, 0.5, 128), Some((8, 4)));
-        assert_eq!(hayro::image_resampling_size(16, 1, 3, 48, 0.5, 8.0, 128), Some((8, 8)));
-        assert_eq!(hayro::image_resampling_size(16, 8, 4, 512, 1.0, 1.0, 128), Some((16, 8)));
-        assert_eq!(hayro::image_resampling_size(0, 8, 1, 0, 1.0, 1.0, 128), None);
-        assert_eq!(hayro::image_resampling_size(16, 9, 1, 144, 1.0, 1.0, 128), None);
-        assert_eq!(hayro::image_resampling_size(65_536, 1, 1, 65_536, 1.0, 1.0, u64::MAX), None);
+        assert_eq!(hayro::image_resampling_size(16, 8, 1, 128, 0.5, 0.5, 128, true), Some((8, 4)));
+        assert_eq!(hayro::image_resampling_size(16, 1, 3, 48, 0.5, 8.0, 128, true), Some((8, 8)));
+        assert_eq!(hayro::image_resampling_size(16, 8, 4, 512, 1.0, 1.0, 128, true), Some((16, 8)));
+        assert_eq!(hayro::image_resampling_size(0, 8, 1, 0, 1.0, 1.0, 128, true), None);
+        assert_eq!(hayro::image_resampling_size(16, 9, 1, 144, 1.0, 1.0, 128, true), None);
+        assert_eq!(hayro::image_resampling_size(65_536, 1, 1, 65_536, 1.0, 1.0, u64::MAX, true), None);
         for channels in [1, 3, 4] {
-            assert_eq!(hayro::image_resampling_size(65_536, 1, channels, 65_536 * channels, 1.0 / 4096.0, 1.0, 65_536), Some((16, 1)));
+            assert_eq!(hayro::image_resampling_size(65_536, 1, channels, 65_536 * channels, 1.0 / 4096.0, 1.0, 65_536, true), Some((16, 1)));
         }
-        assert_eq!(hayro::image_resampling_size(65_535, 1, 1, 65_535, 1.0, 1.0, 65_535), Some((65_535, 1)));
-        assert_eq!(hayro::image_resampling_size((1 << 20) + 1, 1, 1, (1 << 20) + 1, 1.0 / 4096.0, 1.0, 1 << 28), None);
+        assert_eq!(hayro::image_resampling_size(65_535, 1, 1, 65_535, 1.0, 1.0, 65_535, true), Some((65_535, 1)));
+        assert_eq!(hayro::image_resampling_size((1 << 20) + 1, 1, 1, (1 << 20) + 1, 1.0 / 4096.0, 1.0, 1 << 28, true), None);
     }
 
     #[test]
     fn image_resampling_padded_backend_dimensions_stay_checked() {
         // A Type 3 image's two-pixel frame may reach u16::MAX exactly, never wrap to zero.
-        assert_eq!(hayro::image_resampling_size(65_531 + 4, 1 + 4, 4, 65_535 * 5 * 4, 1.0, 1.0, 65_535 * 5), Some((65_535, 5)));
-        assert_eq!(hayro::image_resampling_size(65_531 + 4, 1 + 4, 4, 65_535 * 5 * 4, 1.0, 1.0, 65_535 * 5 - 1), None);
-        assert_eq!(hayro::image_resampling_size(65_532 + 4, 1 + 4, 4, 65_536 * 5 * 4, 1.0, 1.0, 1 << 28), None);
+        assert_eq!(hayro::image_resampling_size(65_531 + 4, 1 + 4, 4, 65_535 * 5 * 4, 1.0, 1.0, 65_535 * 5, true), Some((65_535, 5)));
+        assert_eq!(hayro::image_resampling_size(65_531 + 4, 1 + 4, 4, 65_535 * 5 * 4, 1.0, 1.0, 65_535 * 5 - 1, true), None);
+        assert_eq!(hayro::image_resampling_size(65_532 + 4, 1 + 4, 4, 65_536 * 5 * 4, 1.0, 1.0, 1 << 28, true), None);
     }
+
+    /// Nearest-neighbour copies source pixels and needs no filter tables, so a source wider than the
+    /// Catmull-Rom side cap still shrinks. The pixel budget applies to it all the same.
+    #[test]
+    fn image_resampling_nearest_accepts_wide_sources_the_filter_refuses() {
+        let wide: u32 = (1 << 20) + 1;
+        assert_eq!(hayro::image_resampling_size(wide, 1, 1, wide as usize, 1.0 / 4096.0, 1.0, 1 << 28, true), None);
+        assert_eq!(hayro::image_resampling_size(wide, 1, 1, wide as usize, 1.0 / 4096.0, 1.0, 1 << 28, false), Some((257, 1)));
+        assert_eq!(hayro::image_resampling_size(wide, 1, 1, wide as usize, 1.0 / 4096.0, 1.0, 256, false), None);
+    }
+
     fn strip_image_pdf(width: u32, body: &str, space: &str, encoded: &str, alpha: Option<&str>) -> Vec<u8> {
         let (mask_ref, mask_obj) = match alpha {
             Some(data) => (
@@ -1982,6 +2212,23 @@ mod tests {
         assert!(page.error.is_none(), "{:?}", page.error);
         assert_eq!((page.width, page.height), (20, 4));
         assert_eq!(&page.rgba[(20 + 3) * 4..][..4], &[255, 128, 128, 255]);
+    }
+
+    /// A source wider than the filter's 2^20-pixel side cap is shrunk by nearest-neighbour rather
+    /// than refused and skipped (the default, `/Interpolate` omitted, is nearest).
+    #[test]
+    fn wide_non_interpolated_sources_draw_after_shrinking() {
+        let data = "7f".repeat(1_100_000);
+        let pdf = strip_image_pdf(1_100_000, "q 16 0 0 1 2 2 cm /Im0 Do Q\n", "DeviceGray", &data, None);
+        let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!((page.width, page.height), (20, 4));
+        let pixel = |x: usize| &page.rgba[(20 + x) * 4..][..4];
+        assert_eq!(pixel(1), &[255, 255, 255, 255]);
+        assert_eq!(pixel(3), &[127, 127, 127, 255], "source image was not dropped");
+        assert_eq!(pixel(17), &[127, 127, 127, 255]);
+        assert_eq!(pixel(19), &[255, 255, 255, 255]);
     }
 
     #[test]
@@ -2223,7 +2470,7 @@ trailer << /Root 1 0 R >>
     #[test]
     fn renders_a_blue_rectangle() {
         let pool = RenderPool::new(Arc::new(ONE_PAGE.to_vec()), 1, RenderConfig::default());
-        pool.set_queue(vec![RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 7 }]);
+        pool.set_queue(vec![RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 7, ..Default::default() }]);
         let page = loop {
             if let Some(p) = pool.try_recv() {
                 break p;
@@ -2280,7 +2527,7 @@ trailer << /Root 1 0 R >>
     #[test]
     fn pixels_are_a_plain_renders_bytes_in_a_buffer_a_gui_can_take_over() {
         let mut r = PageRenderer::new(Arc::new(ONE_PAGE.to_vec()), RenderConfig::default());
-        let out = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 2.0, tag: 0 });
+        let out = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 2.0, tag: 0, ..Default::default() });
         assert!(out.error.is_none(), "{:?}", out.error);
         // The same bytes as hayro's own render to a pixmap, with the same settings.
         let pdf = Pdf::new(Arc::new(ONE_PAGE.to_vec())).expect("parses");
@@ -2314,10 +2561,10 @@ trailer << /Root 1 0 R >>
     #[test]
     fn missing_page_and_garbage_input_fail_gracefully() {
         let mut r = PageRenderer::new(Arc::new(ONE_PAGE.to_vec()), RenderConfig::default());
-        assert!(r.render(RenderRequest { page: 9, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }).error.is_some());
+        assert!(r.render(RenderRequest { page: 9, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() }).error.is_some());
         let mut g = PageRenderer::new(Arc::new(b"not a pdf at all".to_vec()), RenderConfig::default());
         assert_eq!(g.page_count(), 0);
-        assert!(g.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }).error.is_some());
+        assert!(g.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() }).error.is_some());
     }
 
     #[test]
@@ -2361,7 +2608,7 @@ endstream endobj
 trailer << /Root 1 0 R >>
 %%EOF";
         let mut r = PageRenderer::new(Arc::new(pdf.to_vec()), RenderConfig::default());
-        let req = RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 };
+        let req = RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() };
         let p = r.render(req);
         assert!(p.error.is_none(), "{:?}", p.error);
         assert_eq!((p.width, p.height), (596, 842));
@@ -2404,7 +2651,7 @@ endstream endobj
 trailer << /Root 1 0 R >>
 %%EOF";
         let mut r = PageRenderer::new(Arc::new(pdf.to_vec()), RenderConfig::default());
-        let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+        let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
         assert!(p.error.is_none(), "{:?}", p.error);
         let px = |x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..4].to_vec();
         assert_eq!(px(20, 80), vec![255, 0, 0, 255], "checkbox must show its /Yes state");
@@ -2439,7 +2686,7 @@ endobj
 trailer << /Root 1 0 R >>
 %%EOF";
         let mut r = PageRenderer::new(Arc::new(pdf.to_vec()), RenderConfig::default());
-        let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+        let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
         assert!(p.error.is_none(), "{:?}", p.error);
         let px = |x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..4].to_vec();
         assert_eq!(px(20, 80), vec![255, 0, 0, 255], "checkbox must show the /Yes appearance, not the decoy stream");
@@ -2519,7 +2766,7 @@ trailer << /Root 1 0 R >>
         };
         let render = |bytes: Vec<u8>| {
             let mut r = PageRenderer::new(Arc::new(bytes), RenderConfig::default());
-            r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 })
+            r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() })
         };
         for (case, form) in [
             ("zero-width /BBox", "/BBox [0 0 0 20]"),
@@ -2571,7 +2818,7 @@ trailer << /Root 1 0 R >>
                 content.len()
             );
             let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
-            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
             assert!(p.error.is_none(), "{form}: {:?}", p.error);
             // The bounding box of everything drawn, in device pixels.
             let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
@@ -2624,7 +2871,7 @@ trailer << /Root 1 0 R >>
                 content.len()
             );
             let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), config);
-            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
             assert!(p.error.is_none(), "{annot}: {:?}", p.error);
             p
         };
@@ -2695,7 +2942,7 @@ trailer << /Root 1 0 R >>
 %%EOF";
         let render = |hide: bool| {
             let mut r = PageRenderer::new(Arc::new(pdf.to_vec()), RenderConfig { hide_comments: hide, ..RenderConfig::default() });
-            r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 })
+            r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() })
         };
         let px = |p: &RenderedPage, x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..4].to_vec();
         let shown = render(false);
@@ -2711,8 +2958,8 @@ trailer << /Root 1 0 R >>
         assert!(pool.is_inline());
         assert!(pool.try_recv().is_none());
         pool.set_queue(vec![
-            RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 1 },
-            RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 0.5, tag: 2 },
+            RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 1, ..Default::default() },
+            RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 0.5, tag: 2, ..Default::default() },
         ]);
         assert_eq!(pool.try_recv().map(|p| p.request.tag), Some(1));
         assert_eq!(pool.try_recv().map(|p| (p.request.tag, p.width)), Some((2, 50)));
@@ -2758,21 +3005,19 @@ trailer << /Root 1 0 R >>
         // give up on (and stop) a second worker too.
         *lock(&pool.shared.parser.state) = ParserState::Private;
         pool.shared.parser.valid.store(false, Ordering::Release);
-        pool.set_stuck_after(std::time::Duration::from_millis(100));
-        *lock(&pool.shared.slow_page) = Some((0, std::time::Duration::from_millis(1500)));
-        pool.set_queue(vec![RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 0.5, tag: 0 }]);
-        let t = std::time::Instant::now();
-        let first = loop {
-            if let Some(p) = pool.try_recv() {
-                break p;
-            }
-            assert!(t.elapsed() < std::time::Duration::from_secs(30), "no answer");
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        };
+        pool.set_stuck_after(std::time::Duration::ZERO);
+        let gate = render_gate(0, false);
+        *lock(&pool.shared.render_gates) = vec![gate.clone()];
+        pool.set_queue(vec![RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 0.5, tag: 0, ..Default::default() }]);
+        gate.entered.wait();
+        let first = pool.try_recv().expect("the watchdog answers for the held render");
         assert!(first.error.as_deref().is_some_and(|e| e.contains("took longer")), "{:?}", first.error);
         // The abandoned worker is told to stop at its next operator; its replacement isn't.
         let stop: Vec<bool> = lock(&pool.shared.stop).iter().map(|s| s.load(std::sync::atomic::Ordering::Relaxed)).collect();
         assert_eq!(stop, vec![true, false]);
+        gate.release.wait();
+        gate.finished.wait();
+        assert!(pool.try_recv().is_none(), "the abandoned render must not publish a late result");
     }
 
     #[test]
@@ -2788,7 +3033,7 @@ endstream endobj
 trailer << /Root 1 0 R >>
 %%EOF";
         let mut r = PageRenderer::new(Arc::new(pdf.to_vec()), RenderConfig::default());
-        let out = r.render(RenderRequest { page: 0, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0 });
+        let out = r.render(RenderRequest { page: 0, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, ..Default::default() });
         assert!(out.error.is_none(), "{:?}", out.error);
         let t = out.text.expect("text");
         assert_eq!(t.plain_text(), "Hello World\nSecond");
@@ -2812,7 +3057,7 @@ trailer << /Root 1 0 R >>
 %%EOF";
         let px = |cfg: RenderConfig| {
             let mut r = PageRenderer::new(Arc::new(pdf.to_vec()), cfg);
-            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 0.5, tag: 0 });
+            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 0.5, tag: 0, ..Default::default() });
             p.rgba[..4].to_vec()
         };
         assert_eq!(px(RenderConfig::default()), vec![255, 0, 0, 255], "layer is on by default");
@@ -2844,7 +3089,7 @@ trailer << /Root 1 0 R >>
         };
         let render = |doc: String| {
             let mut r = PageRenderer::new(Arc::new(doc.into_bytes()), RenderConfig::default());
-            r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 })
+            r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() })
         };
         let looped = render(pdf("/Pattern cs /P1 scn 0 0 10 10 re f"));
         assert_eq!((looped.width, looped.height), (40, 40));
@@ -2923,7 +3168,7 @@ trailer << /Root 1 0 R >>
         };
         let render = |doc: String| {
             let mut r = PageRenderer::new(Arc::new(doc.into_bytes()), RenderConfig::default());
-            r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 })
+            r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() })
         };
         let looped = render(pdf("1 0 d0 BT /F1 1 Tf (A) Tj ET 0 0 1 1 re f"));
         assert_eq!((looped.width, looped.height), (40, 40));
@@ -2962,7 +3207,7 @@ trailer << /Root 1 0 R >>
             content.len()
         );
         let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
-        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
         assert!(page.error.is_none(), "{:?}", page.error);
         assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255]);
     }
@@ -3054,7 +3299,7 @@ trailer << /Root 1 0 R >>
     fn jpx_32_bit_image_does_not_prevent_other_page_content_from_rendering() {
         for bpc in [8, 32] {
             let mut renderer = PageRenderer::new(Arc::new(jpx_midpoint_pdf(bpc, 1)), RenderConfig::default());
-            let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+            let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
             assert!(page.error.is_none(), "{bpc} bits: {:?}", page.error);
             assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "other page content draws");
             if bpc == 8 {
@@ -3092,7 +3337,7 @@ trailer << /Root 1 0 R >>
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
-                let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+                let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() }));
             });
             let page = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("an absurd image must not stall the renderer");
             assert!(page.error.is_none(), "{:?}", page.error);
@@ -3131,7 +3376,7 @@ trailer << /Root 1 0 R >>
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
-                let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+                let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() }));
             });
             let page = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("must not stall the renderer");
             assert!(page.error.is_none(), "{:?}", page.error);
@@ -3169,7 +3414,7 @@ trailer << /Root 1 0 R >>
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
-            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() }));
         });
         let page = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("must not stall the renderer");
         assert!(page.error.is_none(), "{:?}", page.error);
@@ -3274,11 +3519,227 @@ trailer << /Root 1 0 R >>
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut r = PageRenderer::new(Arc::new(pdf.as_bytes().to_vec()), RenderConfig::default());
-            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() }));
         });
         let page = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("a self-multiplying Type 3 glyph must not stall the renderer");
         assert!(page.error.is_none(), "{:?}", page.error);
         assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "the rest of the page draws");
+    }
+
+    /// `depth` direct arrays (`array`), dictionaries with a key (`dict`) or both in turn (`mixed`)
+    /// around `null`.
+    fn nested(depth: usize, kind: &str) -> String {
+        let is_dict = |level| kind == "dict" || (kind == "mixed" && level % 2 == 0);
+        let mut value = String::new();
+        for level in 0..depth {
+            value.push_str(if is_dict(level) { "<< /N " } else { "[" });
+        }
+        value.push_str("null");
+        for level in (0..depth).rev() {
+            value.push_str(if is_dict(level) { " >>" } else { "]" });
+        }
+        value
+    }
+
+    /// `depth` dictionaries nested without keys (`<< << >> >>`), closed or not.
+    fn keyless(depth: usize, closed: bool) -> String {
+        let mut value = "<< ".repeat(depth);
+        if closed {
+            value.push_str(&">> ".repeat(depth));
+        }
+        value
+    }
+
+    /// A 40 × 40 page that runs `content`, with a correct xref table and `trailer` at the end
+    /// of a trailer that also points at an `/Info` title.
+    fn nesting_pdf(trailer: &str, content: &str) -> Vec<u8> {
+        let mut bytes = b"%PDF-1.7\n".to_vec();
+        let mut offsets = vec![0];
+        for (index, body) in [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << >> >>".to_string(),
+            format!("<< /Length {} >> stream\n{content}\nendstream", content.len()),
+            "<< /Title (Nested) >>".to_string(),
+        ]
+        .iter()
+        .enumerate()
+        {
+            offsets.push(bytes.len());
+            bytes.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", index + 1).as_bytes());
+        }
+        let xref = bytes.len();
+        bytes.extend_from_slice(b"xref\n0 6\n0000000000 65535 f \n");
+        for offset in &offsets[1..] {
+            bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        bytes.extend_from_slice(format!("trailer << /Size 6 /Root 1 0 R /Info 5 0 R {trailer} >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+        bytes
+    }
+
+    /// Opens `bytes` and renders its one page, which must render without an error.
+    fn nesting_render(bytes: Vec<u8>) -> RenderedPage {
+        let parsed = Pdf::new(bytes.clone()).expect("xref repair can recover the catalog when the trailer is malformed");
+        assert_eq!(parsed.pages().len(), 1);
+        let mut renderer = PageRenderer::new(Arc::new(bytes), RenderConfig::default());
+        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!((page.width, page.height), (40, 40));
+        page
+    }
+
+    /// Direct arrays and dictionaries used to recurse without a bound while skipping even
+    /// unused trailer values and content operands. Exercise the vendored patch in workspace CI.
+    #[test]
+    fn deeply_nested_direct_objects_do_not_overflow_the_stack() {
+        use hayro_syntax::object::Object;
+        use hayro_syntax::reader::{Reader, ReaderExt};
+        let pdf = |unused: &str, content: &str| nesting_pdf(&format!("/Unused {unused}"), content);
+        let paint = "1 0 0 rg 0 0 4 4 re f";
+        for kind in ["array", "dict", "mixed"] {
+            // Run the crash reproducer first, so the unpatched red state is a stack overflow.
+            let page = nesting_render(pdf(&nested(100_000, kind), paint));
+            assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "{kind}: repaired trailer");
+            for depth in [20, 128, 129] {
+                let value = nested(depth, kind);
+                let siblings = format!("{value} [] []");
+                let mut reader = Reader::new(siblings.as_bytes());
+                assert_eq!(reader.skip::<Object<'_>>(false).is_some(), depth <= 128, "{kind}: depth {depth}");
+                if depth > 128 {
+                    assert_eq!(reader.offset(), 0, "failed skips restore the offset");
+                    reader.jump(value.len());
+                }
+                // A failed skip must unwind its depth; successful siblings must not accumulate it.
+                for _ in 0..2 {
+                    reader.skip_white_spaces();
+                    assert!(reader.skip::<Object<'_>>(false).is_some());
+                }
+                let page = nesting_render(pdf(&value, paint));
+                assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "{kind}: depth {depth}");
+            }
+            // Many siblings exercise the offset constructor and ensure depth is per nesting.
+            let siblings = "[] ".repeat(256);
+            let mut reader = Reader::new_with(siblings.as_bytes(), 0);
+            for _ in 0..256 {
+                assert!(reader.skip::<Object<'_>>(false).is_some());
+                reader.skip_white_spaces();
+            }
+        }
+        // Content-stream arrays take the Object path, rather than MaybeRef<Object>.
+        for depth in [100_000, 20, 128, 129] {
+            let value = nested(depth, "array");
+            let mut reader = Reader::new(value.as_bytes());
+            assert_eq!(reader.skip::<Object<'_>>(true).is_some(), depth <= 128, "content: depth {depth}");
+            let content = format!("{value} discard {paint}");
+            let page = nesting_render(pdf("null", &content));
+            if depth <= 128 {
+                assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "content: depth {depth}");
+            }
+        }
+    }
+
+    /// A dictionary with an object where a key belongs is repaired by reading that object, not
+    /// skipping it, and that read recursed without a bound when the object was another such
+    /// dictionary: `<<` 100,000 times aborted the process. Here as a content-stream operand.
+    #[test]
+    fn dictionaries_nested_without_keys_in_content_do_not_overflow_the_stack() {
+        for closed in [true, false] {
+            let content = format!("1 0 0 rg 0 0 4 4 re f {} discard", keyless(100_000, closed));
+            let page = nesting_render(nesting_pdf("", &content));
+            assert_eq!(px40(&page, 1, 38), &[255, 0, 0, 255], "closed: {closed}");
+        }
+    }
+
+    /// The same, where a key of the trailer belongs: the xref table can't be used, and repair
+    /// finds the catalog.
+    #[test]
+    fn dictionaries_nested_without_keys_in_the_trailer_do_not_overflow_the_stack() {
+        for closed in [true, false] {
+            let page = nesting_render(nesting_pdf(&keyless(100_000, closed), "1 0 0 rg 0 0 4 4 re f"));
+            assert_eq!(px40(&page, 1, 38), &[255, 0, 0, 255], "closed: {closed}");
+        }
+    }
+
+    /// The same as the properties of marked content (`/Tag <<<<<< … BDC`).
+    #[test]
+    fn dictionaries_nested_without_keys_as_marked_content_properties_do_not_overflow_the_stack() {
+        for closed in [true, false] {
+            let properties = if closed { "<<".repeat(100_000) + &">>".repeat(100_000) } else { "<<".repeat(100_000) };
+            let content = format!("1 0 0 rg 0 0 4 4 re f /Tag {properties} BDC 0 0 1 rg 36 36 4 4 re f EMC");
+            let page = nesting_render(nesting_pdf("", &content));
+            assert_eq!(px40(&page, 1, 38), &[255, 0, 0, 255], "closed: {closed}");
+        }
+    }
+
+    /// Through the same three paths, dictionaries without keys are read up to the nesting cap
+    /// (128 dictionaries in all) and refused one past it.
+    #[test]
+    fn dictionaries_nested_without_keys_are_read_up_to_the_nesting_cap() {
+        use hayro_syntax::object::{FromBytes, Object};
+        use hayro_syntax::reader::{Reader, ReaderExt};
+        let (red, blue, white) = ([255, 0, 0, 255], [0, 0, 255, 255], [255, 255, 255, 255]);
+        for depth in [128, 129] {
+            let within = depth <= 128;
+            let value = keyless(depth, true);
+            assert_eq!(Object::from_bytes(value.as_bytes()).is_some(), within, "object: {depth}");
+            assert_eq!(Reader::new(value.as_bytes()).read_without_context::<Object<'_>>().is_some(), within, "operand: {depth}");
+            // Content reading stops at an operand it can't read, so the blue square is drawn
+            // only when the dictionaries were read.
+            let properties = "<<".repeat(depth) + &">>".repeat(depth);
+            for (path, operand) in [("operand", format!("{value} discard")), ("BDC", format!("/Tag {properties} BDC"))] {
+                let content = format!("1 0 0 rg 0 0 4 4 re f {operand} 0 0 1 rg 36 36 4 4 re f");
+                let page = nesting_render(nesting_pdf("", &content));
+                assert_eq!(px40(&page, 1, 38), &red, "{path}: {depth}");
+                assert_eq!(px40(&page, 38, 1), if within { &blue } else { &white }, "{path}: {depth}");
+            }
+            // The trailer is the outermost dictionary. Within the cap it is read (with its
+            // /Info); past it, repair recovers the catalog but not the trailer.
+            let bytes = nesting_pdf(&keyless(depth - 1, true), "1 0 0 rg 0 0 4 4 re f");
+            let parsed = Pdf::new(bytes.clone()).expect("the trailer or repair finds the catalog");
+            assert_eq!(parsed.metadata().title, within.then(|| b"Nested".to_vec()), "trailer: {depth}");
+            assert_eq!(px40(&nesting_render(bytes), 1, 38), &red, "trailer: {depth}");
+        }
+    }
+
+    /// The cap must also fit small stacks: skip, read, iterate down with the array iterators and
+    /// format (`{:?}`) the deepest nesting it admits, of arrays, dictionaries, both and
+    /// dictionaries without keys, on a 512 KiB thread in a debug build. Measured when this was
+    /// written (macOS arm64, dev profile): at most about 100 KiB, for `{:?}` of 128 dictionaries.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn nesting_at_the_cap_fits_a_512_kib_stack() {
+        use hayro_syntax::object::{FromBytes, Object};
+        use hayro_syntax::reader::{Reader, ReaderExt};
+        let worker = std::thread::Builder::new().stack_size(512 * 1024).spawn(|| {
+            // (kind, arrays and dictionaries `{:?}` shows, levels walked down to the end)
+            for (kind, arrays, dicts, levels) in [("array", 128, 0, 129), ("dict", 0, 128, 129), ("mixed", 64, 64, 129), ("keyless", 0, 1, 1)] {
+                let value = if kind == "keyless" { keyless(128, true) } else { nested(128, kind) };
+                assert!(Reader::new(value.as_bytes()).skip::<Object<'_>>(false).is_some(), "{kind}: skip");
+                assert!(Reader::new(value.as_bytes()).skip::<Object<'_>>(true).is_some(), "{kind}: skip in content");
+                assert!(Reader::new(value.as_bytes()).read_without_context::<Object<'_>>().is_some(), "{kind}: operand");
+                let object = Object::from_bytes(value.as_bytes()).expect("the cap admits 128 levels");
+                let shown = format!("{object:?}");
+                assert_eq!((shown.matches("Array(").count(), shown.matches("Dict(").count()), (arrays, dicts), "{kind}: {{:?}}");
+                let (mut walked, mut next) = (0, Some(object));
+                while let Some(object) = next.take() {
+                    walked += 1;
+                    next = match object {
+                        Object::Array(array) => {
+                            assert_eq!(array.raw_iter().count(), 1, "{kind}: raw_iter");
+                            assert!(array.flex_iter().next::<Object<'_>>().is_some(), "{kind}: flex_iter");
+                            array.iter::<Object<'_>>().next()
+                        }
+                        Object::Dict(dict) => dict.get::<Object<'_>>("N"),
+                        _ => None,
+                    };
+                }
+                assert_eq!(walked, levels, "{kind}: iterate");
+            }
+        });
+        // A stack overflow aborts the process; a failed check is a panic, shown as it is.
+        if let Err(panic) = worker.expect("spawn a 512 KiB thread").join() {
+            std::panic::resume_unwind(panic);
+        }
     }
 
     /// From the nightly `cargo xtask fuzz`: many small inline images, each with "EI" (followed
@@ -3348,7 +3809,7 @@ trailer << /Root 1 0 R >>
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
-            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() }));
         });
         let page = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("a huge JBIG2 region must not stall the renderer");
         assert!(page.error.is_none(), "{:?}", page.error);
@@ -3409,13 +3870,159 @@ trailer << /Root 1 0 R >>
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
-                let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+                let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() }));
             });
             let page = rx
                 .recv_timeout(std::time::Duration::from_secs(20))
                 .unwrap_or_else(|_| panic!("{what}: a JBIG2 symbol dictionary must not stall the renderer"));
             assert!(page.error.is_none(), "{what}: {:?}", page.error);
             assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "{what}: the rest of the page draws");
+        }
+    }
+
+    /// Item 1 of storytold/pdfcraft#623: a page's content used to be cut at `MAX_DECODED_STREAM`,
+    /// so everything after the cut was lost (the text and the title block of the A1 sample). Content
+    /// that expands by a few times over is read to its end, however large it is.
+    #[test]
+    fn page_content_past_the_old_cap_renders() {
+        let limit = hayro::hayro_syntax::MAX_DECODED_STREAM;
+        // Blocks of a comment and a run of blanks. Each compresses about thirty times over, well
+        // within the budget that `ContentReader` allows.
+        let mut content = Vec::with_capacity(limit + (8 << 20));
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        while content.len() < limit + (8 << 20) {
+            content.push(b'%');
+            for _ in 0..3 {
+                state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                content.push(b'a' + ((state >> 33) % 26) as u8);
+            }
+            content.push(b'\n');
+            content.resize(content.len() + 128, b' ');
+        }
+        content.extend_from_slice(b"1 0 0 rg 0 0 4 4 re f");
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut z, &content).unwrap();
+        let stream = z.finish().unwrap();
+        assert!(content.len() < 64 * stream.len(), "the content expands by less than the budget allows");
+
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R >> endobj\n".to_vec();
+        pdf.extend_from_slice(format!("4 0 obj << /Filter /FlateDecode /Length {} >> stream\n", stream.len()).as_bytes());
+        pdf.extend_from_slice(&stream);
+        pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false }));
+        });
+        let page = rx.recv_timeout(std::time::Duration::from_secs(120)).expect("a large page must render");
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert!(!page.warnings.contains(&RenderWarning::ContentTruncated), "nothing was cut");
+        assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "the square after the old cap draws");
+    }
+
+    /// The content stream is interpreted a window at a time. An inline image with more data than
+    /// a window is read whole, and what follows it is still drawn.
+    #[test]
+    fn inline_images_longer_than_a_window_are_read_whole() {
+        let mut content = b"q 300 0 0 300 0 0 cm BI /W 300 /H 300 /BPC 8 /CS /G ID ".to_vec();
+        content.extend(std::iter::repeat_n(0x80_u8, 300 * 300));
+        content.extend_from_slice(b" EI Q 1 0 0 rg 0 0 4 4 re f");
+        let pdf = one_page_pdf(&content, "");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false }));
+        });
+        let page = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("an inline image must not stall the renderer");
+        assert!(page.error.is_none(), "{:?}", page.error);
+        let pixel = |x: u32, y: u32| {
+            let offset = ((y * page.width + x) * 4) as usize;
+            [page.rgba[offset], page.rgba[offset + 1], page.rgba[offset + 2], page.rgba[offset + 3]]
+        };
+        assert_eq!(pixel(1, 38), [255, 0, 0, 255], "the square after the image draws");
+        let grey = pixel(30, 5);
+        assert!(grey[0] == grey[1] && grey[1] == grey[2] && grey[0] < 255, "the image covers the page: {grey:?}");
+    }
+
+    /// A one-page PDF whose content is the stream `stream`, with the entries `dict` in its
+    /// dictionary.
+    fn one_page_pdf(stream: &[u8], dict: &str) -> Vec<u8> {
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R >> endobj\n".to_vec();
+        pdf.extend_from_slice(format!("4 0 obj << {dict} /Length {} >> stream\n", stream.len()).as_bytes());
+        pdf.extend_from_slice(stream);
+        pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+        pdf
+    }
+
+    /// A page whose content expands far beyond its compressed stream stops at the expansion budget,
+    /// which is 64 times the compressed size and at least `MAX_DECODED_STREAM`, and the page says so.
+    #[test]
+    fn content_bombs_stop_at_the_budget_and_say_so() {
+        let bomb = zlib_zeros(hayro::hayro_syntax::MAX_DECODED_STREAM + (32 << 20));
+        let pdf = one_page_pdf(&bomb, "/Filter /FlateDecode");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false }));
+        });
+        let page = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("a content bomb must not stall the renderer");
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert!(page.warnings.contains(&RenderWarning::ContentTruncated), "the cut content is observable");
+    }
+
+    /// A stream read in pieces of any size gives the same bytes: stored and dynamic blocks, and in
+    /// a `/Contents` array a stream that is not Flate-coded, between two that are.
+    #[test]
+    fn content_reader_returns_the_same_bytes_in_any_pieces() {
+        use hayro::hayro_syntax::Pdf;
+        use std::io::Write;
+        let mut plain = Vec::new();
+        for i in 0..40_000_u32 {
+            plain.extend_from_slice(format!("{} {} l\n", i % 977, i % 613).as_bytes());
+        }
+        let zlib = |data: &[u8], level| {
+            let mut z = flate2::write::ZlibEncoder::new(Vec::new(), level);
+            z.write_all(data).unwrap();
+            z.finish().unwrap()
+        };
+        let read = |pdf: Vec<u8>, piece: usize| {
+            let doc = Pdf::new(pdf).expect("parses");
+            let page = doc.pages().first().expect("one page");
+            let mut content = page.content_reader();
+            let mut out = Vec::new();
+            while content.read_into(&mut out, piece) > 0 {}
+            out
+        };
+        let pieces = [1, 3, 64, 4096, 65_536, 1_000_000];
+
+        for level in [flate2::Compression::none(), flate2::Compression::best()] {
+            let pdf = one_page_pdf(&zlib(&plain, level), "/Filter /FlateDecode");
+            for piece in pieces {
+                assert!(read(pdf.clone(), piece) == plain, "piece {piece}");
+            }
+        }
+
+        // A `/Contents` array: Flate, then ASCIIHex (decoded whole), then Flate. As before, each
+        // stream is followed by a space.
+        let hex: String = plain[..100].iter().map(|b| format!("{b:02x}")).collect::<String>() + ">";
+        let first = zlib(&plain, flate2::Compression::default());
+        let last = zlib(&plain[..50], flate2::Compression::default());
+        let mut expected = plain.clone();
+        expected.push(b' ');
+        expected.extend_from_slice(&plain[..100]);
+        expected.push(b' ');
+        expected.extend_from_slice(&plain[..50]);
+        expected.push(b' ');
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents [4 0 R 5 0 R 6 0 R] >> endobj\n".to_vec();
+        pdf.extend_from_slice(format!("4 0 obj << /Filter /FlateDecode /Length {} >> stream\n", first.len()).as_bytes());
+        pdf.extend_from_slice(&first);
+        pdf.extend_from_slice(format!("\nendstream endobj\n5 0 obj << /Filter /ASCIIHexDecode /Length {} >> stream\n", hex.len()).as_bytes());
+        pdf.extend_from_slice(hex.as_bytes());
+        pdf.extend_from_slice(format!("\nendstream endobj\n6 0 obj << /Filter /FlateDecode /Length {} >> stream\n", last.len()).as_bytes());
+        pdf.extend_from_slice(&last);
+        pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+        for piece in pieces {
+            assert!(read(pdf.clone(), piece) == expected, "the array: piece {piece}");
         }
     }
 
@@ -3620,7 +4227,7 @@ trailer << /Root 1 0 R >>
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
-            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() }));
         });
         let page = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("a self-painting form must not stall the renderer");
         assert!(page.error.is_none(), "{:?}", page.error);
@@ -3652,7 +4259,7 @@ trailer << /Root 1 0 R >>
         pdf.extend_from_slice(&form);
         pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
         let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
-        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
         assert!(page.error.is_none(), "{:?}", page.error);
         // The last paint is at user (30, 30)–(34, 34): device row 40 - 32 = 8.
         assert_eq!(&page.rgba[((8 * 40 + 32) * 4)..][..4], &[255, 0, 0, 255], "the 300th paint is drawn");
@@ -3680,7 +4287,7 @@ trailer << /Root 1 0 R >>
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
-            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() }));
         });
         let page = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("a sampled-function bomb must not stall the renderer");
         assert!(page.error.is_none(), "{:?}", page.error);
@@ -3705,7 +4312,7 @@ trailer << /Root 1 0 R >>
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
-                let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+                let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() }));
             });
             let page = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("a mesh shading must not stall the renderer");
             assert!(page.error.is_none(), "{:?}", page.error);
@@ -3773,7 +4380,7 @@ trailer << /Root 1 0 R >>
 ",
         );
         let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
-        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
         assert!(page.error.is_none(), "{:?}", page.error);
         let middle = &page.rgba[((28 * 40 + 12) * 4)..][..4];
         assert!(middle != [255, 255, 255, 255] && middle[3] == 255, "a small patch is shaded: {middle:?}");
@@ -3822,7 +4429,7 @@ trailer << /Root 1 0 R >>
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
-            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 25.0, tag: 0 }));
+            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 25.0, tag: 0, ..Default::default() }));
         });
         let page = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("overlapping mesh triangles must not stall the renderer");
         assert!(page.error.is_none(), "{:?}", page.error);
@@ -3850,7 +4457,7 @@ trailer << /Root 1 0 R >>
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
-                let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+                let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() }));
             });
             let page = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("a mesh shading must not stall the renderer");
             assert!(page.error.is_none(), "{:?}", page.error);
@@ -3897,7 +4504,7 @@ trailer << /Root 1 0 R >>
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
-            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() }));
         });
         let page = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("a Type 1 font must not stall the renderer");
         assert!(page.error.is_none(), "{:?}", page.error);
@@ -3924,12 +4531,186 @@ trailer << /Root 1 0 R >>
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
-            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() }));
         });
         let page = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("an absurd image must not hang the renderer");
         assert!(page.error.is_none(), "{:?}", page.error);
         // The rest of the page still draws: the red square at the bottom left (y-down: last rows).
         assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255]);
+    }
+
+    /// Hex-encodes `bytes` for an `/ASCIIHexDecode` stream.
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// An 8×4 source of 2×2 blocks: block column `x / 2` and row `y / 2` takes `levels[(y / 2) * 4 + x / 2]`.
+    fn block_source<T: Copy>(levels: [T; 8]) -> Vec<T> {
+        (0..32).map(|i| levels[(i / 16) * 4 + (i % 8) / 2]).collect()
+    }
+
+    /// Draws one `size` image of colour space `space` (`data` as raw samples, with an optional gray
+    /// `/SMask` of the same size) at 1:1 on a `device`-sized page, writing `/Interpolate` when given.
+    fn draw_minified_image(
+        space: &str,
+        size: (u32, u32),
+        interpolate: Option<bool>,
+        data: &[u8],
+        alpha: Option<&[u8]>,
+        device: (u32, u32),
+    ) -> RenderedPage {
+        let (width, height) = size;
+        let interp = interpolate.map_or_else(String::new, |value| format!("/Interpolate {value} "));
+        let (smask, mask) = match alpha {
+            Some(alpha) => (
+                "/SMask 6 0 R ",
+                format!(
+                    "6 0 obj << /Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length {} >> stream\n{}>\nendstream endobj\n",
+                    hex(alpha).len() + 1,
+                    hex(alpha)
+                ),
+            ),
+            None => ("", String::new()),
+        };
+        let image = hex(data);
+        let content = format!("q {} 0 0 {} 0 0 cm /Im0 Do Q", device.0, device.1);
+        let pdf = format!(
+            "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+             5 0 obj << /Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /{space} /BitsPerComponent 8 {interp}{smask}/Filter /ASCIIHexDecode /Length {} >> stream\n{image}>\nendstream endobj\n\
+             {mask}trailer << /Root 1 0 R >>\n%%EOF\n",
+            device.0,
+            device.1,
+            content.len(),
+            image.len() + 1
+        );
+        let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!((page.width, page.height), device);
+        page
+    }
+
+    /// Issue #624: an image drawn below its source resolution was pre-resampled with Catmull-Rom
+    /// even when `/Interpolate` was false (or absent, whose PDF default is false). That blends
+    /// neighboring samples before the renderer's later non-interpolating image sampler sees them,
+    /// making scans, screenshots and rasterized text look soft.
+    #[test]
+    fn non_interpolated_images_are_not_smoothed_when_minified() {
+        // Top band K W R G, bottom band B Y M C. Nearest 8×4 → 4×2 sampling picks each block's
+        // pixel, so every device pixel is one palette colour; Catmull-Rom blends across blocks.
+        let palette: [[u8; 3]; 8] = [[0, 0, 0], [255, 255, 255], [255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0], [255, 0, 255], [0, 255, 255]];
+        let rgb: Vec<u8> = block_source(palette).concat();
+        let exact: Vec<[u8; 4]> = palette.iter().map(|c| [c[0], c[1], c[2], 255]).collect();
+        let pixels = |p: &RenderedPage| p.rgba.as_chunks::<4>().0.to_vec();
+
+        // `/Interpolate` defaults to false, and explicit false is equivalent.
+        let omitted = draw_minified_image("DeviceRGB", (8, 4), None, &rgb, None, (4, 2));
+        assert_eq!(pixels(&omitted), exact, "default interpolation");
+        let disabled = draw_minified_image("DeviceRGB", (8, 4), Some(false), &rgb, None, (4, 2));
+        assert_eq!(&omitted.rgba[..], &disabled.rgba[..], "/Interpolate false must match the default");
+
+        // The fix must not disable interpolation: the same source asking for it blends blocks.
+        let enabled = draw_minified_image("DeviceRGB", (8, 4), Some(true), &rgb, None, (4, 2));
+        assert_ne!(pixels(&enabled), exact, "/Interpolate true should still blend");
+        assert!(pixels(&enabled).iter().any(|px| px[..3].iter().any(|&c| (32..=223).contains(&c))), "/Interpolate true made no mid-tone");
+    }
+
+    #[test]
+    fn non_interpolated_gray_images_are_not_smoothed_when_minified() {
+        let levels = [0u8, 255, 85, 170, 40, 200, 120, 230];
+        let page = draw_minified_image("DeviceGray", (8, 4), None, &block_source(levels), None, (4, 2));
+        let expected: Vec<[u8; 4]> = levels.iter().map(|&v| [v, v, v, 255]).collect();
+        assert_eq!(page.rgba.as_chunks::<4>().0.to_vec(), expected);
+    }
+
+    #[test]
+    fn non_integer_minification_samples_the_same_columns() {
+        // Ten columns drawn six pixels wide: centre sampling reads columns 0, 2, 4, 5, 7 and 9.
+        let ramp = [10u8, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+        let page = draw_minified_image("DeviceGray", (10, 1), None, &ramp, None, (6, 1));
+        let grays: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
+        assert_eq!(grays, [10, 30, 50, 60, 80, 100]);
+    }
+
+    #[test]
+    fn non_integer_minification_samples_colour_and_mask_from_the_same_columns() {
+        // Ten gray columns with a soft mask, drawn six pixels wide: columns 0, 2, 4, 5, 7 and 9 are
+        // sampled, so the mask must pick the same columns as the colours.
+        let ramp = [10u8, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+        let mask = [255u8, 0, 0, 0, 255, 255, 0, 0, 0, 255];
+        let page = draw_minified_image("DeviceGray", (10, 1), None, &ramp, Some(&mask), (6, 1));
+        // Opaque columns keep their gray; transparent columns show the white page.
+        assert_eq!(
+            page.rgba.as_chunks::<4>().0.to_vec(),
+            vec![[10, 10, 10, 255], [255, 255, 255, 255], [50, 50, 50, 255], [60, 60, 60, 255], [255, 255, 255, 255], [100, 100, 100, 255]]
+        );
+    }
+
+    #[test]
+    fn non_interpolated_alpha_images_keep_their_colours_and_mask_when_minified() {
+        let palette: [[u8; 3]; 8] = [[0, 0, 0], [255, 255, 255], [255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0], [255, 0, 255], [0, 255, 255]];
+        let rgb: Vec<u8> = block_source(palette).concat();
+        let alpha = block_source([255u8, 0, 128, 255, 0, 255, 64, 128]);
+        let page = draw_minified_image("DeviceRGB", (8, 4), None, &rgb, Some(&alpha), (4, 2));
+        // Premultiplied colours composited over the white page: alpha 0 shows the page.
+        let expected = vec![
+            [0, 0, 0, 255],
+            [255, 255, 255, 255],
+            [255, 127, 127, 255],
+            [0, 255, 0, 255],
+            [255, 255, 255, 255],
+            [255, 255, 0, 255],
+            [255, 191, 255, 255],
+            [127, 255, 255, 255],
+        ];
+        assert_eq!(page.rgba.as_chunks::<4>().0.to_vec(), expected);
+    }
+
+    /// Type 3 glyph images used to be sampled bicubically (`ImageQuality::High`) whatever their
+    /// `/Interpolate`, which blends the nearest pre-resize back in. The glyph is 4.6 × 2.3 pixels
+    /// and its image pre-resizes to 5 × 3, so the final draw samples fractionally and bicubic
+    /// filtering would blend palette colours. Interior pixels must stay palette colours unless the
+    /// image asks for interpolation.
+    #[test]
+    fn non_interpolated_type3_glyph_images_are_not_smoothed_when_minified() {
+        let palette: [[u8; 3]; 8] = [[0, 0, 0], [255, 255, 255], [255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0], [255, 0, 255], [0, 255, 255]];
+        let data = hex(&block_source(palette).concat());
+        let render = |interp: &str| {
+            let content = "BT /F1 1 Tf 0 0.7 Td (A) Tj ET";
+            let glyph = "4.6 0 d0 q 4.6 0 0 2.3 0 0 cm /Im0 Do Q";
+            let pdf = format!(
+                "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 5 3] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n\
+                 4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+                 5 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 10 10] /FontMatrix [1 0 0 1 0 0] /FirstChar 65 /LastChar 65 /Widths [5] /Encoding << /Differences [65 /a] >> /CharProcs << /a 6 0 R >> /Resources << /XObject << /Im0 7 0 R >> >> >> endobj\n\
+                 6 0 obj << /Length {} >> stream\n{glyph}\nendstream endobj\n\
+                 7 0 obj << /Type /XObject /Subtype /Image /Width 8 /Height 4 /ColorSpace /DeviceRGB /BitsPerComponent 8 {interp}/Filter /ASCIIHexDecode /Length {} >> stream\n{data}>\nendstream endobj\n\
+                 trailer << /Root 1 0 R >>\n%%EOF\n",
+                content.len(),
+                glyph.len(),
+                data.len() + 1
+            );
+            let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+            let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+            assert!(page.error.is_none(), "{:?}", page.error);
+            assert_eq!((page.width, page.height), (5, 3));
+            page
+        };
+        // The glyph fully covers columns 0–3 and rows 0–1.
+        let interior = |p: &RenderedPage| -> Vec<[u8; 3]> {
+            (0..2).flat_map(|y| (0..4).map(move |x| (y * 5 + x) * 4)).map(|i| [p.rgba[i], p.rgba[i + 1], p.rgba[i + 2]]).collect()
+        };
+
+        let omitted = render("");
+        for px in interior(&omitted) {
+            assert!(palette.contains(&px), "non-interpolated glyph image was smoothed to {px:?}");
+        }
+        let enabled = render("/Interpolate true ");
+        assert!(interior(&enabled).iter().any(|px| !palette.contains(px)), "/Interpolate true glyph image should still be sampled bicubically");
     }
 
     /// From `cargo xtask fuzz`: a CID font whose /W range spans every u32 inserted billions of
@@ -3952,8 +4733,8 @@ trailer << /Root 1 0 R >>
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut r = PageRenderer::new(Arc::new(pdf.as_bytes().to_vec()), RenderConfig::default());
-            let px = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
-            let text = r.render(RenderRequest { page: 0, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0 });
+            let px = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+            let text = r.render(RenderRequest { page: 0, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, ..Default::default() });
             let _ = tx.send((px.error, text.error));
         });
         let (px, text) = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("rendering a huge /W range must not hang");
@@ -3993,7 +4774,7 @@ trailer << /Root 1 0 R >>
     fn malformed_simple_font_widths_keep_later_widths_and_the_font() {
         let render = |widths: &str| {
             let mut r = PageRenderer::new(Arc::new(type3_boxes(widths)), RenderConfig::default());
-            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
             assert!(p.error.is_none(), "{widths}: {:?}", p.error);
             p
         };
@@ -4024,8 +4805,8 @@ trailer << /Root 1 0 R >>
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut r = PageRenderer::new(Arc::new(type3_boxes("/FirstChar 4294967295 /LastChar 4294967295 /Widths [600]")), RenderConfig::default());
-            let px = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
-            let text = r.render(RenderRequest { page: 0, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0 });
+            let px = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+            let text = r.render(RenderRequest { page: 0, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, ..Default::default() });
             let _ = tx.send((px, text.error));
         });
         let (px, text) = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("a huge /FirstChar must not exhaust memory");
@@ -4060,7 +4841,7 @@ trailer << /Root 1 0 R >>
         };
         let render = |bytes: Vec<u8>, scale: f32| {
             let mut r = PageRenderer::new(Arc::new(bytes), RenderConfig::default());
-            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale, tag: 0 });
+            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale, tag: 0, ..Default::default() });
             assert!(p.error.is_none(), "{:?}", p.error);
             p
         };
@@ -4106,9 +4887,9 @@ trailer << /Root 1 0 R >>
     #[test]
     fn tiles_match_full_render() {
         let mut r = PageRenderer::new(Arc::new(ONE_PAGE.to_vec()), RenderConfig::default());
-        let full = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 2.0, tag: 0 });
+        let full = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 2.0, tag: 0, ..Default::default() });
         let tile = Tile { x: 30, y: 40, w: 50, h: 30 };
-        let part = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: Some(tile), scale: 2.0, tag: 0 });
+        let part = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: Some(tile), scale: 2.0, tag: 0, ..Default::default() });
         assert_eq!((part.width, part.height), (50, 30));
         for y in 0..30u32 {
             for x in 0..50u32 {
@@ -4172,6 +4953,9 @@ trailer << /Root 1 0 R >>
     /// what it was without skipping, where paint reaches past a path into the next tile: round
     /// and square caps, a sharp miter, a rotated and a stretched matrix, a hairline, dashes, a
     /// curve, text, and a page shown rotated.
+    ///
+    /// Images are skipped the same way (vendored patch (10)): an image on a tile, one crossing
+    /// tile lines, and one fully off the page.
     #[test]
     fn skipping_paths_off_the_canvas_changes_no_pixel() {
         // Tiles of 80 device pixels at scale 2 meet every 40 pt; each mark crosses such a line
@@ -4186,20 +4970,29 @@ q 0.7071 0.7071 -0.7071 0.7071 160 20 cm 15 w 1 J 0 0 m 20 0 l S Q
 0 1 0 RG 3 w 10 200 m 10 290 70 290 70 200 c S
 BT /F1 30 Tf 70 205 Td (Hg) Tj ET
 q 4 0 0 0.25 0 0 cm 12 w 1 J 2 500 m 8 500 l S Q
-300 300 m 320 320 l S";
+300 300 m 320 320 l S
+q 10 0 0 10 5 5 cm /Im0 Do Q
+q 30 0 0 30 100 100 cm /Im0 Do Q
+q 5 0 0 5 500 500 cm /Im0 Do Q";
+        // A 4x4 RGB image of plain `A` bytes (no `endstream` inside, so the raw stream parses).
+        let pixels = "A".repeat(4 * 4 * 3);
         for rotate in [0, 90] {
             let pdf = format!(
                 "%PDF-1.4
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
-3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 240 240] /Rotate {rotate} /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 240 240] /Rotate {rotate} /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im0 6 0 R >> >> >> endobj
 4 0 obj << /Length {} >> stream
 {content}
 endstream endobj
 5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+6 0 obj << /Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length {} >> stream
+{pixels}
+endstream endobj
 trailer << /Root 1 0 R >>
 %%EOF",
-                content.len()
+                content.len(),
+                pixels.len()
             );
             let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
             let mut both = |tile| {
@@ -4218,6 +5011,125 @@ trailer << /Root 1 0 R >>
                 }
             }
         }
+    }
+
+    /// Previews skip images that would cover only a few device pixels (vendored patch (11)):
+    /// a tiny draw is missing from the preview but present in the final, while a large draw
+    /// is in both. Finals never set the flag, so they draw everything.
+    #[test]
+    fn preview_renders_skip_tiny_images_but_finals_draw_everything() {
+        let content = "q 50 0 0 50 100 100 cm /Im0 Do Q
+q 0.5 0 0 0.5 10 10 cm /Im0 Do Q";
+        let pixels = "A".repeat(4 * 4 * 3);
+        let pdf = format!(
+            "%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 240 240] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length {} >> stream
+{pixels}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+            content.len(),
+            pixels.len()
+        );
+        let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let mut render = |preview| r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview });
+        let first = render(false);
+        let second = render(false);
+        assert!(first.error.is_none(), "{:?}", first.error);
+        assert_eq!(first.rgba, second.rgba, "finals are deterministic");
+        let gray = first.rgba.as_chunks::<4>().0.iter().filter(|px| px[0] == 0x41 && px[1] == 0x41 && px[2] == 0x41).count();
+        assert!(gray > 1000, "the large image draws {gray} pixels");
+        let preview = render(true);
+        assert!(preview.error.is_none(), "{:?}", preview.error);
+        assert_ne!(preview.rgba, first.rgba, "the tiny image is skipped only in the preview");
+    }
+
+    /// A page whose stream objects 5, 6, … are `objects` (dictionary, data), drawn by `content`
+    /// with `resources`, on a 130 × 70 pt page.
+    fn image_cache_pdf(content: &str, resources: &str, objects: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut pdf = format!(
+            "%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 130 70] /Contents 4 0 R /Resources {resources} >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+",
+            content.len()
+        )
+        .into_bytes();
+        for (i, (dict, data)) in objects.iter().enumerate() {
+            pdf.extend(format!("{} 0 obj {dict} stream\n", i + 5).bytes());
+            pdf.extend_from_slice(data);
+            pdf.extend_from_slice(b"\nendstream endobj\n");
+        }
+        pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF");
+        pdf
+    }
+
+    /// The RGB of the pixel at (`x`, `y`) (from the top left) of a `width`-pixel-wide RGBA raster.
+    fn rgb_at(rgba: &[u8], width: usize, x: usize, y: usize) -> [u8; 3] {
+        let i = (y * width + x) * 4;
+        [rgba[i], rgba[i + 1], rgba[i + 2]]
+    }
+
+    const ONE_PIXEL_RGB: &str = "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 3 >>";
+
+    /// Two images whose dictionaries are byte for byte the same (uncompressed, one size) but
+    /// whose pixels differ each draw their own: the decoded-image cache tells them apart by the
+    /// stream, not by the dictionary's bytes alone, in one render and across renders sharing a
+    /// cache, and previews never hand their entries to a final render.
+    #[test]
+    fn decoded_images_with_identical_dictionaries_keep_their_own_pixels() {
+        let pdf = image_cache_pdf(
+            // B over A at the same place and size (so one decode target): B must show. A alone
+            // on the right, at a size of its own.
+            "q 50 0 0 50 10 10 cm /A Do Q q 50 0 0 50 10 10 cm /B Do Q q 40 0 0 40 80 15 cm /A Do Q",
+            "<< /XObject << /A 5 0 R /B 6 0 R >> >>",
+            &[(ONE_PIXEL_RGB, b"\xff\x00\x00"), (ONE_PIXEL_RGB, b"\x00\x00\xff")],
+        );
+        let req = |preview| RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview };
+        let mut r = PageRenderer::new(Arc::new(pdf.clone()), RenderConfig::default());
+        let out = r.render(req(false));
+        assert!(out.error.is_none(), "{:?}", out.error);
+        let w = out.width as usize;
+        assert_eq!(rgb_at(&out.rgba, w, 35, 35), [0, 0, 255], "the second image drew the first one's pixels");
+        assert_eq!(rgb_at(&out.rgba, w, 100, 35), [255, 0, 0]);
+        // One cache across a preview and then a final render, as a render worker keeps it.
+        let pdf = parse(&Arc::new(pdf), None).expect("parses");
+        let cache = RenderCache::new();
+        let settings = InterpreterSettings::default();
+        let preview = render_page(&pdf, &cache, &settings, false, req(true)).expect("preview renders");
+        let fin = render_page(&pdf, &cache, &settings, false, req(false)).expect("final renders");
+        let fresh = render_page(&pdf, &RenderCache::new(), &settings, false, req(false)).expect("final renders");
+        assert_eq!(rgb_at(&preview.2, w, 35, 35), [0, 0, 255]);
+        assert_eq!(&fin.2[..], &fresh.2[..], "a final render after a preview matches one with a fresh cache");
+    }
+
+    /// An image drawn under a transfer function (`/TR`) is decoded with it, even when the same
+    /// image was drawn without one just before (and the other way round).
+    #[test]
+    fn decoded_images_under_a_transfer_function_are_not_shared() {
+        let pdf = image_cache_pdf(
+            // The image, then the same image at the same place under the inverting function
+            // (one decode target), then the image alone on the right.
+            "q 50 0 0 50 10 10 cm /A Do Q q /Inv gs 50 0 0 50 10 10 cm /A Do Q q 40 0 0 40 80 15 cm /A Do Q",
+            "<< /XObject << /A 5 0 R >> /ExtGState << /Inv << /TR 6 0 R >> >> >>",
+            &[(ONE_PIXEL_RGB, b"\xff\x00\x00"), ("<< /FunctionType 4 /Domain [0 1] /Range [0 1] /Length 14 >>", b"{ 1 exch sub }")],
+        );
+        let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let out = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+        assert!(out.error.is_none(), "{:?}", out.error);
+        let w = out.width as usize;
+        assert_eq!(rgb_at(&out.rgba, w, 35, 35), [0, 255, 255], "the transfer function was not applied to a cached image");
+        assert_eq!(rgb_at(&out.rgba, w, 100, 35), [255, 0, 0]);
     }
 
     /// A Japanese CID font that isn't embedded (Adobe-Japan1, as `HeiseiMin-W3` with
@@ -4247,7 +5159,7 @@ trailer << /Root 1 0 R >>
         };
         for base_font in ["HeiseiMin-W3", "HeiseiKakuGo-W5"] {
             let mut r = PageRenderer::new(Arc::new(pdf(base_font).into_bytes()), RenderConfig::default());
-            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
             assert!(p.error.is_none(), "{base_font}: {:?}", p.error);
             let inked = p.rgba.as_chunks::<4>().0.iter().filter(|c| c[0] < 128).count();
             if pdfcraft_fonts::document_japanese_font().is_none() {
@@ -4311,7 +5223,7 @@ trailer << /Root 1 0 R >>
                 content.len()
             );
             let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
-            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
             assert!(p.error.is_none(), "{base_font} <{code}>: {:?}", p.error);
             p.rgba
         };
@@ -4385,7 +5297,7 @@ trailer << /Root 1 0 R >>
                 cmap.len()
             );
             let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
-            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
             assert!(p.error.is_none(), "{base_font} <{code}>: {:?}", p.error);
             p.rgba
         };
@@ -4399,6 +5311,159 @@ trailer << /Root 1 0 R >>
             assert!(collection == form, "{base_font}: CID 1247 draws 噂 U+E0100");
             assert!(form != character, "{base_font}: the form differs from the face's default 噂");
             assert!(unknown_form == character, "{base_font}: a form the face lacks draws its 噂");
+        }
+    }
+
+    /// InDesign fades are luminosity soft masks whose group is one extended axial `sh`: a
+    /// gradient over the whole page. hayro 0.7 sampled each one pixel by pixel through the
+    /// shading function, so a report page with 40 of them took 15 s at 144 dpi. Vendored hayro
+    /// patch (backport of hayro 0.8): axial and radial shadings that a native gradient can
+    /// represent exactly are drawn as one, with stops placed at stitching-function bounds.
+    #[test]
+    fn axial_and_radial_shadings_draw_as_native_gradients() {
+        use hayro::hayro_interpret::font::Glyph;
+        use hayro::hayro_interpret::hayro_syntax::Pdf;
+        use hayro::hayro_interpret::pattern::Pattern;
+        use hayro::hayro_interpret::{
+            BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, Paint, PathDrawMode, SoftMask, TransformExt, interpret_page,
+        };
+        use kurbo::{Affine, BezPath, Rect, Shape};
+
+        /// For every shading painted, the offsets of its native gradient stops, or `None` when
+        /// it has to be sampled pixel by pixel.
+        #[derive(Default)]
+        struct Gradients(Vec<Option<Vec<f32>>>);
+        impl<'a> Device<'a> for Gradients {
+            fn set_soft_mask(&mut self, _: Option<SoftMask<'a>>) {}
+            fn set_blend_mode(&mut self, _: BlendMode) {}
+            fn draw_path(&mut self, path: &BezPath, transform: Affine, paint: &Paint<'a>, _: &PathDrawMode) {
+                if let Paint::Pattern(pattern) = paint
+                    && let Pattern::Shading(s) = pattern.as_ref()
+                {
+                    let bbox = (transform * path.clone()).bounding_box();
+                    let native = s.encode().as_svg_gradient(bbox, 0.01);
+                    self.0.push(native.map(|g| g.stops.iter().map(|stop| stop.offset).collect()));
+                }
+            }
+            fn push_clip_path(&mut self, _: &ClipPath) {}
+            fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
+            fn draw_glyph(&mut self, _: &Glyph<'a>, _: Affine, _: Affine, _: &Paint<'a>, _: &GlyphDrawMode) {}
+            fn draw_image(&mut self, _: Image<'a, '_>, _: Affine) {}
+            fn pop_clip_path(&mut self) {}
+            fn pop_transparency_group(&mut self) {}
+        }
+
+        // A 40 × 20 pt page painting `/Sh0 sh`, with optional extra objects from 6 0 obj on.
+        let pdf = |shading: &str, extra: &str| {
+            let content = "/Sh0 sh";
+            format!(
+                "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 20] /Contents 4 0 R /Resources << /Shading << /Sh0 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj {shading} endobj
+{extra}trailer << /Root 1 0 R >>
+%%EOF",
+                content.len()
+            )
+            .into_bytes()
+        };
+        let gradients = |bytes: &[u8]| {
+            let parsed = Pdf::new(Arc::new(bytes.to_vec())).expect("parses");
+            let page = &parsed.pages()[0];
+            let cache = InterpreterCache::new();
+            let initial = page.initial_transform(true).to_kurbo();
+            let mut ctx = Context::new(initial, Rect::new(0.0, 0.0, 40.0, 20.0), &cache, page.xref(), InterpreterSettings::default());
+            let mut device = Gradients::default();
+            interpret_page(page, &mut ctx, &mut device);
+            device.0
+        };
+        let render = |bytes: Vec<u8>| {
+            let mut r = PageRenderer::new(Arc::new(bytes), RenderConfig::default());
+            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+            assert!(p.error.is_none(), "{:?}", p.error);
+            p
+        };
+        let grey = |p: &RenderedPage, x: u32| i32::from(p.rgba[((10 * p.width + x) * 4) as usize]);
+        let ramp = "/FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1";
+        // A function-based shading (always sampled) that draws the same picture is the reference;
+        // its /Range clamps to 0..1.
+        let sampled = |code: &str| {
+            let extra =
+                format!("6 0 obj << /FunctionType 4 /Domain [0 40 0 20] /Range [0 1] /Length {} >> stream\n{code}\nendstream endobj\n", code.len());
+            pdf("<< /ShadingType 1 /ColorSpace /DeviceGray /Domain [0 40 0 20] /Function 6 0 R >>", &extra)
+        };
+
+        // A steep extended axial ramp, x 10 to 14: one stop at each end, drawn at pixel centres
+        // (a half-pixel shift would move each pixel 32 levels) and padded on both sides.
+        let axial = pdf(&format!("<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [10 0 14 0] /Extend [true true] /Function << {ramp} >> >>"), "");
+        assert_eq!(gradients(&axial), vec![Some(vec![0.0, 1.0])], "an extended axial shading is a native gradient");
+        let native = render(axial);
+        let reference = render(sampled("{ pop 10 sub 4 div }"));
+        for (x, expected) in [(2, 0), (9, 0), (10, 32), (11, 96), (12, 159), (13, 223), (14, 255), (30, 255)] {
+            assert!((grey(&native, x) - expected).abs() <= 4, "axial, x {x}: {} instead of {expected}", grey(&native, x));
+            assert!(
+                (grey(&native, x) - grey(&reference, x)).abs() <= 4,
+                "axial, x {x}: native {} vs sampled {}",
+                grey(&native, x),
+                grey(&reference, x)
+            );
+        }
+
+        // An extended radial shading matches the sampled one everywhere.
+        let radial =
+            pdf(&format!("<< /ShadingType 3 /ColorSpace /DeviceGray /Coords [20 10 0 20 10 8] /Extend [true true] /Function << {ramp} >> >>"), "");
+        assert!(matches!(gradients(&radial).as_slice(), [Some(_)]), "an extended radial shading is a native gradient");
+        let native = render(radial);
+        let reference = render(sampled("{ 10 sub dup mul exch 20 sub dup mul add sqrt 8 div }"));
+        let worst = native.rgba.iter().zip(reference.rgba.iter()).map(|(a, b)| a.abs_diff(*b)).max();
+        assert!(worst.is_some_and(|d| d <= 4), "radial: native and sampled differ by {worst:?} levels");
+
+        // A stitched function peaking at a quarter of the way gets a stop exactly at its bound.
+        let stitched = pdf(
+            "<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 40 0] /Extend [true true] /Function << /FunctionType 3 /Domain [0 1] /Bounds [0.25] /Encode [0 1 0 1] /Functions [<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> << /FunctionType 2 /Domain [0 1] /C0 [1] /C1 [0] /N 1 >>] >> >>",
+            "",
+        );
+        let stops = gradients(&stitched);
+        assert!(matches!(stops.as_slice(), [Some(offsets)] if offsets.contains(&0.25)), "a stop at the stitching bound: {stops:?}");
+        let native = render(stitched);
+        for (x, expected) in [(0, 13), (9, 242), (10, 250), (39, 4)] {
+            assert!((grey(&native, x) - expected).abs() <= 4, "stitched, x {x}: {} instead of {expected}", grey(&native, x));
+        }
+
+        // Without /Extend the area beyond the axis keeps the background, which a native gradient
+        // can't leave out: still sampled. Function-based shadings are always sampled.
+        let unextended = pdf(&format!("<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [10 0 14 0] /Function << {ramp} >> >>"), "");
+        assert_eq!(gradients(&unextended), vec![None], "an axial shading without /Extend that covers more than its axis");
+        assert_eq!(gradients(&sampled("{ pop pop 0.5 }")), vec![None], "a function-based shading");
+
+        // The report's case: a luminosity soft mask whose group is one extended axial `sh` over
+        // the page. Red through a mask fading in from x 0 to 40 over white: 255, 255 − t, 255 − t.
+        let content = "/M gs 1 0 0 rg 0 0 40 20 re f";
+        let masked = format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 20] /Contents 4 0 R /Resources << /ExtGState << /M 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /ExtGState /SMask << /Type /Mask /S /Luminosity /G 6 0 R >> >> endobj
+6 0 obj << /Type /XObject /Subtype /Form /BBox [-32768 -32768 32767 32767] /Group << /S /Transparency /CS /DeviceGray >> /Resources << /Shading << /Sh0 << /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 40 0] /Extend [true true] /Function << {ramp} >> >> >> >> /Length 7 >> stream
+/Sh0 sh
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+            content.len()
+        );
+        let p = render(masked.into_bytes());
+        for x in [2u32, 20, 37] {
+            let px = &p.rgba[((10 * p.width + x) * 4) as usize..][..4];
+            let faded = 255 - (255.0 * (f64::from(x) + 0.5) / 40.0).round() as i32;
+            assert!(px[0] == 255 && (i32::from(px[1]) - faded).abs() <= 4 && px[1] == px[2], "masked, x {x}: {px:?}, green and blue {faded}");
         }
     }
 
@@ -4420,7 +5485,7 @@ endstream endobj
 trailer << /Root 1 0 R >>
 %%EOF";
         let mut r = PageRenderer::new(Arc::new(pdf.to_vec()), RenderConfig::default());
-        let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+        let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
         let px = |x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..4].to_vec();
         assert_eq!(px(25, 50), vec![255, 0, 0, 255], "inside the mask");
         assert_eq!(px(75, 50), vec![255, 255, 255, 255], "outside the mask");
@@ -4447,7 +5512,7 @@ trailer << /Root 1 0 R >>
                 content.len()
             );
             let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
-            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
             assert!(p.error.is_none(), "{content}: {:?}", p.error);
             p
         };
