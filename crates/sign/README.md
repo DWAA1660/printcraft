@@ -140,6 +140,11 @@ those roots. PdfCraft bundles them and verifies natively — no separate app, no
   time is reported separately from an expired certificate.
 - **Document appearance:** signature widgets retain their own appearance. No
   canvas plate or copied third-party stamp covers signed document content.
+- **Validation reuse:** the engine caches session reports for the current validation
+  and trust snapshots; the Signatures panel borrows these reports instead of rebuilding
+  them every frame. A trust change or new validation replaces the cached reports.
+  One-off CCA/Both verification revalidates against that store using the document's
+  existing signed-range digest cache. Bundled roots are parsed once, including failures.
 
 Limitations: revocation needs evidence embedded in the file (`/DSS`); without it the
 report says unknown and suggests an online OCSP/CRL check for high assurance.

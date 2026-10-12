@@ -628,9 +628,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         }
                     }
                     RightPanel::Signatures => {
-                        let trust = pdfcraft_engine::TrustStore { certs: app.session.trusted_certificates().to_vec() };
-                        let reports: Vec<pdfcraft_engine::SignatureReport> =
-                            doc.signatures.iter().map(|s| pdfcraft_engine::sign::verify::report_for(s, &trust)).collect();
+                        let reports = doc.signature_reports();
                         let cca_trusted = app.session.cca_roots_trusted();
                         sig_action = crate::sign_ui::panel(ui, &t, &doc.signatures, &reports, cca_trusted, sig_expanded);
                     }

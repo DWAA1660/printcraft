@@ -138,7 +138,7 @@ pub fn merge_data_files(files: &[(String, Vec<u8>)]) -> Result<String, String> {
 
 pub type SplitPart = (usize, usize, Arc<Vec<u8>>);
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use pdfcraft_cos::{SaveOptions, write_full, write_incremental};
 use pdfcraft_render::{DocInfo, Layer, LayerOp, OpenError, RenderConfig, RenderPool, inspect};
@@ -278,6 +278,7 @@ pub struct Document {
     pub links: Vec<pdfcraft_annot::links::LinkItem>,
     /// Signature fields, validated against the session's trust store (Signatures panel).
     pub signatures: Arc<Vec<SignatureInfo>>,
+    signature_reports: Mutex<Option<CachedSignatureReports>>,
     trust: Arc<TrustStore>,
     sig_cache: Arc<pdfcraft_sign::DigestCache>,
     editor: Option<Editor>,
@@ -372,7 +373,31 @@ fn undrawn_notices(prev: &pdfcraft_cos::Document, next: &pdfcraft_cos::Document)
     out
 }
 
+struct CachedSignatureReports {
+    signatures: Arc<Vec<SignatureInfo>>,
+    trust: Arc<TrustStore>,
+    reports: Arc<Vec<SignatureReport>>,
+}
+
 impl Document {
+    /// Separated verdicts for the current validated signatures and trust store.
+    /// Retaining the source Arcs makes identity comparisons safe even when a caller
+    /// replaces the public signatures collection, or edits it with `Arc::make_mut`.
+    /// Only the most recent validation is retained, not a history of documents.
+    pub fn signature_reports(&self) -> Arc<Vec<SignatureReport>> {
+        let mut cached = self.signature_reports.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(previous) = cached.as_ref()
+            && Arc::ptr_eq(&previous.signatures, &self.signatures)
+            && Arc::ptr_eq(&previous.trust, &self.trust)
+        {
+            return previous.reports.clone();
+        }
+        let reports: Arc<Vec<SignatureReport>> =
+            Arc::new(self.signatures.iter().map(|info| pdfcraft_sign::verify::report_for(info, &self.trust)).collect());
+        *cached = Some(CachedSignatureReports { signatures: self.signatures.clone(), trust: self.trust.clone(), reports: reports.clone() });
+        reports
+    }
+
     /// How the document opens (Document Properties ▸ Initial View).
     /// Accessibility ▸ Check for accessibility: the full check (`None` if the document can't be
     /// read for editing).
@@ -2874,6 +2899,7 @@ impl Session {
             added,
             links,
             signatures,
+            signature_reports: Mutex::new(None),
             trust: self.trust.clone(),
             sig_cache,
             editor,
@@ -3832,7 +3858,7 @@ impl Session {
 
     /// Whether the bundled CCA India roots (e-Aadhaar) are trusted in this session.
     pub fn cca_roots_trusted(&self) -> bool {
-        pdfcraft_sign::cca::certificates().map(|roots| roots.iter().all(|r| self.trust.certs.iter().any(|c| c.raw == r.raw))).unwrap_or(false)
+        pdfcraft_sign::cca::cached_certificates().map(|roots| roots.iter().all(|r| self.trust.certs.iter().any(|c| c.raw == r.raw))).unwrap_or(false)
     }
 
     /// Trust the bundled CCA India roots for e-Aadhaar verification and revalidate
@@ -3870,7 +3896,16 @@ impl Session {
                 }
             }
         }
-        let reports = pdfcraft_sign::verify::verify_doc(&editor.cos, &doc.bytes, &trust);
+        let reports = if matches!(trust_mode, VerifyTrust::Session) {
+            doc.signature_reports().as_ref().clone()
+        } else {
+            // Alternative trust needs fresh validation, but signed-range digests and
+            // revision discovery belong to this document and can still be reused.
+            pdfcraft_sign::pdf::list_cached(&editor.cos, &doc.bytes, &trust, &doc.sig_cache)
+                .iter()
+                .map(|info| pdfcraft_sign::verify::report_for(info, &trust))
+                .collect()
+        };
         let summary = pdfcraft_sign::verify::summarize(&reports);
         Ok(SignatureVerification { reports, summary, trust_roots: trust.certs.len(), trust_mode, cca_trusted: self.cca_roots_trusted() })
     }

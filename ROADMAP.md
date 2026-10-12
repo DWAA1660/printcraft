@@ -135,6 +135,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-10-11 (M9, #760 review, validation reuse):** Cache separated reports by validation and trust snapshot, including invalidation when signatures are replaced, and borrow them in the panel. One-off trust verification reuses signed-range digests; immutable CCA roots are parsed once. Regression covers signing, trust addition/removal and one-off verification without stale session verdicts. Estimates unchanged.
 - **2026-10-11 (M9, #760 review):** Preserve core Unknown/Invalid verification refusals despite matching trust anchors; report absent signing time separately from expiry. Fresh sessions and default agent verification use only explicitly selected trust. Persistent CCA trust requires confirmation, and signature widgets retain their original appearance after removal of the copied stamp overlay. Reused #749 certificate-purpose regressions; named trust sets remain in #622. Estimates unchanged.
 
 - **2026-10-11 (M10.5, focused follow-up to #599):** Carry the architectural/ANSI/large ISO paper presets, current-page matching at 100%, and previewed PDF scale into the current print dialog and `doc_print`. Retains the #847/#1007 spooler and background discovery. Driver substitution, physical calibration, vector Windows printing and managed-endpoint restrictions remain separate gaps. Overall estimates unchanged.

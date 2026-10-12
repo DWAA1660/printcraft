@@ -1952,6 +1952,39 @@ fn signing_saving_trusting_and_commenting_afterwards() {
 }
 
 #[test]
+fn signature_reports_follow_validation_and_trust_changes() {
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
+    let mut session = Session::new().with_clock(|| 1_800_000_000);
+    let id = session.open("report-cache.pdf", None, Arc::new(fixture(1)), None).unwrap();
+    let unsigned = session.get(id).unwrap().signature_reports();
+    assert!(Arc::ptr_eq(&unsigned, &session.get(id).unwrap().signature_reports()));
+    let signed = session.sign(id, &digital_id, SignOptions::default()).unwrap();
+    session.mark_signed(id, signed, None).unwrap();
+    let untrusted = session.get(id).unwrap().signature_reports();
+    assert!(!Arc::ptr_eq(&unsigned, &untrusted));
+    assert_eq!(sign::verify::summarize(&untrusted).overall, "untrusted");
+    assert!(Arc::ptr_eq(&untrusted, &session.get(id).unwrap().signature_reports()));
+    session.set_trusted_certificates(vec![digital_id.certificate.clone()]);
+    let trusted = session.get(id).unwrap().signature_reports();
+    assert!(!Arc::ptr_eq(&untrusted, &trusted));
+    assert_eq!(session.verify_signatures(id, VerifyTrust::Session).unwrap().summary.overall, "valid");
+    assert!(Arc::ptr_eq(&trusted, &session.get(id).unwrap().signature_reports()));
+    // A one-off CCA check neither mutates session trust nor replaces its reports.
+    assert_eq!(session.verify_signatures(id, VerifyTrust::Cca).unwrap().summary.overall, "untrusted");
+    assert!(Arc::ptr_eq(&trusted, &session.get(id).unwrap().signature_reports()));
+    session.set_trusted_certificates(Vec::new());
+    let cleared = session.get(id).unwrap().signature_reports();
+    assert!(!Arc::ptr_eq(&trusted, &cleared));
+    assert_eq!(sign::verify::summarize(&cleared).overall, "untrusted");
+    // Even replacing the publicly exposed validation records cannot retain a
+    // stale green report. Holding the source Arc also defeats pointer reuse.
+    let doc = session.doc_mut(id).unwrap();
+    Arc::make_mut(&mut doc.signatures).clear();
+    assert!(doc.signature_reports().is_empty());
+}
+
+#[test]
 fn cca_roots_verify_with_separated_verdicts() {
     let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
     let digital_id = sign::pkcs12::open(&p12, "test").unwrap();

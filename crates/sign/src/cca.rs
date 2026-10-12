@@ -18,6 +18,7 @@
 use crate::SignError;
 use crate::pdf::TrustStore;
 use crate::x509::Certificate;
+use std::sync::OnceLock;
 
 /// Public CCA root source (India PKI).
 pub const SOURCE_URL: &str = "https://cca.gov.in/root_certificate.html";
@@ -97,19 +98,35 @@ FeD7pSMh/Pgyxg1lxSVDKvbBdxNrBpot2OQN35+DkAU2exJMtUYAvzdPVx9d2elo
 
 /// The bundled CCA roots as certificates (in PEM order).
 pub fn certificates() -> Result<Vec<Certificate>, SignError> {
-    let mut out = crate::x509::load_certificates(CCA_INDIA_2022_PEM.as_bytes())?;
-    out.extend(crate::x509::load_certificates(CCA_INDIA_2022_SPL_PEM.as_bytes())?);
-    Ok(out)
+    cached_certificates().map(<[Certificate]>::to_vec)
 }
 
-/// A [] of the bundled CCA roots.
+/// Parse the immutable bundled roots once; callers checking trust can borrow them.
+/// A malformed bundle is retained as an error rather than retried on every frame.
+pub fn cached_certificates() -> Result<&'static [Certificate], SignError> {
+    static ROOTS: OnceLock<Result<Vec<Certificate>, String>> = OnceLock::new();
+    ROOTS
+        .get_or_init(|| {
+            let load = || -> Result<Vec<Certificate>, SignError> {
+                let mut roots = crate::x509::load_certificates(CCA_INDIA_2022_PEM.as_bytes())?;
+                roots.extend(crate::x509::load_certificates(CCA_INDIA_2022_SPL_PEM.as_bytes())?);
+                Ok(roots)
+            };
+            load().map_err(|error| error.to_string())
+        })
+        .as_ref()
+        .map(Vec::as_slice)
+        .map_err(|error| SignError::Malformed(error.clone()))
+}
+
+/// A [`TrustStore`] of the bundled CCA roots.
 pub fn trust_store() -> Result<TrustStore, SignError> {
     Ok(TrustStore { certs: certificates()? })
 }
 
-/// Whether  is one of the bundled CCA roots (byte comparison).
+/// Whether `cert` is one of the bundled CCA roots (byte comparison).
 pub fn is_cca_root(cert: &Certificate) -> bool {
-    certificates().map(|roots| roots.iter().any(|r| r.raw == cert.raw)).unwrap_or(false)
+    cached_certificates().map(|roots| roots.iter().any(|r| r.raw == cert.raw)).unwrap_or(false)
 }
 
 #[cfg(test)]
