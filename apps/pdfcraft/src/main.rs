@@ -289,8 +289,8 @@ fn native_options(integrated: bool, renderer: eframe::Renderer) -> eframe::Nativ
 }
 
 /// winit (0.30) delivers dragged files on X11 only, not on Wayland. When both are available, use
-/// X11 (XWayland) so files can be dropped onto the window. `WINIT_UNIX_BACKEND` (`wayland` or
-/// `x11`) overrides the choice. A missing or unreachable X server leaves Wayland available.
+/// X11 (XWayland) so files can be dropped onto the window. An existing `WINIT_UNIX_BACKEND`
+/// value bypasses this automatic preference. A missing or unreachable X server leaves Wayland available.
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 fn prefer_x11_for_file_drops(native: &mut eframe::NativeOptions) {
     use winit::platform::x11::EventLoopBuilderExtX11;
