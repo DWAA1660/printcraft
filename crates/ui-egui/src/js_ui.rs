@@ -127,6 +127,7 @@ impl PdfCraftApp {
     /// (form submissions are reported, never sent).
     pub fn handle_js(&mut self, id: DocId, out: JsOutput) {
         let view = self.views.iter().position(|v| v.id == id);
+        let mut scripts_off_notice_shown = false;
         // A script that ran away turned the form's scripts off: calculations and buttons stop
         // working, and the error is only in the console. Say so once, and bring the notice bar
         // (which keeps saying so) back if it was closed. A message of the form's own, below,
@@ -138,6 +139,7 @@ impl PdfCraftApp {
             v.scripts_off_noted = true;
             v.notice_dismissed = false;
             self.notify(scripts_off_notice());
+            scripts_off_notice_shown = true;
         }
         if out.is_empty() {
             return;
@@ -146,7 +148,8 @@ impl PdfCraftApp {
         for e in &out.errors {
             self.js_console.log.push(format!("Error: {e}"));
         }
-        if let Some(error) = out.errors.first() {
+        // Keep the actionable scripts-off explanation; the detailed error is in the console.
+        if !scripts_off_notice_shown && let Some(error) = out.errors.first() {
             self.notify_error(error);
         }
         for r in out.requests {
