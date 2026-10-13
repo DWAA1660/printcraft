@@ -1437,6 +1437,7 @@ impl Runtime {
 
 pub mod formcalc;
 pub mod xfa;
+pub mod xfa_session;
 
 #[cfg(test)]
 mod tests;

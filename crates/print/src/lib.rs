@@ -27,16 +27,89 @@ mod tests;
 
 pub use range::{Subset, select_listed, select_pages};
 
+/// What can go wrong when printing.
+///
+/// The three things a *person* can be wrong about — there is nothing to print, a page number past
+/// the end, a range that is not a page — each have their own variant with the numbers apart from
+/// the words, so an interface can say them in its own language with [`PrintError::said`]. The rest
+/// are faults rather than mistakes and carry their text as it is.
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum PrintError {
     #[error("there are no pages to print")]
     NoPages,
+    /// A page number past the end of the document: the number asked for, and the page count.
+    #[error("page {0} is out of range (1–{1})")]
+    OutOfRange(usize, usize),
+    /// A range token that is neither a page number nor a page label.
+    #[error("{0:?} is not a page number or label")]
+    NotAPage(String),
     #[error("{0}")]
     Invalid(String),
     #[error("{0}")]
     Spool(String),
     #[error(transparent)]
     Cos(#[from] pdfcraft_cos::CosError),
+}
+
+/// How an interface says one of our wordings in its own language, holes and all: given the English
+/// in [`WORDINGS`], the same wording in that language. [`in_english`] keeps the English.
+pub type Words<'a> = &'a dyn Fn(&str) -> String;
+
+/// The [`Words`] that translate nothing: the wording as it is written here.
+pub fn in_english(wording: &str) -> String {
+    wording.to_owned()
+}
+
+/// What a person can get wrong about what to print, in English, with their holes still in them.
+///
+/// An interface that reports these in another language translates these three, which is the whole
+/// reason they are gathered here; `wordings_are_said` keeps them in step with the errors.
+pub const WORDINGS: &[&str] = &["there are no pages to print", "page {n} is out of range (1–{count})", "{page} is not a page number or label"];
+
+impl PrintError {
+    /// This error as one sentence, said in the language `words` translates into.
+    ///
+    /// The wording is translated and the numbers go in afterwards, in a single pass, so what the
+    /// person typed cannot be read as a hole. With [`in_english`] this is the error's own
+    /// `Display`, which is what the command line and scripts report.
+    pub fn said(&self, words: Words) -> String {
+        match self {
+            PrintError::NoPages => words("there are no pages to print"),
+            PrintError::OutOfRange(n, count) => {
+                say(&words("page {n} is out of range (1–{count})"), &[("{n}", n.to_string()), ("{count}", count.to_string())])
+            }
+            // The token goes in quoted, the way it is typed, as the error itself prints it.
+            PrintError::NotAPage(token) => say(&words("{page} is not a page number or label"), &[("{page}", format!("{token:?}"))]),
+            fault => fault.to_string(),
+        }
+    }
+}
+
+/// A wording with its holes filled.
+///
+/// A hole is a name in braces, such as `{n}`; what is not in `values` is left as it is written.
+/// Values go in during a single pass, so a value with braces in it is never read as a hole.
+fn say(wording: &str, values: &[(&str, String)]) -> String {
+    let mut out = String::with_capacity(wording.len() + 8);
+    let mut rest = wording;
+    while let Some(open) = rest.find('{') {
+        let (before, from_brace) = rest.split_at(open);
+        out.push_str(before);
+        // `find` counts from the brace and `}` is one byte, so this is a char boundary.
+        let Some(close) = from_brace.find('}') else {
+            // A brace with nothing closing it is just text.
+            out.push_str(from_brace);
+            return out;
+        };
+        let Some(hole) = from_brace.get(..=close) else { return out + from_brace };
+        match values.iter().find(|(name, _)| *name == hole) {
+            Some((_, value)) => out.push_str(value),
+            None => out.push_str(hole),
+        }
+        rest = from_brace.get(close + 1..).unwrap_or_default();
+    }
+    out.push_str(rest);
+    out
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -89,6 +162,9 @@ pub enum Layout {
     Multiple {
         cols: usize,
         rows: usize,
+        /// Source pages on each sheet, at most `cols × rows`: three per sheet uses a 2 × 2 grid
+        /// with one cell left blank.
+        per_sheet: usize,
         order: PageOrder,
         border: bool,
         auto_rotate: bool,
@@ -125,7 +201,7 @@ impl Layout {
                 (c, n.div_ceil(c).max(1))
             }
         };
-        Layout::Multiple { cols, rows, order: PageOrder::Horizontal, border: false, auto_rotate: true }
+        Layout::Multiple { cols, rows, per_sheet: per_sheet.max(1), order: PageOrder::Horizontal, border: false, auto_rotate: true }
     }
 }
 
@@ -161,14 +237,36 @@ impl Default for Settings {
 }
 
 /// Common paper sizes (points, portrait).
-pub const PAPERS: [(&str, (f64, f64)); 6] = [
+pub const PAPERS: [(&str, (f64, f64)); 18] = [
     ("US Letter", (612.0, 792.0)),
     ("US Legal", (612.0, 1008.0)),
     ("Tabloid", (792.0, 1224.0)),
     ("A3", (841.89, 1190.55)),
     ("A4", (595.28, 841.89)),
     ("A5", (419.53, 595.28)),
+    ("ARCH A (9 x 12 in)", (648.0, 864.0)),
+    ("ARCH B (12 x 18 in)", (864.0, 1296.0)),
+    ("ARCH C (18 x 24 in)", (1296.0, 1728.0)),
+    ("ARCH D (24 x 36 in)", (1728.0, 2592.0)),
+    ("ARCH E1 (30 x 42 in)", (2160.0, 3024.0)),
+    ("ARCH E (36 x 48 in)", (2592.0, 3456.0)),
+    ("ANSI C (17 x 22 in)", (1224.0, 1584.0)),
+    ("ANSI D (22 x 34 in)", (1584.0, 2448.0)),
+    ("ANSI E (34 x 44 in)", (2448.0, 3168.0)),
+    ("A2", (1190.55, 1683.78)),
+    ("A1", (1683.78, 2383.94)),
+    ("A0", (2383.94, 3370.39)),
 ];
+
+/// Match a displayed PDF page to a standard sheet, independent of orientation.
+/// Half a point allows rounded metric PDF dimensions without confusing distinct sizes.
+pub fn matching_paper(size: (f64, f64)) -> Option<usize> {
+    if !size.0.is_finite() || !size.1.is_finite() {
+        return None;
+    }
+    let size = (size.0.min(size.1), size.0.max(size.1));
+    PAPERS.iter().position(|(_, p)| (p.0 - size.0).abs() <= 0.5 && (p.1 - size.1).abs() <= 0.5)
+}
 
 /// The unprintable margin assumed around the sheet for Fit, Multiple and Booklet.
 pub const MARGIN: f64 = 18.0;
@@ -248,11 +346,16 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
                 sheets.push(Sheet { size, placed: vec![place_in(p, d, [0.0, 0.0, size.0, size.1], s, false)], ..Sheet::default() });
             }
         }
-        Layout::Multiple { cols, rows, order, border, auto_rotate } => {
+        Layout::Multiple { cols, rows, per_sheet, order, border, auto_rotate } => {
             let cells = cols.checked_mul(rows).filter(|&n| n > 0 && n <= 256);
             let Some(cells) = cells else {
                 return Err(PrintError::Invalid("invalid number of pages per sheet".into()));
             };
+            // The grid can have more cells than the pages asked for on each sheet; the rest stay blank.
+            let per_sheet = per_sheet.min(cells);
+            if per_sheet == 0 {
+                return Err(PrintError::Invalid("invalid number of pages per sheet".into()));
+            }
             // A grid with more columns than rows wants a landscape sheet, and the reverse.
             let first = pages.first().and_then(|&p| sizes.get(p)).copied().ok_or(PrintError::NoPages)?;
             let page_landscape = first.0 > first.1;
@@ -271,7 +374,7 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
             if cw <= 0.0 || ch <= 0.0 {
                 return Err(PrintError::Invalid("the page grid does not fit on the paper".into()));
             }
-            let sheet_count = pages.len().div_ceil(cells);
+            let sheet_count = pages.len().div_ceil(per_sheet);
             for sheet_index in 0..sheet_count {
                 let mut sheet = Sheet { size, ..Sheet::default() };
                 if order == PageOrder::CutStack {
@@ -286,13 +389,13 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
                         sheet.lines.extend([[MARGIN, y, MARGIN + 8.0, y], [size.0 - MARGIN - 8.0, y, size.0 - MARGIN, y]]);
                     }
                 }
-                for k in 0..cells {
+                for k in 0..per_sheet {
                     // A cell's pile gets consecutive pages. Missing pages leave blank cells,
                     // rather than shifting later piles left on the final sheets.
                     let index = if order == PageOrder::CutStack {
                         k.checked_mul(sheet_count).and_then(|n| n.checked_add(sheet_index))
                     } else {
-                        sheet_index.checked_mul(cells).and_then(|n| n.checked_add(k))
+                        sheet_index.checked_mul(per_sheet).and_then(|n| n.checked_add(k))
                     };
                     let Some(p) = index.and_then(|i| pages.get(i)).copied() else { continue };
 
@@ -372,7 +475,8 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
                 let (stepx, stepy) = (tw - overlap, th - overlap);
                 let nx = (((sw - overlap) / stepx).ceil() as usize).max(1);
                 let ny = (((sh - overlap) / stepy).ceil() as usize).max(1);
-                if nx * ny > 1024 {
+                // The counts saturate at usize::MAX for a huge scale, so their product can overflow.
+                if nx.checked_mul(ny).is_none_or(|n| n > 1024) {
                     return Err(PrintError::Invalid("the poster would need more than 1024 sheets".into()));
                 }
                 // Tiles from the top-left, row by row.

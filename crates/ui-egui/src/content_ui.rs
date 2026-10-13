@@ -37,9 +37,22 @@ pub(crate) type UndrawableMemo = std::cell::RefCell<Option<(AddedText, Option<ch
 /// The warning shown for text with `c` in it.
 pub(crate) fn undrawable_message(c: char) -> String {
     crate::i18n::fmt(
-        tl!("The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now."),
+        tl!("The PDF text fonts can't draw “{c}” ({code}). Choose supported text."),
         &[("c", &c.to_string()), ("code", &format!("U+{:04X}", u32::from(c)))],
     )
+}
+
+/// The warning after an edit that saved text its font can't draw: PdfCraft drew `?` for it (a form
+/// field, which other viewers redraw from its value, or a comment, where the `?` shows everywhere).
+pub(crate) fn undrawn_message(n: &pdfcraft_engine::TextNotice) -> String {
+    let template = if n.redrawn_elsewhere {
+        tl!(
+            "This field's font can't draw “{c}” ({code}), so PdfCraft shows ? in its place. The value is saved, and other PDF viewers redraw the field from it."
+        )
+    } else {
+        tl!("The fonts PdfCraft writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.")
+    };
+    crate::i18n::fmt(template, &[("c", &n.ch.to_string()), ("code", &format!("U+{:04X}", u32::from(n.ch)))])
 }
 
 const SELECT_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
@@ -89,6 +102,128 @@ impl ContentView {
             d.focus = true;
         }
         blocked
+    }
+}
+
+/// While an added item is moved, the page without it, rendered once per gesture: the item's own
+/// pixels follow the pointer over it instead of staying put until release (#1488).
+#[derive(Default)]
+pub(crate) struct MoveBackground {
+    key: Option<(u64, usize, usize)>,
+    renderer: Option<pdfcraft_render::RenderPool>,
+    texture: Option<egui::TextureHandle>,
+    tag: Option<u64>,
+    /// The item's display-space box when the gesture started.
+    from: Option<[f64; 4]>,
+    /// The applied move's box. The page raster on screen still has the item where it was until
+    /// its replacement arrives, so the preview stays up until then.
+    settling: Option<[f64; 4]>,
+}
+
+impl MoveBackground {
+    pub fn pending(&self) -> bool {
+        self.renderer.is_some() && self.texture.is_none()
+    }
+
+    pub fn prepare(&mut self, ctx: &egui::Context, doc: &pdfcraft_engine::Document, cv: &ContentView, scale: f32) {
+        let key = match (cv.grab, cv.selected) {
+            (Some((gp, Grab::Move, _)), Some((sp, si))) if gp == sp => Some((doc.edit_generation(), sp, si)),
+            _ => None,
+        };
+        if !(key.is_none() && self.settling.is_some()) && self.key != key {
+            *self = Self { key, ..Default::default() };
+            if let Some((_, page, index)) = key {
+                self.renderer = doc.added_content_preview(page, index).ok().map(|p| p.renderer());
+                self.from = on_page(&doc.added, page).into_iter().find(|(i, _)| *i == index).map(|(_, a)| a.content.rect());
+            }
+        }
+        if self.settling.is_some() {
+            return;
+        }
+        let (Some((_, page, _)), Some(renderer)) = (self.key, self.renderer.as_ref()) else { return };
+        let Some(p) = doc.info.pages.get(page) else { return };
+        let max_side = ctx.input(|i| i.max_texture_side) as f32;
+        let scale = scale.min(crate::canvas::BASE_SIDE.min(max_side) / p.width.max(p.height).max(1.0));
+        let tag = (scale * 1000.0) as u64;
+        if self.tag != Some(tag) {
+            renderer.set_queue(vec![pdfcraft_render::RenderRequest { page, scale, tag, ..Default::default() }]);
+            self.tag = Some(tag);
+        }
+        if let Some(out) = renderer.try_recv() {
+            if out.error.is_some() {
+                // Without a background the item stays put while dragged, as before.
+                self.renderer = None;
+                return;
+            }
+            if out.request.tag == tag {
+                self.texture = Some(ctx.load_texture(
+                    "added-content-move-background",
+                    crate::canvas::texture_image([out.width as usize, out.height as usize], out.rgba),
+                    egui::TextureOptions::LINEAR,
+                ));
+            }
+        }
+        if self.pending() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+    }
+
+    /// The move was applied: keep the preview, now at the new generation, until the page is
+    /// rendered again. Any other edit ends it.
+    pub fn committed(&mut self, edit: &Edit, generation: u64) {
+        match edit {
+            Edit::UpdateContent { page, index, content } if self.texture.is_some() && self.key.is_some_and(|(_, p, i)| (p, i) == (*page, *index)) => {
+                self.key = Some((generation, *page, *index));
+                self.settling = Some(content.rect());
+            }
+            _ => *self = Self::default(),
+        }
+    }
+
+    pub fn page_received(&mut self, page: usize) {
+        if self.settling.is_some() && self.key.is_some_and(|(_, p, _)| p == page) {
+            *self = Self::default();
+        }
+    }
+
+    /// The page without the moving item, then the item's pixels taken from `page_tex` (the page
+    /// as rendered, item included where it was) at the dragged or applied position.
+    #[allow(clippy::too_many_arguments)]
+    pub fn paint(
+        &self,
+        ui: &egui::Ui,
+        painter: &egui::Painter,
+        xf: &PageXform,
+        page: usize,
+        info: &DocInfo,
+        cv: &ContentView,
+        page_tex: Option<egui::TextureId>,
+    ) {
+        let (Some((_, kp, _)), Some(background), Some(page_tex), Some(from)) = (self.key, &self.texture, page_tex, self.from) else { return };
+        if kp != page {
+            return;
+        }
+        let r = screen_rect(xf, info, page, from);
+        let d = if let Some((_, _, start)) = cv.grab {
+            let Some(p) = ui.input(|i| i.pointer.hover_pos()) else { return };
+            p - start
+        } else if let Some(to) = self.settling {
+            // A moved text box keeps its top edge (its height follows its lines).
+            screen_rect(xf, info, page, to).left_top() - r.left_top()
+        } else {
+            return;
+        };
+        let painter = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
+        xf.paint_image(&painter, background.id(), 0.0, 0.0, 1.0, 1.0);
+        let r = r.expand(1.0);
+        let mut mesh = egui::Mesh::with_texture(page_tex);
+        for c in [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()] {
+            let (u, v) = xf.screen_to_norm(c);
+            mesh.vertices.push(egui::epaint::Vertex { pos: c + d, uv: Pos2::new(u, v), color: Color32::WHITE });
+        }
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(0, 2, 3);
+        painter.add(egui::Shape::mesh(mesh));
     }
 }
 
@@ -337,6 +472,8 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
     let memo = &view.content.undrawable;
     egui::Area::new(egui::Id::new(("added-text", view.id.0))).order(egui::Order::Foreground).fixed_pos(r.min).show(ctx, |ui| {
         let Some(t) = view.content.draft.as_mut() else { return };
+        // The box is white in every theme, so the caret must not follow the theme (pale in dark mode) (#655).
+        ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(Color32::WHITE);
         let [cr, cg, cb] = t.style.color.map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8);
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
@@ -362,8 +499,8 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
                     ui.horizontal(|ui| {
-                        done = crate::icons::button(ui, "check", 24.0, false, "Done adding text").clicked();
-                        cancel = crate::icons::button(ui, "x", 24.0, false, "Discard this text (Esc)").clicked();
+                        done = crate::icons::button(ui, "check", 24.0, false, tl!("Done adding text")).clicked();
+                        cancel = crate::icons::button(ui, "x", 24.0, false, tl!("Discard this text (Esc)")).clicked();
                     });
                 })
                 .response
@@ -451,7 +588,7 @@ pub(crate) fn format_panel(ui: &mut egui::Ui, t: &Tokens, style: &AddedText) -> 
     if let Some(picked) = crate::comments::swatch_grid(ui, Some(c)) {
         s.color = picked;
     }
-    ui.label(egui::RichText::new(tl!("Standard fonts; text outside Windows-1252 isn't supported yet.")).small().color(t.text_faint));
+    ui.label(egui::RichText::new(tl!("Thai and Arabic use regular fallback fonts when available.")).small().color(t.text_faint));
     (s != *style).then_some(s)
 }
 
@@ -521,6 +658,9 @@ impl crate::PdfCraftApp {
     /// Edit text & images ▸ Save Image As.
     pub(crate) fn save_page_image(&mut self, page: usize, index: usize) {
         let Some((_, id)) = self.active_ids() else { return };
+        if !self.may_copy(id) {
+            return;
+        }
         let file = self.session.get(id).map(|d| d.page_image_file(page, index));
         match file {
             Some(Ok((ext, bytes))) => {
@@ -528,6 +668,32 @@ impl crate::PdfCraftApp {
             }
             Some(Err(e)) => self.notify_fmt("Couldn't save the image: {e}", &[("e", &e.to_string())]),
             None => {}
+        }
+    }
+
+    /// Copy Image: image `index` on `page`, at its own resolution, to the clipboard.
+    pub(crate) fn copy_page_image(&mut self, page: usize, index: usize) {
+        let Some((_, id)) = self.active_ids() else { return };
+        if !self.may_copy(id) {
+            return;
+        }
+        let Some(pixels) = self.session.get(id).map(|d| d.page_image_rgba(page, index)) else { return };
+        let copied = pixels.and_then(|(w, h, rgba)| {
+            #[cfg(not(target_arch = "wasm32"))]
+            if self.system_clipboard {
+                let img = arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(&rgba) };
+                arboard::Clipboard::new().and_then(|mut c| c.set_image(img)).map_err(|e| e.to_string())?;
+            }
+            #[cfg(target_arch = "wasm32")]
+            if self.system_clipboard {
+                return Err("the web version can't put images on the clipboard yet; use Save Image As".to_string());
+            }
+            self.last_copied_image = Some((w, h, rgba));
+            Ok((w, h))
+        });
+        match copied {
+            Ok((w, h)) => self.notify_fmt("The image has been copied ({w} × {h} pixels)", &[("w", &w.to_string()), ("h", &h.to_string())]),
+            Err(e) => self.notify_fmt("Couldn't copy the image: {e}", &[("e", &e)]),
         }
     }
 

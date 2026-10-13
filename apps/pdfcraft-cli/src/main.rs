@@ -17,6 +17,8 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod batch;
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
@@ -51,10 +53,15 @@ pdfcraft-cli render <file.pdf> --page N [--dpi 96] --out x.png   (.png, .jpg, .t
 pdfcraft-cli text   <file.pdf> [--page N]                  extracted text (pages separated by form feeds)
 pdfcraft-cli edit   <in.pdf> --out out.pdf [--rotate 1,3:90] [--delete 2,4] [--move 5:1]
                       [--insert-blank 1] [--title T] [--author A] [--full]
+                      (options run in order; page numbers refer to the document after the earlier options)
 pdfcraft-cli combine <a.pdf> <b.pdf> … --out combined.pdf
 pdfcraft-cli extract <in.pdf> --pages 1,3,5 --out out.pdf
 pdfcraft-cli split   <in.pdf> (--every N | --before 3,7) [--out-dir DIR]
 pdfcraft-cli check  <files or dirs…> [--timeout 20] [--dpi 36] [--json out.json]
+pdfcraft-cli audit  <file.pdf> [--password PW]            find faux redactions (fails when found)
+pdfcraft-cli batch <files or dirs...> --steps convert,ocr,optimize --out-dir DIR
+                      [--recursive] [--root DIR] [--stop-on-error]
+                      [--ppi 150] [--quality 60] [--dpi 300] [--language en] [--ocr-all-pages]
 pdfcraft-cli tools                                       automation tools and their JSON Schemas
 pdfcraft-cli run    <tool> [key=value …] [--root DIR] [--out image.png]
 pdfcraft-cli run    --script steps.json [--root DIR]      [{\"tool\": \"doc_open\", \"args\": {…}}, …]
@@ -85,8 +92,10 @@ fn main() -> ExitCode {
         Some("split") => split(&args[1..]),
         Some("check") => check(&args[1..]),
         Some("check-one") => check_one(&args[1..]),
+        Some("audit") => audit(&args[1..]),
         Some("tools") => tools(),
         Some("run") => run(&args[1..]),
+        Some("batch") => batch::run(&args[1..]),
         Some("ui") => ui(&args[1..]),
         #[cfg(feature = "mcp")]
         Some("mcp") => mcp(&args[1..]),
@@ -139,11 +148,34 @@ fn stdout_line(line: std::fmt::Arguments<'_>) -> Result<(), CliError> {
 }
 
 fn version() -> Result<(), CliError> {
-    stdout_line(format_args!("pdfcraft-cli {}", env!("CARGO_PKG_VERSION")))?;
+    stdout_line(format_args!("pdfcraft-cli {}", pdfcraft_engine::build_info::version()))?;
     stdout_line(format_args!("Discord: {}  (help and feedback)", pdfcraft_engine::links::DISCORD))?;
     stdout_line(format_args!("Web:     {}", pdfcraft_engine::links::APP_PAGE))?;
     stdout_line(format_args!("Source:  {}", pdfcraft_engine::links::GITHUB))?;
     Ok(())
+}
+
+/// Audit a document for faux redactions. Prints the findings as JSON; fails when any are
+/// found so scripts and CI can gate on it, and when the audit itself cannot run.
+fn audit(args: &[String]) -> Result<(), CliError> {
+    validate_options("audit", args, AUDIT_OPTIONS)?;
+    let path = *positional(args).first().ok_or("audit: missing file")?;
+    let bytes = read(path)?;
+    let doc = pdfcraft_cos::Document::open_with_password(bytes, flag(args, "--password")).map_err(|e| format!("{path}: {e}"))?;
+    let findings = pdfcraft_audit::audit_redactions(&doc).map_err(|e| format!("{path}: {e}"))?;
+    let items: Vec<serde_json::Value> = findings
+        .into_iter()
+        .map(|f| {
+            serde_json::json!({
+                "page": f.page + 1,
+                "kind": f.kind.id(),
+                "rect": f.rect,
+                "covered_text": f.covered_text,
+            })
+        })
+        .collect();
+    println!("{}", serde_json::json!({ "file": path, "findings": items, "count": items.len() }));
+    if items.is_empty() { Ok(()) } else { Err(format!("audit: {} faux redaction(s) found", items.len()).into()) }
 }
 
 fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
@@ -156,15 +188,29 @@ struct OptionSpec {
     takes_value: bool,
 }
 
-/// Refuse a long option `command` doesn't take (a misspelling) before any file is read.
+/// Refuse unknown options and malformed confinement flags before any file is read.
 fn validate_options(command: &str, args: &[String], specs: &[OptionSpec]) -> Result<(), CliError> {
+    if specs.iter().any(|spec| spec.name == "--root") {
+        // `flag` searches every token, including another option's value. Match that lookup so
+        // a malformed confinement flag cannot be hidden there and fall back to no root.
+        let mut root_seen = false;
+        for (i, _) in args.iter().enumerate().filter(|(_, arg)| arg.as_str() == "--root") {
+            if root_seen {
+                return Err(format!("{command}: --root may only be supplied once").into());
+            }
+            root_seen = true;
+            if args.get(i + 1).is_none_or(|value| value.is_empty() || value.starts_with("--")) {
+                return Err(format!("{command}: --root needs a directory value").into());
+            }
+        }
+    }
     let mut i = 0;
     while let Some(arg) = args.get(i) {
         if let Some(name) = arg.strip_prefix("--") {
             let Some(spec) = specs.iter().find(|spec| spec.name == arg) else {
                 return Err(format!("{command}: unknown option --{name}").into());
             };
-            // A missing or malformed value is left to the command, which reports it in its own
+            // Other missing or malformed values are left to the command, which reports them in its own
             // terms (`text` and `extract` explain what a page value must be).
             i += if spec.takes_value { 2 } else { 1 };
         } else {
@@ -175,6 +221,7 @@ fn validate_options(command: &str, args: &[String], specs: &[OptionSpec]) -> Res
 }
 
 const INFO_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--password", takes_value: true }];
+const AUDIT_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--password", takes_value: true }];
 const TEXT_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--page", takes_value: true }, OptionSpec { name: "--password", takes_value: true }];
 const COMBINE_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--out", takes_value: true }];
 const EXTRACT_OPTIONS: &[OptionSpec] = &[
@@ -291,10 +338,19 @@ fn text(args: &[String]) -> Result<(), CliError> {
     // no pages, and "extract every page" of nothing would print nothing and exit 0 (#132). Ask
     // `inspect` why instead, so a protected file fails the same way `info` does.
     if r.page_count() == 0 {
-        let info = inspect(bytes, password).map_err(|e| format!("text: {e}"))?;
+        let info = inspect(bytes.clone(), password).map_err(|e| format!("text: {e}"))?;
         if !info.pages.is_empty() {
             return Err("text: the document could not be parsed".into());
         }
+    }
+    // Printing the text is copying it, so ask what `text_extract` asks (#1645): without the
+    // permissions password, a document that doesn't allow copying gives no text.
+    let mut session = pdfcraft_engine::Session::new();
+    if let Some(doc) = session.open(path, None, bytes, password).ok().and_then(|id| session.get(id)) {
+        // The engine's hint is about editing in the app; on the command line the way in is
+        // `--password`.
+        doc.check_copying()
+            .map_err(|_| "text: the document's permissions don't allow copying its text; pass the owner password with --password to extract it")?;
     }
     let pages: Vec<usize> = match selected_page {
         Some(page) => vec![page],
@@ -302,7 +358,7 @@ fn text(args: &[String]) -> Result<(), CliError> {
     };
     let mut failed: Vec<usize> = Vec::new();
     for (n, p) in pages.iter().enumerate() {
-        let out = r.render(RenderRequest { page: *p, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0 });
+        let out = r.render(RenderRequest { page: *p, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false });
         if let Some(e) = out.error {
             let _ = writeln!(std::io::stderr().lock(), "page {}: {e}", p + 1);
             failed.push(p + 1);
@@ -388,6 +444,28 @@ fn edit(args: &[String]) -> Result<(), CliError> {
     let mut session = Session::new();
     let id = session.open(path, Some(path.to_string()), read(path)?, password).map_err(|e| e.to_string())?;
     for e in edits {
+        // A destination past the end must fail like `page_move` / `page_insert_blank` do, not
+        // silently become an append (#1330). Checked per edit: earlier edits change the count.
+        let n = session.get(id).map_or(0, |d| d.info.pages.len());
+        let destination = match &e {
+            Edit::MovePages { to, .. } => Some(("--move target", *to)),
+            Edit::InsertBlankPage { at, .. } => Some(("--insert-blank", *at)),
+            _ => None,
+        };
+        if let Some((option, at)) = destination.filter(|(_, at)| *at > n) {
+            return Err(format!("{option} {} is past the end: it must be between 1 and {} (the document has {n} pages)", at + 1, n + 1).into());
+        }
+        // Pages count from the document as the earlier options left it, so a page past the end is
+        // reported with its own option and the current page count (#1550).
+        let listed = match &e {
+            Edit::RotatePages { pages, .. } => Some(("--rotate", pages)),
+            Edit::DeletePages { pages } => Some(("--delete", pages)),
+            Edit::MovePages { pages, .. } => Some(("--move", pages)),
+            _ => None,
+        };
+        if let Some((option, bad)) = listed.and_then(|(option, pages)| pages.iter().find(|p| **p >= n).map(|p| (option, *p))) {
+            return Err(format!("{option}: page {} does not exist; after the earlier options the document has {n} pages", bad + 1).into());
+        }
         session.apply(id, e).map_err(|e| e.to_string())?;
     }
     let bytes = if full { session.save_full_bytes(id) } else { session.save_bytes(id) }.map_err(|e| e.to_string())?;
@@ -465,7 +543,7 @@ fn render(args: &[String]) -> Result<(), CliError> {
         read(path)?,
         RenderConfig { password: flag(args, "--password").map(Arc::from), reject_oversize: true, ..Default::default() },
     );
-    let p = r.render(RenderRequest { page: page_index, kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0 });
+    let p = r.render(RenderRequest { page: page_index, kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0, preview: false });
     if let Some(e) = p.error {
         return Err(e.into());
     }
@@ -503,8 +581,8 @@ fn check_one(args: &[String]) -> Result<(), CliError> {
             let mut r = PageRenderer::new(bytes, RenderConfig::default());
             let mut failed = Vec::new();
             for i in 0..info.pages.len().min(500) {
-                let p = r.render(RenderRequest { page: i, kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0 });
-                if let Some(e) = r.render(RenderRequest { page: i, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0 }).error {
+                let p = r.render(RenderRequest { page: i, kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0, preview: false });
+                if let Some(e) = r.render(RenderRequest { page: i, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false }).error {
                     failed.push(format!("p{} text: {e}", i + 1));
                 }
                 if let Some(e) = p.error {
@@ -559,8 +637,20 @@ fn short(s: &str) -> String {
 fn collect(paths: &[&str]) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
+    let mut visited = std::collections::HashSet::new();
     while let Some(p) = stack.pop() {
         if p.is_dir() {
+            // Directory aliases and symlink cycles must not scan the same tree repeatedly.
+            let identity = match p.canonicalize() {
+                Ok(identity) => identity,
+                Err(error) => {
+                    eprintln!("{}: could not resolve directory: {error}", p.display());
+                    continue;
+                }
+            };
+            if !visited.insert(identity) {
+                continue;
+            }
             if let Ok(rd) = std::fs::read_dir(&p) {
                 stack.extend(rd.flatten().map(|e| e.path()));
             }

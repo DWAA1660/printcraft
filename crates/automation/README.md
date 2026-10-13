@@ -29,6 +29,35 @@ mcp::McpServer::new(a).serve(stdin, stdout)?             // newline-delimited JS
 - Acrobat JavaScript uses one context per open document: document scripts initialize once and globals survive field events and `js_run` calls. `doc_open` executes JavaScript `/OpenAction` after document scripts and returns their output under `javascript`; save and print dispatch `/AA /WS` and `/WP` before producing bytes. A failing Will Save script prevents saving. `js_event` dispatches stored widget scripts (`mouse_up`, `mouse_down`, `mouse_enter`, `mouse_exit`, `on_focus`, `on_blur`) or document `will_save`/`will_print` scripts. The JavaScript preference applies to all these paths. Timers and annotation page actions remain unsupported.
 - With a root set, every read and write path must resolve inside it (symlinks and `..` included). Relative paths resolve inside the root, and `..` is resolved by name before the check. Every path outside the root gets the same refusal (`<path> is outside the allowed directory <root>`), whether or not it exists, so a confined agent can't probe the rest of the disk; on Windows another network share or device path (`\\host\share`, `\\?\UNC\…`, `\\.\…`) is refused without being contacted. "Not found" and other filesystem errors are reported only for paths inside the root. Tools that write several files into a folder name them after the document or input file, with separators, colons and control characters replaced by `_`, so a name can't lead them out of the folder. The root itself must be a folder.
 
+## Text search and cache limits
+
+Extracted page text is reused in a session-wide LRU cache: at most **64 MiB** of estimated owned
+text storage and **4,096 pages**, shared by all open documents. Accounting includes glyph-vector
+capacity, each glyph string's capacity, line indexes and word-break flags. Cache hits share the
+renderer result instead of copying glyphs. Oversized pages remain usable by the current call but
+are not cached; evicted pages can be extracted again. A changed document version invalidates its
+cached text on the next text request, and closing a document removes its entries. Cache entries
+do not keep an old PDF byte buffer alive.
+
+This bounds retained text-cache data, not total process memory: active extraction batches,
+renderers, document buffers and the requested output have separate lifetimes. Search still reads
+growing batches (8 to 128 pages), with one lookahead match to determine continuation.
+
+`text_find` keeps matches from readable pages when another reached page fails extraction. It
+returns `warnings` with 1-based `page`, `error` and `error_truncated`, plus `warning_count` and
+`warnings_truncated`. At most 100 warnings and 1,024 UTF-8 bytes per error are returned. Failures
+are retried on later calls; they are not cached as empty pages. Warnings describe pages visited in
+search order, up to the continuation point, not failures in unvisited later pages.
+
+`complete: true` means the requested search was exhausted with no page failures and no further
+matches. `next: {start_page, skip}` exists only when another match would exceed `limit`. A search
+that reaches the end with warnings therefore has `complete: false` **without** `next`. Callers
+should follow `next` when present and separately inspect warnings. A capped search can return
+both. The existing `query`, `count`, `matches` and rectangle semantics are unchanged.
+
+`text_extract`, comment placement and redaction keep strict all-requested-pages-must-succeed
+semantics; they never silently act on partial text.
+
 ## Shared field properties
 
 `form_set_props` accepts either `field` (one name) or `fields` (1–1000 unique names):
@@ -53,6 +82,23 @@ or fill colour. Names, rectangles and rotations require the single-field form. R
 
 Implemented: `initialize` (protocol 2025-06-18, 2025-03-26, 2024-11-05), `ping`, `tools/list` (with `readOnlyHint`/`destructiveHint` annotations), `tools/call` (JSON results also returned as `structuredContent`; images as `image/png`), and `resources/list`, `resources/templates/list` and `resources/read`. The resources expose the open documents read-only: `pdfcraft://doc/{doc}/info` (JSON), `…/text`, `…/page/{page}/text` and `…/page/{page}/image{?dpi}` (PNG, 1–600 dpi). Tool failures come back as `isError: true` results, so the agent can read and recover from them.
 
+### From an installed release
+
+The release packages ship `pdfcraft-cli` alongside the desktop app, so no build is needed:
+
+| Install | CLI |
+|---|---|
+| Windows (MSI) | `C:\Program Files\PdfCraft\pdfcraft-cli.exe` by default (wherever you installed it otherwise), not on `PATH` |
+| Linux (deb, rpm) | `/usr/bin/pdfcraft-cli` |
+| macOS | the separate `pdfcraft-cli-<version>-macos-<arch>.zip` release asset (the `.app` holds only the desktop app) |
+
+```sh
+# Windows, default install folder
+claude mcp add pdfcraft -- "C:\Program Files\PdfCraft\pdfcraft-cli.exe" mcp --root <dir>
+# Linux, or macOS with the CLI unzipped onto PATH
+claude mcp add pdfcraft -- pdfcraft-cli mcp --root <dir>
+```
+
 ## Adding a tool
 
 1. Add the engine capability first, with its tests (the tool is a thin adapter).
@@ -68,6 +114,15 @@ with generation-scoped kind/index references. `object_move {doc, page, objects, 
 moves 1–1000 references atomically in displayed points (right/down), preserving source glyph bytes
 and fonts. A refusal changes nothing; success is one undo step. See
 [the selection and movement guide](../../docs/editing-multiple-objects.md) for limits and examples.
+
+## Accessibility review record
+
+Open the original and edited PDFs as separate documents, then call
+`accessibility_review_record {before, after, path}`. The tool writes a JSON record atomically within
+`--root`: SHA-256 hashes of both working PDFs, rule statuses and finding counts before and after,
+changed rules, and rules still failed or requiring manual review. `all: true` also includes the
+colour-contrast rule. It does not change either PDF or certify accessibility. Keep the original open
+while making edits to the second document so the comparison has a stable baseline.
 
 ## Common command tools
 
@@ -93,3 +148,40 @@ Exports complete synchronously. `progressToken` and cancellation notifications a
 ignored; no background-job or cancellation behavior is added.
 
 Session resources `pdfcraft://document` and `pdfcraft://commands`, and the refusal of unknown argument keys, are described in [docs/mcp.md](../../docs/mcp.md).
+
+For inline editor previews, `page_render` accepts `hide_text_block` (a 1-based index from
+`text_paragraphs`). It renders the page without that paragraph’s source glyphs and leaves the
+working document unchanged.
+
+
+## Existing text and document fonts
+
+`text_font_files` discovers eligible installed files on request (or specified confined folders),
+`text_font_import` registers a full document face, and `text_fonts` lists source/full resources.
+Use `text_edit.font_resource` to choose a resource, or keep source faces and let matching full
+faces complete absent subset glyphs. `text_edit.ranges` accepts disjoint UTF-8 byte ranges;
+`text_edit_layout` measures the same resource/range draft without committing. All changes are
+undoable and survive saving/reopening. `image_hit` shares the UI's curve and hole hit testing.
+The bounds, limits and font requirements are in [existing-text editing](../../docs/editing-existing-text.md)
+and [image editing](../../docs/editing-images.md).
+
+## Opening local GoToR links
+
+`link_open {doc, page, index, password?}` follows a local PDF link using `link_list`
+numbering. Relative file specifications open normally. An **absolute** file specification
+requires `allow_absolute: true`, after reviewing the target reported by `link_list`.
+Omitting the argument or passing false refuses the request before checking or reading the
+target file. This is an intentional compatibility change for callers that previously opened
+absolute GoToR targets without explicit consent. Opting in does not bypass `--root`, symlink
+confinement, regular-file, PDF-extension, size, or password validation. Consent applies only
+to that call, including each password retry; it is never remembered for other links.
+
+The desktop UI asks Allow/Cancel before following absolute GoToR targets and displays the
+complete path. Relative links retain their existing behavior. Named destinations remain
+unapplied with a warning.
+
+## Folder batches
+
+`doc_batch` runs conversion, OCR and compression over files and optionally recursive
+folders. The CLI also exposes it as `pdfcraft-cli batch`. See the
+[batch guide](../../docs/cli-batch.md) for examples, output protection, errors and limits.
