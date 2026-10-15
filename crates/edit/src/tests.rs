@@ -116,6 +116,23 @@ fn header_start_number_that_would_wrap_is_refused_without_drawing() {
 }
 
 #[test]
+fn header_bates_start_that_would_overflow_is_refused_without_drawing() {
+    // A Bates start of u64::MAX has no room for a second page. The run must be refused up front
+    // instead of overflowing (a panic in debug builds, a wrap to 0 in release builds).
+    let mut doc = fixture();
+    let hf = HeaderFooter {
+        text: [String::new(), String::new(), "<<Bates Number#6#18446744073709551615#A#B>>".into(), String::new(), String::new(), String::new()],
+        ..HeaderFooter::default()
+    };
+    let err = add_header_footer(&mut doc, &[0, 1], &hf, false, &cx()).unwrap_err();
+    assert!(err.to_string().contains("Bates"), "{err}");
+    assert!(marks_present(&doc).is_empty(), "nothing is drawn when the run is refused");
+    // A single page still fits the start number itself.
+    add_header_footer(&mut doc, &[0], &hf, false, &cx()).unwrap();
+    assert_eq!(marks_present(&doc).len(), 1);
+}
+
+#[test]
 fn replace_and_remove_restore_the_original_content() {
     let mut doc = fixture();
     let original = streams(&doc, 0);
@@ -690,6 +707,82 @@ fn added_arabic_text_is_shaped_in_display_order_and_stays_searchable() {
     }
     for letter in ["0645", "0631", "062D", "0628", "0627", "0634", "0643"] {
         assert!(mapped.contains(&format!("<{letter}>")), "{letter} in {mapped}");
+    }
+}
+
+#[test]
+fn added_hebrew_text_is_drawn_right_to_left_and_stays_searchable() {
+    let mut doc = fixture();
+    let text = AddedText {
+        rect: [72.0, 600.0, 400.0, 700.0],
+        text: "שלום (עולם) 2026 World".into(),
+        size: 14.0,
+        align: Align::Right,
+        ..AddedText::default()
+    };
+    if pdfcraft_fonts::document_hebrew_font(false).is_none() {
+        eprintln!("skipping the Hebrew drawing checks: built without a craft-fonts Hebr face (set CRAFT_FONTS_DIR)");
+        assert_eq!(first_undrawable(&text), Some('ש'));
+        let err = add_content(&mut doc, 0, &Content::Text(text)).unwrap_err();
+        assert!(matches!(&err, EditError::Invalid(m) if m.contains("U+05E9")), "{err:?}");
+        assert!(!doc.is_modified(), "nothing is written when the font is missing");
+        return;
+    }
+    assert_eq!(first_undrawable(&text), None);
+    add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
+    // Points stay on their letters; a Hebrew line in an Arabic item and Arabic in a Hebrew one.
+    for other in ["שָׁלוֹם", "שלום مرحبا"] {
+        let other = AddedText { text: other.into(), rect: [72.0, 500.0, 400.0, 520.0], ..text.clone() };
+        if other.text.chars().any(|c| ('\u{0600}'..='\u{06FF}').contains(&c)) && pdfcraft_fonts::document_arabic_font().is_none() {
+            continue;
+        }
+        add_content(&mut doc, 0, &Content::Text(other)).unwrap();
+    }
+    let doc = reopen(&doc);
+    let added = list_added(&doc);
+    let Content::Text(t) = &added[0].content else { panic!() };
+    assert_eq!(t.text, "שלום (עולם) 2026 World", "the logical text is kept for editing");
+    let s = streams(&doc, 0);
+    let item = s.iter().find(|s| s.contains("(World) Tj")).unwrap();
+    // A right-to-left paragraph: "World", typed last, is drawn left of the Hebrew.
+    let x_before = |s: &str, at: usize| -> f64 {
+        let tm = s[..at].rfind("1 0 0 1 ").unwrap() + 8;
+        s[tm..].split(' ').next().unwrap().parse().unwrap()
+    };
+    let latin_x = x_before(item, item.find("(World) Tj").unwrap());
+    let hebrew_at = item.find("/PCAr").unwrap();
+    let hebrew_x = x_before(item, item[hebrew_at..].find(" Tj").unwrap() + hebrew_at);
+    assert!(latin_x < hebrew_x, "{item}");
+    // Copy and search get the typing order back.
+    let logical: String = t.text.encode_utf16().map(|u| format!("{u:04X}")).collect();
+    assert!(item.contains(&format!("/ActualText <FEFF{logical}>")), "{item}");
+    // The Hebrew glyphs come from a Type 3 font named after the face, whose ToUnicode map gives
+    // back each letter.
+    let p = &pdfcraft_model::pages(&doc)[0];
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap()).as_dict().unwrap().clone();
+    let shaped: Vec<_> = fonts.iter().filter(|(k, _)| k.starts_with(b"PCAr")).map(|(_, v)| doc.resolve(v).as_dict().unwrap().clone()).collect();
+    let mut mapped = String::new();
+    for f in &shaped {
+        assert_eq!(f.name(b"Subtype"), Some(&b"Type3"[..]));
+        mapped += &String::from_utf8_lossy(&stream_bytes(&doc, f.get(b"ToUnicode").unwrap()).unwrap());
+    }
+    for letter in ["05E9", "05DC", "05D5", "05DD", "05E2"] {
+        assert!(mapped.contains(&format!("<{letter}>")), "{letter} in {mapped}");
+    }
+    let font_name = |f: &Dict| doc.resolve(f.get(b"FontDescriptor").unwrap()).as_dict().unwrap().name(b"FontName").map(<[u8]>::to_vec);
+    assert!(shaped.iter().any(|f| font_name(f).as_deref() == Some(&b"NotoSansHebrew"[..])));
+    // A pointed letter is one glyph with its points, mapped back whole.
+    assert!(mapped.contains("<05E905"), "{mapped}");
+}
+
+#[test]
+fn odd_hebrew_text_never_panics() {
+    let mut doc = fixture();
+    let long = "שלום עולם ".repeat(2_000);
+    for s in ["\u{202E}ש\u{05B8}\u{05B8} (]", "\u{05B8}", "א\u{200F}\u{2067}b\u{2069}", "א\n\nב\tc", "׳״ 456", long.as_str()] {
+        let r = add_content(&mut doc, 0, &Content::Text(AddedText { rect: [0.0, 800.0, 300.0, 780.0], text: s.into(), ..AddedText::default() }));
+        assert_eq!(r.is_ok(), pdfcraft_fonts::document_hebrew_font(false).is_some(), "{:?}: {r:?}", s.chars().take(12).collect::<String>());
     }
 }
 
@@ -1327,6 +1420,74 @@ fn a_subset_without_a_space_glyph_keeps_its_font_when_editing_words() {
         assert_eq!(lines[0].font, "F2");
         assert!((lines[0].rect[2] - lines[0].rect[0]) > 3.0 * 12.0);
     }
+}
+
+/// A Chrome (Skia) style subset: Type0/Identity-H over a TrueType program, CID = glyph id.
+/// `/W` lists most used glyphs, writes 0 for some it dropped, and leaves `a` and `y` to `/DW`;
+/// `z` has a ToUnicode entry but no glyph in the program (its CID is past the last glyph).
+fn skia_subset_page() -> Document {
+    // Inter's glyph ids: P 375, o 790, l 736, a 507, n 773, d 597, G 141, e 614, r 852, m 766, y 998, space 1777.
+    let mut doc = text_page(
+        "BT /F3 12 Tf 72 700 Td <0177031602E001FB03050255> Tj ET \
+         BT /F3 12 Tf 72 650 Td <008D0266035402FE01FB030503E606F101FB0305025506F102FE031603540266> Tj ET",
+    );
+    let program = doc.add(Object::Stream(Stream::flate(Dict::new(), include_bytes!("../../../assets/fonts/Inter-Regular.ttf"))));
+    let unicode = doc.add(Object::Stream(Stream::flate(
+        Dict::new(),
+        b"1 begincodespacerange <0000> <FFFF> endcodespacerange 13 beginbfchar <0177> <0050> <0316> <006F> <02E0> <006C> \
+          <01FB> <0061> <0305> <006E> <0255> <0064> <008D> <0047> <0266> <0065> <0354> <0072> <02FE> <006D> <03E6> <0079> \
+          <06F1> <0020> <1000> <007A> endbfchar",
+    )));
+    let widths: Vec<Object> = [(0x8D, 746), (0x177, 639), (0x255, 612), (0x266, 583), (0x2E0, 242), (0x2FE, 876), (0x305, 591), (0x316, 600)]
+        .into_iter()
+        .chain([(0x354, 376), (0x355, 0), (0x356, 0), (0x6F1, 281)])
+        .flat_map(|(cid, width)| [Object::Int(cid), Object::Array(vec![Object::Int(width)])])
+        .collect();
+    let descriptor = Dict::from_iter([
+        (b"Type".to_vec(), Object::name("FontDescriptor")),
+        (b"FontName".to_vec(), Object::name("BAAAAA+SampleSans")),
+        (b"Flags".to_vec(), Object::Int(32)),
+        (b"FontFile2".to_vec(), Object::Ref(program)),
+    ]);
+    let cid_font = Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Font")),
+        (b"Subtype".to_vec(), Object::name("CIDFontType2")),
+        (b"BaseFont".to_vec(), Object::name("BAAAAA+SampleSans")),
+        (b"CIDToGIDMap".to_vec(), Object::name("Identity")),
+        (b"DW".to_vec(), Object::Int(562)),
+        (b"W".to_vec(), Object::Array(widths)),
+        (b"FontDescriptor".to_vec(), Object::Dict(descriptor)),
+    ]);
+    let font = Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Font")),
+        (b"Subtype".to_vec(), Object::name("Type0")),
+        (b"BaseFont".to_vec(), Object::name("BAAAAA+SampleSans")),
+        (b"Encoding".to_vec(), Object::name("Identity-H")),
+        (b"DescendantFonts".to_vec(), Object::Array(vec![Object::Dict(cid_font)])),
+        (b"ToUnicode".to_vec(), Object::Ref(unicode)),
+    ]);
+    let p = pdfcraft_model::pages(&doc)[0].obj;
+    let fonts = Dict::from_iter([(b"F3".to_vec(), Object::Dict(font))]);
+    doc.update_dict(p, |d| d.set(b"Resources".to_vec(), Object::Dict(Dict::from_iter([(b"Font".to_vec(), Object::Dict(fonts))])))).unwrap();
+    doc
+}
+
+#[test]
+fn a_subset_keeps_its_font_for_glyphs_left_to_the_default_width() {
+    let doc = skia_subset_page();
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), ["Poland", "Germany and more"]);
+    // Deleting words only, and replacing a word with one drawn elsewhere on the page (`y` and `a`
+    // have no /W entry): every glyph is in the subset, so the font stays.
+    for (block, text) in [(1, "Germany"), (0, "Germany")] {
+        let mut doc = doc.clone();
+        assert_eq!(text::replace_block(&mut doc, 0, block, text).unwrap().substituted, None, "{text}");
+        let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+        assert_eq!(lines.iter().find(|l| l.text == text).unwrap().font, "F3");
+    }
+    // `z` maps to a CID the program has no glyph for: that still needs another font.
+    let mut doc = doc.clone();
+    assert!(text::replace_block(&mut doc, 0, 0, "Graz").unwrap().substituted.is_some());
 }
 
 #[test]
@@ -2318,6 +2479,37 @@ fn hebrew_letters_the_page_font_lacks_use_the_hebrew_face() {
     assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].text, "עברית מלאה");
 }
 
+/// #2013: the dialog asks `first_undrawable` before offering OK, so it must refuse exactly what
+/// applying refuses: a Cyrillic footer was previewed (in the interface font) and then failed.
+#[test]
+fn header_and_watermark_drawability_matches_what_applying_refuses() {
+    let footer = |t: &str| HeaderFooter {
+        text: [String::new(), String::new(), String::new(), String::new(), String::new(), t.into()],
+        ..HeaderFooter::default()
+    };
+    for (text, refused) in [
+        ("Страница <<1>> из 1 / Page <<1>> of 1", Some('С')),
+        ("TEST-001 <<Page 1 of n>>", None),
+        ("Café — 5€ ™ <<Bates Number#6#1#ACME-#>>", None),
+        ("Left\r\nRight", None),
+        ("A\rB", Some('\r')),
+        ("line one\nΕλληνικά", Some('Ε')),
+    ] {
+        let hf = footer(text);
+        assert_eq!(hf.first_undrawable(), refused, "{text:?}");
+        let mut doc = fixture();
+        let applied = add_header_footer(&mut doc, &[0], &hf, false, &cx());
+        match refused {
+            Some(c) => assert_eq!(applied.unwrap_err().to_string(), undrawable_message(c), "{text:?}"),
+            None => applied.unwrap(),
+        }
+        let wm = Watermark { text: text.into(), ..Watermark::default() };
+        assert_eq!(wm.first_undrawable(), refused, "{text:?}");
+        let applied = add_watermark(&mut fixture(), &[0], &wm, false);
+        assert_eq!(applied.err().map(|e| e.to_string()), refused.map(undrawable_message), "{text:?}");
+    }
+}
+
 /// #125: page-content tools refuse text the standard fonts can't draw instead of writing `?`,
 /// and leave the document untouched.
 #[test]
@@ -3286,6 +3478,27 @@ fn rich_region_edits_preserve_styles_positions_and_delete_all_runs_after_reopen(
     text::clear_block(&mut preview, 0, 1).unwrap();
     assert_eq!(text::text_blocks(&reopen(&preview), 0).unwrap().len(), 2);
     assert_eq!(text::text_blocks(&original, 0).unwrap().len(), 3);
+}
+
+/// Two edits applied together (heading and footer edited before leaving the editor, #2198): the
+/// runs between them are unchanged and keep their own styles instead of taking the heading's.
+#[test]
+fn unchanged_runs_between_two_edits_keep_their_styles() {
+    let original = mixed_region_page();
+    let look =
+        |doc: &Document| text::text_lines(doc, 0).unwrap().into_iter().map(|l| (l.text.trim().to_string(), l.base_font, l.color)).collect::<Vec<_>>();
+    let before = look(&original);
+    let block = text::text_blocks(&original, 0).unwrap()[1].clone();
+    let mut doc = original.clone();
+    let draft = block.editor_text.replace("About", "About us").replace("footer", "footnote");
+    text::replace_block(&mut doc, 0, 1, &draft).unwrap();
+    let after = look(&reopen(&doc));
+    let style = |lines: &[(String, String, [f64; 3])], word: &str| lines.iter().find(|l| l.0 == word).map(|l| (l.1.clone(), l.2));
+    for word in ["Plain", "bold", "text."] {
+        assert_eq!(style(&after, word), style(&before, word), "{word:?} keeps its own style; lines after the edit: {after:?}");
+    }
+    assert_eq!(style(&after, "About us"), style(&before, "About"));
+    assert_eq!(style(&after, "Italic footnote"), style(&before, "Italic footer"));
 }
 
 #[test]

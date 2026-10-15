@@ -1118,6 +1118,8 @@ fn worker(
                         if lock(&shared.busy).get_mut(id).is_none_or(|slot| slot.take().is_none()) {
                             return;
                         }
+                        // Release the active key, retrying if demand returned during parsing.
+                        shared.queue.retry(req);
                         continue;
                     }
                     let _ = parsed.set(init);
@@ -2156,6 +2158,62 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    fn check_cancelled_parse_request_requeue(renew_before_abort: bool) {
+        use super::*;
+        use std::{sync::mpsc, time::Duration};
+
+        let pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 1, RenderConfig::default());
+        let a = RenderRequest { page: 0, kind: RequestKind::Text, scale: 1.0, tag: 501, ..Default::default() };
+        let b = RenderRequest { page: 1, scale: 1.0, tag: 502, ..Default::default() };
+        let parse = parse_gate();
+        *lock(&pool.shared.parse_gate) = Some(parse.clone());
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        *lock(&pool.shared.busy_publish_gate) = Some(BusyPublishGate { request: b, entered: entered_tx, release: Arc::new(Mutex::new(release_rx)) });
+
+        pool.set_queue(vec![a]);
+        parse.entered.wait();
+        pool.set_queue(vec![b]);
+        if renew_before_abort {
+            // B stays first so the worker reaches its gate even when aborting A requeues it.
+            pool.set_queue(vec![b, a]);
+        }
+        parse.release.wait();
+        entered_rx.recv_timeout(Duration::from_secs(2)).expect("the worker finished aborting A and reached B");
+        // The parse hook's lock can span its barrier waits; clear it only after parsing returned.
+        *lock(&pool.shared.parse_gate) = None;
+        if !renew_before_abort {
+            pool.set_queue(vec![a]);
+        }
+        // B holds the sole worker, so this observes queue admission without racing a worker pop.
+        let pending = pool.shared.queue.pop();
+        if let Some(request) = pending {
+            pool.shared.queue.retry(request);
+        }
+        pool.set_queue(vec![a]);
+        // Release the worker before the regression assertion, including on the unfixed baseline.
+        release_tx.send(()).unwrap();
+        assert_eq!(pending, Some(a), "aborting a parse must release its active request identity");
+
+        let page = receive_before_deadline(&pool);
+        assert_eq!(page.request, a);
+        assert!(page.error.is_none(), "renewed text request failed: {:?}", page.error);
+        assert!(page.text.is_some(), "the exact cancelled text request completed");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn cancelled_parse_request_can_be_requested_again() {
+        check_cancelled_parse_request_requeue(false);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn cancelled_parse_request_renewed_before_abort_is_requeued() {
+        check_cancelled_parse_request_requeue(true);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn request_removed_before_busy_publication_skips_parser_acquisition() {
         use std::{sync::mpsc, time::Duration};
@@ -2974,6 +3032,67 @@ trailer << /Root 1 0 R >>
         ] {
             assert_eq!(filled(form, content), rect, "{form}");
         }
+    }
+
+    /// #1968: the highlight appearance other editors write, a transparency group whose content is
+    /// filled with `/BM /Multiply`, drew as an opaque block over the text. Every `/Group` form
+    /// got a layer of its own, so the Multiply blended with that layer's transparent backdrop
+    /// and the layer then covered the page. Vendored hayro-interpret patch: a group that is not
+    /// isolated (ISO 32000-2 §11.4.7: its elements composite with what is already on the page)
+    /// and is entered at full opacity, with no soft mask and Normal blending, has no backdrop of
+    /// its own to offer, so its content is drawn straight onto the page. An isolated group
+    /// (`/I true`) keeps its blank backdrop, and a group entered at partial opacity still gets
+    /// its layer so that opacity applies to the group as a whole.
+    #[test]
+    fn a_multiply_highlight_inside_a_transparency_group_keeps_the_text() {
+        // `annots`: the form drawn as the highlight's appearance; `page`: drawn from the page
+        // content instead, with the extra graphics state in front of the `Do`.
+        let render = |group: &str, annots: &str, page: &str| {
+            let content = format!("0 g 100 40 10 20 re f {page}");
+            let form = "/GS0 gs 1 1 0 rg 15 35 105 30 re f";
+            let pdf = format!(
+                "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R {annots} /Resources << /XObject << /Fx 6 0 R >> /ExtGState << /Half << /ca 0.5 >> >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Annot /Subtype /Highlight /Rect [15 35 120 65] /QuadPoints [15 65 120 65 15 35 120 35] /C [1 1 0] /AP << /N 6 0 R >> >> endobj
+6 0 obj << /Type /XObject /Subtype /Form /BBox [15 35 120 65] {group} /Resources << /ExtGState << /GS0 << /BM /Multiply /CA 1 /ca 1 >> >> >> /Length {} >> stream
+{form}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+                content.len(),
+                form.len()
+            );
+            let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+            assert!(p.error.is_none(), "{group}: {:?}", p.error);
+            p
+        };
+        let px = |p: &RenderedPage, x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..4].to_vec();
+        let (white, black, yellow) = (vec![255, 255, 255, 255], vec![0, 0, 0, 255], vec![255, 255, 0, 255]);
+        let annots = "/Annots [5 0 R]";
+        let plain = "/Group << /S /Transparency /CS /DeviceRGB >>";
+        let explicit = "/Group << /S /Transparency /CS /DeviceRGB /I false /K false >>";
+        for group in [plain, explicit, ""] {
+            for (annots, page) in [(annots, ""), ("", "/Fx Do")] {
+                let p = render(group, annots, page);
+                assert_eq!(px(&p, 30, 50), yellow, "{group} {page}: filled with the highlight colour");
+                assert_eq!(px(&p, 105, 50), black, "{group} {page}: Multiply keeps the text underneath");
+                assert_eq!(px(&p, 150, 50), white, "{group} {page}: outside the appearance");
+            }
+        }
+        // Isolated: the group's own transparent backdrop is all the Multiply sees (§11.4.7).
+        let p = render("/Group << /S /Transparency /CS /DeviceRGB /I true >>", annots, "");
+        assert_eq!(px(&p, 105, 50), yellow, "an isolated group starts from a blank backdrop");
+        // Entered at half opacity, the group is still composited as one: half yellow over white.
+        let p = render(plain, "", "/Half gs /Fx Do");
+        let half = px(&p, 30, 50);
+        assert!(half[0] == 255 && half[1] == 255 && (120..=136).contains(&half[2]), "{half:?}");
+        assert_eq!(px(&p, 150, 50), white);
     }
 
     /// A Highlight annotation without an appearance stream (common in older and generated files)
@@ -5178,6 +5297,194 @@ trailer << /Root 1 0 R >>
         }
     }
 
+    // Contributor-original classic-xref vector fixtures; no embedded or external assets.
+    fn raw_crop_unit_pdf(unit: f64, rotation: i32, crop: [f64; 4], marker: Option<[f64; 4]>) -> Vec<u8> {
+        let bounds = crop.map(|n| n.to_string()).join(" ");
+        let body = marker.map(|rect| format!("0 0 0 rg {} re f\n", rect.map(|n| n.to_string()).join(" "))).unwrap_or_default();
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+            format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [{bounds}] /CropBox [{bounds}] /UserUnit {unit} /Rotate {rotation} /Resources << >> /Contents 4 0 R >>"
+            ),
+            format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()),
+        ];
+        let mut bytes = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, object) in objects.iter().enumerate() {
+            offsets.push(bytes.len());
+            bytes.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = bytes.len();
+        bytes.extend_from_slice(b"xref\n0 5\n0000000000 65535 f \n");
+        for offset in offsets {
+            bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        bytes.extend_from_slice(format!("trailer << /Size 5 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+        bytes
+    }
+
+    #[test]
+    fn raw_crop_user_unit_inspection_keeps_observed_dimensions() {
+        let bytes = raw_crop_unit_pdf(4096.0, 0, [0.0, 0.0, 0.1, 0.1], None);
+        let info = crate::inspect(Arc::new(bytes), None).expect("original valid raw-0.1 PDF");
+        assert_eq!(info.pages.len(), 1);
+        assert!(info.warnings.is_empty(), "{:?}", info.warnings);
+        let page = &info.pages[0];
+        assert!(
+            (page.width - 409.6).abs() < 0.0001 && (page.height - 409.6).abs() < 0.0001,
+            "raw 0.1 at UserUnit4096 is 409.6 points, got {} by {}",
+            page.width,
+            page.height
+        );
+    }
+
+    #[test]
+    fn raw_crop_unit_floor_corners_match_nonzero_origin_and_rotations() {
+        use hayro::hayro_interpret::TransformExt;
+
+        for (unit, width, height, dx, dy) in
+            [(1.0, 1.0, 1.0, 0.125, 0.25), (4096.0, 512.0, 1024.0, 512.0, 1024.0), (75000.0, 9375.0, 18750.0, 9375.0, 18750.0)]
+        {
+            for rotation in [0, 90, 180, 270] {
+                let bytes = raw_crop_unit_pdf(unit, rotation, [10.0, 20.0, 10.125, 20.25], None);
+                let info = crate::inspect(Arc::new(bytes.clone()), None).expect("original valid offset crop");
+                assert!(info.warnings.is_empty(), "{:?}", info.warnings);
+                let dimensions = if rotation % 180 == 0 { (width as f32, height as f32) } else { (height as f32, width as f32) };
+                assert_eq!((info.pages[0].width, info.pages[0].height), dimensions, "unit={unit}, rotation={rotation}");
+                let pdf = Pdf::new(Arc::new(bytes)).expect("same PDF parser");
+                let page = pdf.pages().first().expect("one page");
+                assert_eq!(page.base_dimensions(), ((width / unit) as f32, (height / unit) as f32));
+                let transform = page.initial_transform(true).to_kurbo();
+                let (origin, opposite) = match rotation {
+                    0 => ([0.0, height], [dx, height - dy]),
+                    90 => ([0.0, 0.0], [dy, dx]),
+                    180 => ([width, 0.0], [width - dx, dy]),
+                    _ => ([height, width], [height - dy, width - dx]),
+                };
+                for (point, expected) in [(kurbo::Point::new(10.0, 20.0), origin), (kurbo::Point::new(10.125, 20.25), opposite)] {
+                    let actual = transform * point;
+                    assert!(
+                        (actual.x - expected[0]).abs() < 1e-9 && (actual.y - expected[1]).abs() < 1e-9,
+                        "unit={unit}, rotation={rotation}, point={point:?}: {actual:?} != {expected:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn raw_crop_unit_floor_reciprocal_does_not_trigger_letter_fallback() {
+        for unit in [1.0, 41.0, 47.0] {
+            let bytes = raw_crop_unit_pdf(unit, 0, [0.0, 0.0, 0.01, 0.01], None);
+            let pdf = Pdf::new(Arc::new(bytes.clone())).expect("ordinary small crop");
+            let page = pdf.pages().first().expect("one page");
+            let (width, height) = page.base_dimensions();
+            // In f32, the nearest reciprocal of 41 or 47 multiplies back to 0.99999994.
+            assert!(
+                width * page.user_unit() >= 1.0 && height * page.user_unit() >= 1.0,
+                "unit={unit}: floor must not round below one physical point"
+            );
+            let info = crate::inspect(Arc::new(bytes), None).expect("inspect the same small crop");
+            let page = &info.pages[0];
+            assert!(
+                (1.0..=1.000001).contains(&page.width) && (1.0..=1.000001).contains(&page.height),
+                "unit={unit}: one-point floor must not become a Letter placeholder: {} by {}",
+                page.width,
+                page.height
+            );
+            assert!(info.warnings.is_empty(), "{:?}", info.warnings);
+        }
+    }
+
+    #[test]
+    fn raw_crop_unit_floor_preserves_nearly_zero_fallback() {
+        for unit in [1.0, 4096.0, 75000.0] {
+            for side in [0.0, 0.0001] {
+                let bytes = raw_crop_unit_pdf(unit, 0, [0.0, 0.0, side, side], None);
+                let pdf = Pdf::new(Arc::new(bytes)).expect("existing degenerate-page fallback");
+                let page = pdf.pages().first().expect("one page");
+                // Existing A4 raw fallback remains raw A4, then scales by the page unit.
+                let expected = (595.2755905511812_f64 as f32, 841.8897637795277_f64 as f32);
+                assert_eq!(page.base_dimensions(), expected, "unit={unit}, raw side={side}");
+                assert_eq!(page.render_dimensions(), (expected.0 * unit as f32, expected.1 * unit as f32));
+            }
+        }
+    }
+
+    fn raw_crop_ink(page: &RenderedPage) -> ([u32; 4], usize) {
+        let (mut left, mut top, mut right, mut bottom, mut count) = (page.width, page.height, 0, 0, 0);
+        for (i, pixel) in page.rgba.as_chunks::<4>().0.iter().enumerate() {
+            if pixel[0] < 128 && pixel[1] < 128 && pixel[2] < 128 {
+                let (x, y) = (i as u32 % page.width, i as u32 / page.width);
+                left = left.min(x);
+                top = top.min(y);
+                right = right.max(x + 1);
+                bottom = bottom.max(y + 1);
+                count += 1;
+            }
+        }
+        assert!(count > 0, "original vector marker must draw");
+        ([left, top, right, bottom], count)
+    }
+
+    #[test]
+    fn raw_crop_user_unit_vector_rasters_match_physical_controls() {
+        for (unit, scale, width, height, physical_width, physical_height, rects) in [
+            (
+                4096.0,
+                0.5,
+                256,
+                512,
+                512.0,
+                1024.0,
+                [[32.0, 320.0, 96.0, 448.0], [64.0, 32.0, 192.0, 96.0], [160.0, 64.0, 224.0, 192.0], [320.0, 160.0, 448.0, 224.0]],
+            ),
+            (
+                75000.0,
+                0.04,
+                375,
+                750,
+                9375.0,
+                18750.0,
+                [
+                    [46.875, 468.75, 140.625, 656.25],
+                    [93.75, 46.875, 281.25, 140.625],
+                    [234.375, 93.75, 328.125, 281.25],
+                    [468.75, 234.375, 656.25, 328.125],
+                ],
+            ),
+        ] {
+            for (index, rotation) in [0, 90, 180, 270].into_iter().enumerate() {
+                let raw_crop = [10.0, 20.0, 10.125, 20.25];
+                let raw_marker = [10.015625, 20.03125, 0.03125, 0.0625];
+                let control_crop = raw_crop.map(|n| n * unit);
+                let control_marker = raw_marker.map(|n| n * unit);
+                let physical = if rotation % 180 == 0 { (physical_width, physical_height) } else { (physical_height, physical_width) };
+                let pixels = if rotation % 180 == 0 { (width, height) } else { (height, width) };
+                let render = |bytes: Vec<u8>| {
+                    let info = crate::inspect(Arc::new(bytes.clone()), None).expect("bounded original vector PDF");
+                    assert_eq!((info.pages[0].width, info.pages[0].height), physical, "check dimensions before any raster allocation");
+                    let mut renderer = PageRenderer::new(Arc::new(bytes), RenderConfig::default());
+                    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale, ..Default::default() });
+                    assert!(page.error.is_none(), "{:?}", page.error);
+                    assert_eq!((page.width, page.height), pixels);
+                    page
+                };
+                let high = render(raw_crop_unit_pdf(unit, rotation, raw_crop, Some(raw_marker)));
+                let control = render(raw_crop_unit_pdf(1.0, rotation, control_crop, Some(control_marker)));
+                let (bbox, count) = raw_crop_ink(&high);
+                for (actual, expected) in bbox.into_iter().zip(rects[index]) {
+                    assert!((f64::from(actual) - expected).abs() <= 1.0, "unit={unit}, rotation={rotation}: {bbox:?} != {:?}", rects[index]);
+                }
+                let (control_bbox, control_count) = raw_crop_ink(&control);
+                assert_eq!(bbox, control_bbox, "unit={unit}, rotation={rotation}: marker placement");
+                assert_eq!(count, control_count, "unit={unit}, rotation={rotation}: visible marker ink");
+                assert!(high.rgba == control.rgba, "unit={unit}, rotation={rotation}: physically equivalent crops render identically");
+            }
+        }
+    }
+
     /// A page's `/UserUnit` (the size of its unit in points) scales the page and everything on
     /// it, after the crop box and before `/Rotate`, as Acrobat shows such pages: with
     /// `/UserUnit 2`, scale 1 renders pixel for pixel what scale 2 renders without it. As in
@@ -6123,6 +6430,38 @@ endstream endobj
 trailer << /Root 1 0 R >>
 %%EOF";
         let mut r = PageRenderer::new(Arc::new(pdf.to_vec()), RenderConfig::default());
+        let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        let px = |x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..4].to_vec();
+        assert_eq!(px(25, 50), vec![255, 0, 0, 255], "inside the mask");
+        assert_eq!(px(75, 50), vec![255, 255, 255, 255], "outside the mask");
+    }
+
+    /// Issue #2128: PowerPoint fades a gradient fill (an axial shading pattern) through a soft
+    /// mask. vello_cpu 0.0.8 copies an opaque gradient straight over fully covered tiles,
+    /// skipping the mask, so the fade came out solid. Images get around that by declaring
+    /// transparency while a mask or blend mode is set; native gradients can't, so they are
+    /// sampled as a texture then.
+    #[test]
+    fn soft_mask_applies_to_a_shading_pattern_fill() {
+        let content = "/Pattern cs /P0 scn /M gs 0 0 100 100 re f";
+        let pdf = format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /ExtGState << /M 5 0 R >> /Pattern << /P0 7 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /ExtGState /SMask << /Type /Mask /S /Alpha /G 6 0 R >> >> endobj
+6 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Group << /S /Transparency /CS /DeviceRGB >> /Length 20 >> stream
+0 g 0 0 50 100 re f
+endstream endobj
+7 0 obj << /PatternType 2 /Shading << /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] /Extend [true true] /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [1 0 0] /N 1 >> >> >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+            content.len()
+        );
+        let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
         let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
         let px = |x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..4].to_vec();
         assert_eq!(px(25, 50), vec![255, 0, 0, 255], "inside the mask");

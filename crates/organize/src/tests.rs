@@ -267,6 +267,56 @@ fn document_info_edits_round_trip_with_unicode() {
     assert_eq!(info(&doc, "Producer"), None);
 }
 
+/// Page transitions (§12.4.4): written as `/Trans` and `/Dur` with only the entries the style
+/// reads and that differ from the defaults, removed again, checked before any page changes, and
+/// kept through a save.
+#[test]
+fn page_transitions_are_set_removed_and_checked() {
+    let mut doc = open(fixture());
+    let wipe = Transition { duration: 2.5, direction: Some(270), ..Transition::new("Wipe") };
+    set_transition(&mut doc, &[0, 2], &TransitionSpec { transition: Some(wipe), display: Some(5.0) }).unwrap();
+    let d = page_dict(&doc, 0);
+    let t = d.get(b"Trans").and_then(|o| o.as_dict()).expect("/Trans").clone();
+    assert_eq!(t.name(b"Type"), Some(&b"Trans"[..]));
+    assert_eq!(t.name(b"S"), Some(&b"Wipe"[..]));
+    assert_eq!(t.get(b"D"), Some(&Object::Real(2.5)));
+    assert_eq!(t.get(b"Di"), Some(&Object::Int(270)));
+    assert!(
+        t.get(b"Dm").is_none() && t.get(b"M").is_none() && t.get(b"SS").is_none() && t.get(b"B").is_none(),
+        "entries Wipe does not read stay out: {t:?}"
+    );
+    assert_eq!(d.get(b"Dur"), Some(&Object::Real(5.0)));
+    assert!(page_dict(&doc, 1).get(b"Trans").is_none(), "page 2 was not asked for");
+    // Fly with everything non-default; the defaults themselves are not written.
+    let fly = Transition { style: "Fly".into(), duration: 1.0, horizontal: false, inward: false, direction: None, scale: 0.5, opaque: true };
+    set_transition(&mut doc, &[1], &TransitionSpec { transition: Some(fly), display: None }).unwrap();
+    let t = page_dict(&doc, 1).get(b"Trans").and_then(|o| o.as_dict()).expect("/Trans").clone();
+    assert_eq!((t.name(b"S"), t.name(b"M"), t.name(b"Di")), (Some(&b"Fly"[..]), Some(&b"O"[..]), Some(&b"None"[..])));
+    assert_eq!((t.get(b"SS"), t.get(b"B")), (Some(&Object::Real(0.5)), Some(&Object::Bool(true))));
+    assert!(t.get(b"D").is_none() && t.get(b"Dm").is_none(), "{t:?}");
+    // Removed again.
+    set_transition(&mut doc, &[0], &TransitionSpec { transition: None, display: None }).unwrap();
+    let d = page_dict(&doc, 0);
+    assert!(d.get(b"Trans").is_none() && d.get(b"Dur").is_none());
+    // Checked before anything changes.
+    for (what, spec) in [
+        ("style", TransitionSpec { transition: Some(Transition::new("Swirl")), display: None }),
+        ("direction", TransitionSpec { transition: Some(Transition { direction: Some(45), ..Transition::new("Wipe") }), display: None }),
+        ("duration", TransitionSpec { transition: Some(Transition { duration: -1.0, ..Transition::new("Fade") }), display: None }),
+        ("scale", TransitionSpec { transition: Some(Transition { scale: 0.0, ..Transition::new("Fly") }), display: None }),
+        ("display", TransitionSpec { transition: None, display: Some(f32::NAN) }),
+    ] {
+        assert!(set_transition(&mut doc, &[2], &spec).is_err(), "{what} must be refused");
+    }
+    assert!(set_transition(&mut doc, &[7], &TransitionSpec { transition: None, display: None }).is_err(), "no such page");
+    let t = page_dict(&doc, 2).get(b"Trans").and_then(|o| o.as_dict()).expect("page 3 unchanged").clone();
+    assert_eq!(t.name(b"S"), Some(&b"Wipe"[..]));
+    // Kept through a save.
+    let doc = save_and_reopen(&doc);
+    // (A whole number of seconds may come back as an integer: the writer's choice.)
+    assert_eq!(page_dict(&doc, 2).get(b"Dur").and_then(Object::as_f64), Some(5.0));
+}
+
 /// A one-page document whose catalog has `xmp` as its (Flate-compressed) XMP packet, and the
 /// same title and author in `/Info`, as LibreOffice writes them.
 fn doc_with_xmp(xmp: &[u8]) -> Document {
@@ -1082,6 +1132,35 @@ fn inserting_a_file_brings_its_bookmarks_under_one_named_after_it() {
     assert!(!catalog(&host).contains(b"Outlines"));
 }
 
+/// Bookmarks say where on their page they go, through every kind of destination: explicit,
+/// named (resolved), and a GoTo action's.
+#[test]
+fn bookmarks_report_the_view_their_destination_asks_for() {
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 5 0 R /Names << /Dests << /Names [(sec) [4 0 R /FitH 300]] >> >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 400] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /Outlines /First 6 0 R /Last 9 0 R /Count 4 >>".into(),
+    ];
+    objs.push("<< /Title (Explicit) /Parent 5 0 R /Next 7 0 R /Dest [4 0 R /XYZ 20 250 null] >>".into()); // 6
+    objs.push("<< /Title (Named) /Parent 5 0 R /Prev 6 0 R /Next 8 0 R /Dest (sec) >>".into()); // 7
+    objs.push("<< /Title (Action) /Parent 5 0 R /Prev 7 0 R /Next 9 0 R /A << /S /GoTo /D [3 0 R /FitR 10 20 110 (x) 999] >> >>".into()); // 8
+    objs.push("<< /Title (Nowhere) /Parent 5 0 R /Prev 8 0 R /Dest (missing) >>".into()); // 9
+    let doc = open(build(&objs, "/Root 1 0 R"));
+    type View = Option<(Vec<u8>, Vec<Option<f64>>)>;
+    let views: Vec<(String, Option<usize>, View)> = bookmarks(&doc).into_iter().map(|b| (b.title, b.page, b.view)).collect();
+    assert_eq!(
+        views,
+        [
+            ("Explicit".into(), Some(1), Some((b"XYZ".to_vec(), vec![Some(20.0), Some(250.0), None]))),
+            ("Named".into(), Some(1), Some((b"FitH".to_vec(), vec![Some(300.0)]))),
+            ("Action".into(), Some(0), Some((b"FitR".to_vec(), vec![Some(10.0), Some(20.0), Some(110.0), None]))),
+            ("Nowhere".into(), None, None),
+        ]
+    );
+}
+
 #[test]
 fn combine_and_insert_share_identical_resources() {
     let a = doc_a();
@@ -1420,6 +1499,38 @@ fn number_pages_like_acrobat() {
     crate::number_pages(&mut d, 0, 5, Decimal, "", 1).unwrap();
     assert!(crate::page_label_ranges(&d).is_empty());
     assert!(d.get(d.root().unwrap()).as_dict().unwrap().get(b"PageLabels").is_none());
+}
+
+/// Deleting pages moves the label ranges with the pages they label (#2091): later ranges start that
+/// many pages earlier and keep numbering on, a range whose first page went starts on the next page
+/// left, and a range left with no pages gives way to the one after it.
+#[test]
+fn deleting_pages_keeps_the_label_ranges_on_their_pages() {
+    use crate::{LabelRange, LabelStyle::*};
+    let ten = || {
+        let mut d = doc_a();
+        for at in 3..10 {
+            crate::insert_blank_page(&mut d, at, 300.0, 400.0).unwrap();
+        }
+        let ranges = [
+            LabelRange { start: 0, style: LowerRoman, prefix: String::new(), first: 1 },
+            LabelRange { start: 3, style: Decimal, prefix: String::new(), first: 1 },
+            LabelRange { start: 7, style: Decimal, prefix: "A-".into(), first: 1 },
+        ];
+        crate::set_page_label_ranges(&mut d, &ranges).unwrap();
+        assert_eq!(crate::page_labels(&d).unwrap(), ["i", "ii", "iii", "1", "2", "3", "4", "A-1", "A-2", "A-3"]);
+        d
+    };
+    for (deleted, expected) in [
+        (&[4, 5][..], &["i", "ii", "iii", "1", "2", "A-1", "A-2", "A-3"][..]),
+        (&[3], &["i", "ii", "iii", "1", "2", "3", "A-1", "A-2", "A-3"]),
+        (&[3, 4, 5, 6], &["i", "ii", "iii", "A-1", "A-2", "A-3"]),
+    ] {
+        let mut d = ten();
+        crate::delete_pages(&mut d, deleted).unwrap();
+        assert_eq!(crate::page_labels(&d).unwrap(), expected, "after deleting {deleted:?}");
+        assert_eq!(crate::page_labels(&full_roundtrip(&d)).unwrap(), expected, "reopened after deleting {deleted:?}");
+    }
 }
 
 #[test]

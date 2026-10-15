@@ -343,6 +343,7 @@
 	Split	Teilen
 	More	Mehr
 	Set page boxes	Seitenrahmen festlegen
+	Set page transitions	Seitenübergänge festlegen
 	Page labels	Seitenbeschriftungen
 	Page transitions	Seitenübergänge
 	Add comments	Kommentare hinzufügen
@@ -555,6 +556,7 @@
 	Remove unused objects and merge identical ones	Unbenutzte Objekte entfernen und identische zusammenführen
 	Audit space usage…	Speicherbelegung prüfen…
 	Space Audit	Speicherbelegung
+	What takes up the space in this file, by kind of content.	Wofür der Platz in dieser Datei verwendet wird, nach Art des Inhalts.
 	Bytes	Bytes
 	Content Streams	Inhalts-Streams
 	X Object Forms	XObject-Formulare
@@ -1138,6 +1140,7 @@
 	Redaction code:	Schwärzungscode:
 	Font:	Schrift:
 	Font size:	Schriftgröße:
+	Font size	Schriftgröße
 	Auto-size text to fit redaction region	Textgröße automatisch an Schwärzungsbereich anpassen
 	Font colour:	Schriftfarbe:
 	Repeat overlay text	Überlagerungstext wiederholen
@@ -1278,6 +1281,7 @@
 	Copy text	Text kopieren
 	Properties…	Eigenschaften…
 	Make Current Properties Default	Als Standard festlegen
+	Make Properties Default	Eigenschaften als Standard festlegen
 	More options	Weitere Optionen
 	Sort by	Sortieren nach
 	Author	Verfasser
@@ -1398,6 +1402,9 @@
 	Sort comments by:	Kommentare sortieren nach:
 	Create PDF Comment Summary	Kommentarübersicht erstellen
 	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	Zur zuletzt gespeicherten Version von „{name}“ zurückkehren? Seitdem vorgenommene Änderungen lassen sich danach nicht wiederherstellen.
+	Save over the changed file?	Die geänderte Datei überschreiben?
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	„{name}“ wurde auf dem Datenträger geändert, seit es geöffnet oder zuletzt gespeichert wurde. Speichern ersetzt diese neuere Version durch diese hier.
+	Save anyway	Trotzdem speichern
 	Number pages	Seiten nummerieren
 	Style	Stil
 	None (prefix only)	Keiner (nur Präfix)
@@ -1603,6 +1610,7 @@
 	Sent to {printer}	An {printer} gesendet
 	Sent to {printer}: {msg}	An {printer} gesendet: {msg}
 	Looking for printers…	Drucker werden gesucht…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Es wurden keine Drucker gefunden. Prüfen Sie, ob der Drucker installiert ist und die Druckwarteschlange läuft, und öffnen Sie dann „Drucken“ erneut.
 	Sending to {printer}…	Wird an {printer} gesendet…
 	Choose a folder for the searchable files	Wähle einen Ordner für die durchsuchbaren Dateien
 	Files are combined in this order. Leave Pages empty to take every page.	Die Dateien werden in dieser Reihenfolge kombiniert. Lass „Seiten“ leer, um alle Seiten zu übernehmen.
@@ -2271,10 +2279,10 @@ key	Space	Leertaste
 	Printer paper and scaling may differ. Check driver settings.	Druckerpapier und Skalierung können abweichen. Treibereinstellungen prüfen.
 	Drawing scale changes. Use Actual size for full-scale plans.	Der Zeichnungsmaßstab ändert sich. Für maßstabsgetreue Pläne Tatsächliche Größe verwenden.
 	Reload documents when their files change on disk	Dokumente neu laden, wenn sich ihre Dateien auf dem Datenträger ändern
-	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Diese Datei wurde auf dem Datenträger geändert. Lade sie neu, um die neue Version zu sehen; deine nicht gespeicherten Änderungen gehen dabei verloren.
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Diese Datei wurde auf dem Datenträger geändert. „Neu laden“ zeigt die neue Version und verwirft Ihre ungespeicherten Änderungen; „Speichern“ ersetzt sie durch diese Version.
 	Reload	Neu laden
 	Couldn't reload {name}: {e}	{name} konnte nicht neu geladen werden: {e}
-	Mouse wheel scroll speed	Scrollgeschwindigkeit des Mausrads
+	Scroll speed (mouse wheel and arrow keys)	Bildlaufgeschwindigkeit (Mausrad und Pfeiltasten)
 scroll speed	Slow	Langsam
 scroll speed	Normal	Normal
 scroll speed	Fast	Schnell
@@ -2357,6 +2365,10 @@ animation effects	Off	Aus
 # Absolute local GoToR confirmation (#1364).
 	Allow	Zulassen
 	Only allow this if you trust the source document.	Lassen Sie dies nur zu, wenn Sie dem Quelldokument vertrauen.
+	Open in Full Screen mode?	Im Vollbildmodus öffnen?
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Dieses Dokument möchte im Vollbildmodus geöffnet werden: Die Seite füllt den Bildschirm, sonst wird nichts angezeigt. Mit Esc verlassen Sie ihn jederzeit.
+	Full Screen	Vollbild
+	Not now	Jetzt nicht
 	Open this local PDF?	Diese lokale PDF-Datei öffnen?
 	This document is trying to open a local file:	Dieses Dokument versucht, eine lokale Datei zu öffnen:
 	Move tag earlier	Tag früher verschieben
@@ -2391,3 +2403,14 @@ animation effects	Off	Aus
 	Print as image	Als Bild drucken
 	Resolution:	Auflösung:
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Verwenden, wenn ein Drucker Text, Schattierungen oder Transparenz auslässt. Der Ausdruck ist kein durchsuchbarer Text mehr; mit Graustufendruck sind die Bilder grau.
+	Crop Image	Bild zuschneiden
+	Remove Crop	Zuschnitt entfernen
+	Trim the picture with its handles; Enter or Done applies	Bild mit den Griffen zuschneiden; Eingabe oder Fertig übernimmt
+	Redaction mark appearance	Aussehen der Schwärzungsmarkierung
+	Outline colour:	Konturfarbe:
+	Fill colour:	Füllfarbe:
+	Shown while the pointer is over a mark.	Wird angezeigt, solange der Zeiger über einer Markierung ist.
+	Opacity:	Deckkraft:
+	Make properties default	Eigenschaften als Standard festlegen
+	Pages selected	Ausgewählte Seiten
+	Page properties	Seiteneigenschaften

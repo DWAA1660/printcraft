@@ -219,6 +219,7 @@
 	Remove unused objects and merge identical ones	刪除未使用的物件併合並相同的物件
 	Audit space usage…	審計空間使用情況…
 	Space Audit	空間審計
+	What takes up the space in this file, by kind of content.	此檔案的空間被哪些內容佔用，依內容類型列出。
 	Bytes	位元組
 	Content Streams	內容流
 	X Object Forms	XObject 表單
@@ -785,6 +786,8 @@
 	Redaction code:	遮蔽代碼：
 	Font:	字型：
 	Font size:	字型大小：
+	Font size:	字號：
+	Font size	字號
 	Auto-size text to fit redaction region	自動調整文字大小以適應遮蔽內容區域
 	Font colour:	字型顏色：
 	Repeat overlay text	重複覆蓋文字
@@ -930,6 +933,7 @@
 	Replace	取代
 	Split	分割
 	Set page boxes	設定頁面方框
+	Set page transitions	設定換頁效果
 	Page labels	頁面標籤
 	Page transitions	頁面轉場
 	Sticky note	便利貼註解
@@ -1184,6 +1188,7 @@
 	Copy text	複製文字
 	Properties…	屬性…
 	Make Current Properties Default	將目前屬性設為預設
+	Make Properties Default	將屬性設為預設
 	More options	更多選項
 	Sort by	排序方式
 	Author	作者
@@ -1316,6 +1321,10 @@
 	Sort comments by:	註解排序依據：
 	Create PDF Comment Summary	建立 PDF 註解摘要
 	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	還原到「{name}」的上次儲存版本？此後的更改將無法復原。
+	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	還原到“{name}”的上次儲存版本？此後的更改將無法復原。
+	Save over the changed file?	覆寫已變更的檔案？
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	「{name}」在開啟或上次儲存後已在磁碟上變更。現在儲存會以此版本取代那個較新的版本。
+	Save anyway	仍要儲存
 	Number pages	頁面編號
 	Style	樣式
 	None (prefix only)	無（僅字首）
@@ -1521,6 +1530,7 @@
 	Sent to {printer}	已傳送到{printer}
 	Sent to {printer}: {msg}	已傳送到{printer}：{msg}
 	Looking for printers…	正在尋找印表機…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	找不到印表機。請確認印表機已安裝、列印多工緩衝處理器正在執行，然後重新開啟「列印」。
 	Sending to {printer}…	正在傳送到{printer}…
 	Choose a folder for the searchable files	選擇可搜尋檔案的資料夾
 	Files are combined from top to bottom. Leave Pages empty to take every page.	檔案將按從上到下的順序合併。頁碼留空表示取全部頁面。
@@ -2140,14 +2150,14 @@ key	Space	空格
 	Tools	工具
 	Inspector	檢查器
 	Reload documents when their files change on disk	檔案在磁碟上變更時重新載入對應的文件
-	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	此檔案已在磁碟上變更。請重新載入以查看新版本；未儲存的變更將會遺失。
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	此檔案已在磁碟上變更。「重新載入」會顯示新版本並捨棄未儲存的變更；「儲存」則會以此版本取代它。
 	Reload	重新載入
 	Couldn't reload {name}: {e}	無法重新載入{name}：{e}
 	Select page {label}	選取頁面 {label}
 	Rotate page {label} counterclockwise	逆時針旋轉頁面 {label}
 	Rotate page {label} clockwise	順時針旋轉頁面 {label}
 	Delete page {label}	刪除頁面 {label}
-	Mouse wheel scroll speed	滑鼠滾輪捲動速度
+	Scroll speed (mouse wheel and arrow keys)	捲動速度（滑鼠滾輪與方向鍵）
 scroll speed	Slow	慢
 scroll speed	Normal	正常
 scroll speed	Fast	快
@@ -2230,6 +2240,10 @@ animation effects	Off	關
 # Absolute local GoToR confirmation (#1364).
 	Allow	允許
 	Only allow this if you trust the source document.	只有在您信任來源文件時，才允許此操作。
+	Open in Full Screen mode?	要以全螢幕模式開啟嗎？
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	這份文件要求以全螢幕模式開啟：頁面佔滿整個螢幕，不顯示其他東西。隨時按 Esc 即可離開。
+	Full Screen	全螢幕
+	Not now	暫時不要
 	Open this local PDF?	要開啟此本機 PDF 嗎？
 	This document is trying to open a local file:	此文件正嘗試開啟本機檔案：
 	Move tag earlier	將標記前移
@@ -2344,3 +2358,14 @@ animation effects	Off	關
 	Print as image	以影像列印
 	Resolution:	解析度：
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	當印表機漏印文字、漸層或透明效果時使用。列印結果不再是可搜尋的文字；搭配灰階列印時影像為灰色。
+	Crop Image	裁切影像
+	Remove Crop	移除裁切
+	Trim the picture with its handles; Enter or Done applies	用控點裁切圖片;按 Enter 或「完成」套用
+	Redaction mark appearance	塗黑標記外觀
+	Outline colour:	輪廓色彩:
+	Fill colour:	填滿色彩:
+	Shown while the pointer is over a mark.	指標位於標記上方時顯示。
+	Opacity:	不透明度:
+	Make properties default	將內容設為預設
+	Pages selected	選取的頁面
+	Page properties	頁面屬性

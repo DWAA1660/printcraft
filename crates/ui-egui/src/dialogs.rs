@@ -20,6 +20,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     save_prompt(app, ctx);
     link_prompt(app, ctx);
     remote_link_prompt(app, ctx);
+    full_screen_prompt(app, ctx);
     crate::updates::dialog(app, ctx);
     if app.dialog != Some(Dialog::WordCount) {
         app.word_count_draft.cancel();
@@ -62,6 +63,8 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let mut import_words = false;
     let mut print_go = false;
     let mut revert_now = false;
+    let mut overwrite_now = false;
+    let mut overwrite_elsewhere = false;
     let mut summarize_now = false;
     let mut optimize_now = false;
     let mut duplicate_now: Option<Edit> = None;
@@ -118,7 +121,12 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 let row = |ui: &mut egui::Ui, k: &str, v: String| {
                     // Row labels are UI chrome; values are document data and stay as they are.
                     ui.label(egui::RichText::new(tl!(k)).color(t.text_muted));
-                    ui.label(if v.is_empty() { egui::RichText::new("—").color(t.text_faint) } else { egui::RichText::new(v) });
+                    ui.scope(|ui| {
+                        ui.set_max_width(420.0);
+                        ui.add(
+                            egui::Label::new(if v.is_empty() { egui::RichText::new("—").color(t.text_faint) } else { egui::RichText::new(v) }).wrap(),
+                        );
+                    });
                     ui.end_row();
                 };
                 egui::ScrollArea::vertical().max_height(460.0).auto_shrink([false, true]).show(ui, |ui| {
@@ -537,6 +545,15 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 let mut prefs = app.redact_prefs.clone();
                 let (ok, cancel) = crate::redact_ui::props_body(ui, &mut prefs, &t);
                 app.redact_prefs = prefs;
+                if ok && app.redact_prefs.remember {
+                    app.redact_defaults = app.redact_prefs.clone();
+                }
+                if cancel && let Some(before) = app.redact_before.take() {
+                    app.redact_prefs = before;
+                }
+                if ok {
+                    app.redact_before = None;
+                }
                 close = ok || cancel;
                 return;
             }
@@ -784,6 +801,33 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 });
                 return;
             }
+            Dialog::OverwriteChanged => {
+                #[cfg(not(target_arch = "wasm32"))]
+                let name = app.pending_overwrite.as_ref().and_then(|p| app.session.get(p.id)).map(|d| d.name.clone()).unwrap_or_default();
+                #[cfg(target_arch = "wasm32")]
+                let name = String::new();
+                ui.label(egui::RichText::new(tl!("Save over the changed file?")).font(theme::semibold(18.0)));
+                ui.add_space(8.0);
+                ui.label(crate::i18n::fmt(
+                    tl!("“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one."),
+                    &[("name", &name)],
+                ));
+                ui.add_space(12.0);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if widgets::pill_button(ui, tl!("Save anyway"), true).clicked() {
+                        overwrite_now = true;
+                        close = true;
+                    }
+                    if widgets::pill_button(ui, tl!("Save as…"), false).clicked() {
+                        overwrite_elsewhere = true;
+                        close = true;
+                    }
+                    if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+                        close = true;
+                    }
+                });
+                return;
+            }
             Dialog::Print => {
                 let Some((i, id)) = app.active_ids() else {
                     close = true;
@@ -800,6 +844,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     ui.ctx().input(|i| i.max_texture_side) as f32,
                 );
                 let view = &mut app.views[i];
+                view.set_print_grayscale(app.print_draft.grayscale);
                 view.queue_print_previews(&rasters);
                 let (go, cancel) = crate::print_ui::body(ui, &mut app.print_draft, &t, &sizes, &labels, &mut |p| {
                     view.need_thumbnail(p, true);
@@ -1199,6 +1244,22 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if revert_now {
         app.revert_active();
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if overwrite_now {
+            app.overwrite_changed_file();
+        }
+        if overwrite_elsewhere {
+            app.save_changed_file_elsewhere();
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = (overwrite_now, overwrite_elsewhere);
+    // Cancelled or dismissed: the save is dropped.
+    #[cfg(not(target_arch = "wasm32"))]
+    if dialog == Dialog::OverwriteChanged && (modal.should_close() || close) {
+        app.pending_overwrite = None;
+    }
     if summarize_now {
         app.summarize_comments();
     }
@@ -1277,6 +1338,10 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
             _ => {
                 app.apply_edit(Edit::Batch { label: "Change comment properties".into(), edits });
             }
+        }
+        // Make Properties Default: the look chosen here, even when it was already the comment's.
+        if d.make_default && d.edited.restylable {
+            app.make_props_default(d.page, d.index, &d.edited);
         }
     }
     if export_now && let Dialog::Export(kind) = dialog {
@@ -1515,6 +1580,48 @@ fn link_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
     if let Some(open) = choice {
         app.resolve_pending_link(open);
+    }
+}
+
+/// A document that asks to open in Full Screen mode (`/PageMode /FullScreen`) is asked about
+/// first, as Acrobat does: full screen hides every control, so it is the person's choice.
+fn full_screen_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    let Some(id) = app.pending_full_screen else { return };
+    // The document was closed before an answer: nothing to ask any more.
+    if app.session.get(id).is_none() {
+        app.pending_full_screen = None;
+        return;
+    }
+    let t = Tokens::get(ctx);
+    let mut choice = None;
+    let modal = widgets::show_modal(ctx, "full_screen_prompt", |ui| {
+        ui.set_width(460.0);
+        ui.horizontal(|ui| {
+            ui.add(crate::icons::image("maximize", 22.0, t.accent));
+            ui.label(egui::RichText::new(tl!("Open in Full Screen mode?")).font(theme::semibold(16.0)));
+        });
+        ui.add_space(6.0);
+        ui.add(
+            egui::Label::new(tl!(
+                "This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it."
+            ))
+            .wrap(),
+        );
+        ui.add_space(14.0);
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if widgets::pill_button(ui, tl!("Not now"), true).clicked() {
+                choice = Some(false);
+            }
+            if widgets::pill_button(ui, tl!("Full Screen"), false).clicked() {
+                choice = Some(true);
+            }
+        });
+    });
+    if choice.is_none() && modal.should_close() {
+        choice = Some(false);
+    }
+    if let Some(allow) = choice {
+        app.resolve_full_screen_prompt(ctx, allow);
     }
 }
 

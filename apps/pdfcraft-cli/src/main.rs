@@ -312,6 +312,7 @@ fn info(args: &[String]) -> Result<(), CliError> {
         "xfa_layout": xfa_layout,
         "bookmarks": info.outline.len(), "annotations": info.annotations.len(), "fields": info.fields.len(),
         "links": info.links.len(), "layers": info.layers.len(), "attachments": info.attachments.len(),
+        "transitions": info.transitions.len(),
         "page_labels": info.pages.iter().take(8).map(|p| p.label.clone()).collect::<Vec<_>>(),
         "warnings": info.warnings,
     });
@@ -497,7 +498,16 @@ fn edit(args: &[String]) -> Result<(), CliError> {
         session.apply(id, e).map_err(|e| e.to_string())?;
     }
     let bytes = if full { session.save_full_bytes(id) } else { session.save_bytes(id) }.map_err(|e| e.to_string())?;
-    std::fs::write(out, bytes.as_slice()).map_err(|e| format!("{out}: {e}").into())
+    // As the app's Save: the file must reopen with its pages before it replaces anything (#1698).
+    session.check_save(id, &bytes).map_err(|e| e.to_string())?;
+    write_pdf(Path::new(out), &bytes)
+}
+
+/// Write a PDF a command produced, through a staging file beside the target (#2166): a write
+/// that fails, or `--out` naming the input, never leaves a truncated file where a good one was.
+fn write_pdf(out: &Path, bytes: &[u8]) -> Result<(), CliError> {
+    use pdfcraft_platform::staging::{StagingName, write_atomically};
+    write_atomically(out, bytes, StagingName::SuffixThenTag).map_err(|e| format!("{}: {e}", out.display()).into())
 }
 
 fn file_stem(path: &str) -> String {
@@ -513,7 +523,7 @@ fn combine(args: &[String]) -> Result<(), CliError> {
     }
     let sources = inputs.iter().map(|p| Ok((file_stem(p), read(p)?))).collect::<Result<Vec<_>, String>>()?;
     let bytes = pdfcraft_engine::Session::new().combine(&sources).map_err(|e| e.to_string())?;
-    std::fs::write(out, bytes.as_slice()).map_err(|e| format!("{out}: {e}").into())
+    write_pdf(Path::new(out), &bytes)
 }
 
 fn extract(args: &[String]) -> Result<(), CliError> {
@@ -524,7 +534,7 @@ fn extract(args: &[String]) -> Result<(), CliError> {
     let mut session = pdfcraft_engine::Session::new();
     let id = session.open(path, None, read(path)?, flag(args, "--password")).map_err(|e| e.to_string())?;
     let bytes = session.extract(id, &pages).map_err(|e| e.to_string())?;
-    std::fs::write(out, bytes.as_slice()).map_err(|e| format!("{out}: {e}").into())
+    write_pdf(Path::new(out), &bytes)
 }
 
 fn split(args: &[String]) -> Result<(), CliError> {
@@ -546,7 +556,7 @@ fn split(args: &[String]) -> Result<(), CliError> {
     std::fs::create_dir_all(&dir).map_err(|e| format!("split: --out-dir {}: {e}", dir.display()))?;
     for (a, b, bytes) in parts {
         let name = dir.join(if a == b { format!("{stem}-p{a}.pdf") } else { format!("{stem}-p{a}-{b}.pdf") });
-        std::fs::write(&name, bytes.as_slice()).map_err(|e| format!("{}: {e}", name.display()))?;
+        write_pdf(&name, &bytes)?;
         stdout_line(format_args!("{}", name.display()))?;
     }
     Ok(())
@@ -567,8 +577,11 @@ fn render(args: &[String]) -> Result<(), CliError> {
         Some("pam") => None,
         _ => return Err(format!("render: --out {out}: use a .png, .jpg, .tif or .pam name").into()),
     };
+    // The app renders a display copy that draws comments missing their /AP streams; the CLI
+    // must agree with it (and with independent viewers), while keeping the file it reads intact.
+    let bytes = read(path)?;
     let mut r = PageRenderer::new(
-        read(path)?,
+        pdfcraft_engine::display_bytes_for(bytes.clone(), flag(args, "--password")),
         RenderConfig { password: flag(args, "--password").map(Arc::from), reject_oversize: true, ..Default::default() },
     );
     let p = r.render(RenderRequest { page: page_index, kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0, preview: false });

@@ -1812,6 +1812,34 @@ fn form_refresh_keeps_first_value_when_field_names_repeat() {
 }
 
 #[test]
+fn multiselect_choice_indices_stay_sorted_through_engine_save_and_reopen() {
+    let (mut s, id) = session_with(1);
+    s.apply(
+        id,
+        Edit::AddField {
+            page: 0,
+            rect: [20.0, 180.0, 180.0, 240.0],
+            kind: NewField::List { options: vec!["Cheese".into(), "Ham".into(), "Olives".into()], multi: true },
+            name: Some("toppings".into()),
+        },
+    )
+    .unwrap();
+    let chosen = vec!["Olives".to_string(), "Ham".to_string()];
+    s.apply(id, Edit::SetFieldValue { name: "toppings".into(), value: FieldValue::Choice(chosen.clone()) }).unwrap();
+    assert_eq!(s.get(id).unwrap().form[0].value, chosen, "the live engine keeps selection order");
+    let saved = s.save_bytes(id).unwrap();
+    let cos = pdfcraft_cos::Document::open(saved.clone()).unwrap();
+    let all = pdfcraft_forms::fields(&cos);
+    let list = all.iter().find(|field| field.name == "toppings").unwrap();
+    let object = cos.get(list.obj);
+    let indices = object.as_dict().unwrap().get(b"I").unwrap().as_array().unwrap();
+    assert_eq!(indices.iter().map(|index| index.as_int().unwrap()).collect::<Vec<_>>(), [1, 2]);
+    assert_eq!(list.value, chosen, "sorted /I does not reorder /V");
+    let reopened = s.open("reopened.pdf", None, saved, None).unwrap();
+    assert_eq!(s.get(reopened).unwrap().form[0].value, chosen, "reopening keeps selection order");
+}
+
+#[test]
 fn preparing_a_form_adds_renames_and_deletes_fields() {
     let (mut s, id) = session_with(1);
     assert!(s.get(id).unwrap().form.is_empty());
@@ -4317,6 +4345,51 @@ fn comments_without_appearances_are_drawn_but_not_saved() {
     }
 }
 
+/// A page with a FreeText comment that has no `/AP` stream: the smallest case behind #2371.
+fn free_text_without_appearance() -> Arc<Vec<u8>> {
+    let objs: Vec<&[u8]> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /FreeText /Rect [20 200 180 260] /Contents (Box) /DA (/Helv 10 Tf 0 0 1 rg) /Border [0 0 1] /C [.85 .47 .02] >>",
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        bytes.extend_from_slice(o);
+        bytes.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Arc::new(bytes)
+}
+
+/// #2371: a comment without an appearance stream is displayed by the app, so the CLI's page image
+/// must show it too. The helper's copy is for rendering only; documents that need no copy, and
+/// files it can't display, keep exactly the original source bytes.
+#[test]
+fn cli_display_adds_missing_appearances_without_changing_the_source() {
+    let original = free_text_without_appearance();
+    let display = display_bytes_for(original.clone(), None);
+    assert_ne!(display.as_slice(), original.as_slice(), "the display copy draws the missing comment appearance");
+
+    let doc = pdfcraft_cos::Document::open(display).unwrap();
+    let object = doc.get(pdfcraft_cos::ObjRef::new(4, 0));
+    let annot = object.as_dict().unwrap();
+    assert!(annot.contains(b"AP"), "the display copy has an appearance stream");
+
+    let plain = Arc::new(fixture(1));
+    assert!(Arc::ptr_eq(&display_bytes_for(plain.clone(), None), &plain), "a complete document needs no copy");
+    let damaged = Arc::new(b"not a PDF".to_vec());
+    assert!(Arc::ptr_eq(&display_bytes_for(damaged.clone(), None), &damaged), "an unreadable file falls back to its source");
+}
+
 /// Titles a browser writes for a blank page or a pop-up name no document; real titles stay.
 #[test]
 fn placeholder_titles_are_recognised() {
@@ -5015,4 +5088,127 @@ fn printing_as_image_sends_pictures_instead_of_pages() {
     let png = ex.png(0, 36.0).unwrap();
     let img = image::load_from_memory(&png).unwrap().to_rgba8();
     assert!(img.pixels().all(|p| p[0] == p[1] && p[1] == p[2]), "every pixel grey");
+}
+
+/// A one-page PDF: a JPEG logo (DCTDecode) at the top and a big text title below it.
+fn jpeg_cover_pdf(logo_y: i32) -> Vec<u8> {
+    let mut jpeg = Vec::new();
+    let img = image::RgbImage::from_fn(40, 20, |x, y| image::Rgb([(x * 6) as u8, (y * 12) as u8, 90]));
+    image::codecs::jpeg::JpegEncoder::new(&mut jpeg).encode_image(&img).unwrap();
+    let content = format!(
+        "q 200 0 0 100 72 {logo_y} cm /Im1 Do Q BT /F1 30 Tf 72 580 Td (Annual Report) Tj ET \
+BT /F1 11 Tf 72 500 Td (Body text that is long enough to count as the body size of this page.) Tj ET"
+    );
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    let mut add = |pdf: &mut Vec<u8>, n: usize, body: &[u8]| {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{n} 0 obj\n").as_bytes());
+        pdf.extend_from_slice(body);
+        pdf.extend_from_slice(b"\nendobj\n");
+    };
+    add(&mut pdf, 1, b"<< /Type /Catalog /Pages 2 0 R >>");
+    add(&mut pdf, 2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    add(
+        &mut pdf,
+        3,
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im1 6 0 R >> >> >>",
+    );
+    add(&mut pdf, 4, format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).as_bytes());
+    add(&mut pdf, 5, b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+    let mut obj = format!("<< /Type /XObject /Subtype /Image /Width 40 /Height 20 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {} >>\nstream\n", jpeg.len()).into_bytes();
+    obj.extend_from_slice(&jpeg);
+    obj.extend_from_slice(b"\nendstream");
+    add(&mut pdf, 6, &obj);
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len() + 1).as_bytes());
+    for o in &offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", offsets.len() + 1).as_bytes());
+    pdf
+}
+
+/// #1936: a JPEG logo on a cover page reaches the Word file as the unchanged JPEG, both where it
+/// sits clear of the title (inline) and where it overlaps it (a positioned page).
+#[test]
+fn exporting_a_jpeg_logo_to_word_keeps_the_image() {
+    for (logo_y, overlaps) in [(650, false), (560, true)] {
+        let pdf = jpeg_cover_pdf(logo_y);
+        let mut s = Session::new();
+        let id = s.open("c.pdf", None, Arc::new(pdf), None).unwrap();
+        let d = s.get(id).unwrap();
+        let pages = d.export_pages();
+        assert_eq!((pages[0].images.len(), pages[0].images[0].ext), (1, "jpg"), "overlap {overlaps}");
+        let jpeg = pages[0].images[0].bytes.clone();
+        assert!(jpeg.starts_with(&[0xFF, 0xD8]));
+        let docx = d.export_office(compare::OfficeFormat::Docx);
+        assert!(docx.windows(21).any(|w| w == b"word/media/image1.jpg"), "overlap {overlaps}");
+        assert!(docx.windows(jpeg.len()).any(|w| w == jpeg.as_slice()), "the JPEG is stored unchanged (overlap {overlaps})");
+    }
+}
+
+/// Cropping an existing page image (Acrobat's crop handles on a picture) shows only the chosen
+/// box, the pixels staying where they are: `visible_rect` says what shows, the full placement is
+/// unchanged, and a later move carries the crop along.
+#[test]
+fn cropping_an_existing_image_clips_it_and_moves_with_it() {
+    let mut s = Session::new();
+    let mut px = image::RgbaImage::new(40, 40);
+    for (x, y, p) in px.enumerate_pixels_mut() {
+        *p = if x < 20 {
+            image::Rgba([255, 0, 0, 255])
+        } else if y < 20 {
+            image::Rgba([0, 255, 0, 255])
+        } else {
+            image::Rgba([0, 0, 255, 255])
+        };
+    }
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(px).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let pic = s.create_from_images(&[("p.png".into(), png.into_inner())]).unwrap();
+    let id = s.open("p.pdf", None, pic, None).unwrap();
+    let full = s.get(id).unwrap().page_images(0)[0].rect;
+    let (w, h) = (full[2] - full[0], full[3] - full[1]);
+    // Keep the right half, upper part.
+    let keep = [full[0] + w / 2.0, full[1] + h / 2.0, full[2], full[3]];
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Crop(keep) }).unwrap();
+    let d = s.get(id).unwrap();
+    assert_eq!(d.can_undo(), Some("Crop image"));
+    let im = &d.page_images(0)[0];
+    assert_eq!(im.rect, full, "the placement is not scaled");
+    let v = im.visible_rect.expect("clipped");
+    assert!(v.iter().zip(keep.iter()).all(|(a, b)| (a - b).abs() < 0.01), "{v:?} vs {keep:?}");
+    // What shows: the kept quarter is green, the cropped-away quarters are paper.
+    let (pw, ph, rgba) = {
+        let mut ex = crate::export::Exporter::new(d);
+        let png = ex.png(0, 72.0).unwrap();
+        let img = image::load_from_memory(&png).unwrap().to_rgba8();
+        (img.width(), img.height(), img)
+    };
+    let at = |fx: f64, fy: f64| rgba.get_pixel((pw as f64 * fx) as u32, (ph as f64 * fy) as u32).0;
+    let page_h = d.info.pages[0].height as f64;
+    let page_w = d.info.pages[0].width as f64;
+    // Fractions of the page from the top-left: the kept box is the top-right quarter of the image.
+    let fx = |x: f64| x / page_w;
+    let fy = |y: f64| 1.0 - y / page_h;
+    assert_eq!(at(fx(full[0] + 0.75 * w), fy(full[1] + 0.75 * h))[1], 255, "kept green");
+    assert_eq!(at(fx(full[0] + 0.25 * w), fy(full[1] + 0.25 * h)), [255, 255, 255, 255], "cropped-away red is gone");
+    // A move takes the crop along (down and left, so the kept part stays on the page).
+    let to = [full[0] - 10.0, full[1] - 10.0, full[2] - 10.0, full[3] - 10.0];
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Move(to) }).unwrap();
+    let im = &s.get(id).unwrap().page_images(0)[0];
+    let v = im.visible_rect.expect("still clipped");
+    let moved_keep = [keep[0] - 10.0, keep[1] - 10.0, keep[2] - 10.0, keep[3] - 10.0];
+    assert!(v.iter().zip(moved_keep.iter()).all(|(a, b)| (a - b).abs() < 0.01), "{v:?} vs {moved_keep:?}");
+    // Cropping again replaces the earlier crop, so the picture can grow back (Remove crop).
+    let full_now = s.get(id).unwrap().page_images(0)[0].rect;
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Crop(full_now) }).unwrap();
+    let im = &s.get(id).unwrap().page_images(0)[0];
+    let v = im.visible_rect.expect("visible");
+    let page = [0.0, 0.0, page_w, page_h];
+    let shown = [full_now[0].max(page[0]), full_now[1].max(page[1]), full_now[2].min(page[2]), full_now[3].min(page[3])];
+    assert!(v.iter().zip(shown.iter()).all(|(a, b)| (a - b).abs() < 0.01), "{v:?} vs {shown:?}");
+    // No area, or a box off the image, is refused.
+    assert!(s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Crop([10.0, 10.0, 10.0, 50.0]) }).is_err());
 }

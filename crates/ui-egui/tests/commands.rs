@@ -71,7 +71,8 @@ const PICKERS: &[&str] = &[
 #[test]
 fn every_registered_command_is_implemented() {
     for spec in COMMANDS {
-        if PICKERS.contains(&spec.id) {
+        // Page-text Copy needs a loaded view and egui context, covered by ui_group::text_select.
+        if PICKERS.contains(&spec.id) || spec.id == "edit.copy" {
             continue;
         }
         let mut app = PdfCraftApp::new();
@@ -148,9 +149,19 @@ fn every_registered_command_is_implemented() {
         if spec.id == "view.layout.cover" {
             app.set_option("layout", "two-up").unwrap();
         }
+        // History commands need a real jump (and Back first to make Forward available).
+        if matches!(spec.id, "view.previous_view" | "view.next_view") {
+            app.views[0].go_to_page(1);
+            if spec.id == "view.next_view" {
+                assert!(app.views[0].view_history(false));
+            }
+        }
         let dir = std::env::temp_dir().join(format!("pdfcraft-cmd-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         app.save_override = Some(dir.join("out.pdf").to_string_lossy().into_owned());
+        // A picker the list above misses (file.pin_folder, create.multiple_separate did) must not
+        // open a real file dialog on the desktop running the tests: answer it as a cancel.
+        app.pick_override = Some(Vec::new());
         assert!(app.execute(spec.id), "{} is registered but not implemented (or wrongly disabled)", spec.id);
     }
 }
@@ -490,6 +501,36 @@ fn the_about_dialog_shows_the_running_version() {
     h.state_mut().execute("help.about");
     h.run_steps(3);
     h.get_by_label_contains(&format!("Version {}", env!("CARGO_PKG_VERSION")));
+}
+
+#[test]
+fn quit_shortcut_requires_exact_modifiers_and_preserves_unsaved_work() {
+    for (os, modifiers) in [
+        (OperatingSystem::Windows, Modifiers { ctrl: true, command: true, ..Default::default() }),
+        (OperatingSystem::Mac, Modifiers { mac_cmd: true, command: true, ..Default::default() }),
+    ] {
+        for (extra, dirty, should_close) in
+            [(Modifiers::ALT, false, false), (Modifiers::SHIFT, false, false), (Modifiers::NONE, false, true), (Modifiers::NONE, true, false)]
+        {
+            let mut h = harness();
+            h.ctx.set_os(os);
+            if dirty {
+                assert!(h.state_mut().execute("page.insert_blank"));
+                h.run_steps(2);
+            }
+            h.event(egui::Event::Key { key: Key::Q, physical_key: None, pressed: true, repeat: false, modifiers: modifiers | extra });
+            h.step();
+            let closes = h.output().viewport_output.values().any(|v| v.commands.contains(&egui::ViewportCommand::Close));
+            assert_eq!(closes, should_close, "{os:?}, extra={extra:?}, dirty={dirty}");
+            if dirty {
+                h.get_by_label("Cancel").click();
+                h.run_steps(2);
+                assert_eq!(h.state().views.len(), 1);
+                assert!(h.state().session.get(h.state().views[0].id).unwrap().dirty);
+                assert!(!h.output().viewport_output.values().any(|v| v.commands.contains(&egui::ViewportCommand::Close)));
+            }
+        }
+    }
 }
 
 #[test]
