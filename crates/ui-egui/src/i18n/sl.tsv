@@ -1051,6 +1051,7 @@
 	Low resolution	Nizka ločljivost
 	Magnification	Povečava
 	Make Current Properties Default	Nastavi kot privzeto
+	Make Properties Default	Lastnosti nastavi kot privzete
 	Make accessible	Naredi dostopno
 	Make scans searchable, then make them smaller.	Skenirane dokumente naredite iskalne, nato pa jih zmanjšajte.
 	Manage embedded index	Upravljaj vdelani indeks
@@ -2226,6 +2227,7 @@ key	Shift	Shift
 key	Space	Preslednica
 @plural	{n} object selected|{n} objects selected	{n} izbran objekt|{n} izbrana objekta|{n} izbrani objekti|{n} izbranih objektov
 	Looking for printers…	Iskanje tiskalnikov…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Ni najdenih tiskalnikov. Preverite, ali je tiskalnik nameščen in ali tiskalna vrsta deluje, nato znova odprite Natisni.
 	Sending to {printer}…	Pošiljanje na {printer}…
 	Float panel	Odtrgaj razdelek
 	Inspector	Inšpektor
@@ -2281,7 +2283,7 @@ key	Space	Preslednica
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Ta datoteka se je na disku spremenila. Ponovno naloži pokaže novo različico in zavrže neshranjene spremembe; Shrani jo zamenja s to različico.
 	Reload	Znova naloži
 	Couldn't reload {name}: {e}	Datoteke {name} ni bilo mogoče znova naložiti: {e}
-	Mouse wheel scroll speed	Hitrost drsenja s kolescem miške
+	Scroll speed (mouse wheel and arrow keys)	Hitrost drsenja (kolesce miške in puščične tipke)
 scroll speed	Slow	Počasi
 scroll speed	Normal	Običajno
 scroll speed	Fast	Hitro

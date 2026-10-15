@@ -1296,6 +1296,7 @@
 	Copy text	テキストをコピー
 	Properties…	プロパティ…
 	Make Current Properties Default	現在のプロパティを既定にする
+	Make Properties Default	プロパティを既定にする
 	More options	詳細オプション
 	Sort by	並べ替え
 	Author	作成者
@@ -1625,6 +1626,7 @@
 	Sent to {printer}	{printer} に送信しました
 	Sent to {printer}: {msg}	{printer} に送信しました: {msg}
 	Looking for printers…	プリンターを検索しています…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	プリンターが見つかりません。プリンターがインストールされ、印刷スプーラーが動作していることを確認してから、もう一度［印刷］を開いてください。
 	Sending to {printer}…	{printer} に送信しています…
 	Choose a folder for the searchable files	検索可能なファイルの保存先フォルダーを選択
 	Files are combined from top to bottom. Leave Pages empty to take every page.	ファイルは上から順に結合されます。すべてのページを使用する場合は「ページ」を空欄にしてください。
@@ -2279,7 +2281,7 @@ key	Space	スペース
 	Rotate page {label} counterclockwise	ページ {label} を反時計回りに回転
 	Rotate page {label} clockwise	ページ {label} を時計回りに回転
 	Delete page {label}	ページ {label} を削除
-	Mouse wheel scroll speed	マウスホイールのスクロール速度
+	Scroll speed (mouse wheel and arrow keys)	スクロール速度（マウスホイールと矢印キー）
 scroll speed	Slow	遅い
 scroll speed	Normal	標準
 scroll speed	Fast	速い

@@ -799,6 +799,23 @@ fn display_bytes(editor: Option<&mut Editor>, bytes: &Arc<Vec<u8>>) -> Arc<Vec<u
     write_incremental(&display, &SaveOptions::default()).map(Arc::new).unwrap_or_else(|_| bytes.clone())
 }
 
+/// The copy PDFCraft displays when opening `bytes`: with appearances drawn, in memory only, for
+/// comments that have none. Render paths outside the app, such as the CLI, use this so their page
+/// images agree with the app and independent viewers. It never changes the source document, and an
+/// unparseable file, a write failure or a parser panic falls back to the original bytes.
+pub fn display_bytes_for(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Arc<Vec<u8>> {
+    guard(|| {
+        pdfcraft_cos::Document::open_with_password(bytes.clone(), password)
+            .ok()
+            .and_then(|cos| pdfcraft_annot::with_missing_appearances(&cos))
+            .and_then(|display| write_incremental(&display, &SaveOptions::default()).ok())
+            .map(Arc::new)
+    })
+    .ok()
+    .flatten()
+    .unwrap_or(bytes)
+}
+
 /// Fails when the renderer still draws text under an applied redaction mark.
 ///
 /// Redaction decides what lies under a mark from the positions its own interpreter computes, and
@@ -924,6 +941,8 @@ pub struct BookmarkRow {
     pub open: bool,
     /// The 0-based page it goes to.
     pub page: Option<usize>,
+    /// Where on that page it goes ([`pdfcraft_render::DestView::Top`] when it doesn't say).
+    pub view: pdfcraft_render::DestView,
 }
 
 /// One page of the bookmark list, in outline order.
@@ -951,7 +970,7 @@ fn outline_rows(items: &[pdfcraft_render::OutlineItem]) -> Vec<BookmarkRow> {
             top.1 += 1;
         }
         let path: Vec<usize> = levels.iter().map(|(_, listed)| listed.saturating_sub(1)).collect();
-        rows.push(BookmarkRow { path, title: item.title.clone(), open: item.open, page: item.page });
+        rows.push(BookmarkRow { path, title: item.title.clone(), open: item.open, page: item.page, view: item.view });
         if !item.children.is_empty() {
             levels.push((&item.children, 0));
         }
@@ -2762,6 +2781,11 @@ pub struct Session {
     next_id: u64,
     /// Seconds since the Unix epoch, injected so saves are deterministic in tests.
     clock: Option<fn() -> i64>,
+    /// Seconds to add to UTC for local time, read from whoever knows the zone (a browser, say).
+    /// Separate from `clock` on purpose: `clock` alone is the test shortcut that takes the
+    /// injected time AS local time and zeroes the zone, so injecting only it leaves either the
+    /// local dates or the UTC ones wrong by the zone's offset.
+    utc_offset: Option<fn() -> i64>,
     /// Certificates trusted for signing (Acrobat: Trusted Certificates).
     trust: Arc<TrustStore>,
     /// Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript, inverted (on by default).
@@ -3100,6 +3124,28 @@ impl Session {
         self
     }
 
+    /// A real clock for a host that has neither a clock nor a time zone of its own (a
+    /// `wasm32-unknown-unknown` build: `now()` would be empty and `local_utc_offset()` is 0, so
+    /// Fill & Sign stamps 1 Jan 1970 and `/ModDate` is never written). `clock` is the UTC time in
+    /// seconds since the epoch; `utc_offset` is the local zone's seconds east of UTC, asked on every
+    /// use because the zone changes with the date (daylight saving). Unlike
+    /// [`Session::with_clock`], which is a test shortcut, nothing here is taken as local time.
+    pub fn with_wall_clock(mut self, clock: fn() -> i64, utc_offset: fn() -> i64) -> Self {
+        self.clock = Some(clock);
+        self.utc_offset = Some(utc_offset);
+        self
+    }
+
+    /// Seconds to add to UTC for the local time of this session: the injected zone, else 0 under
+    /// the test clock (which is already local), else the system's.
+    fn local_offset(&self) -> i64 {
+        match (self.utc_offset, self.clock) {
+            (Some(zone), _) => zone(),
+            (None, Some(_)) => 0,
+            (None, None) => local_utc_offset(),
+        }
+    }
+
     /// Seconds since the Unix epoch from the session clock (0 when unknown).
     pub fn now_secs(&self) -> i64 {
         self.now().unwrap_or(0)
@@ -3119,7 +3165,7 @@ impl Session {
     /// is taken as local time.
     /// A dynamic stamp's second line: "By Ada at 2:14 pm, Oct 02, 2026" (local time).
     pub fn stamp_by_line(&self, author: &str) -> String {
-        let offset = if self.clock.is_some() { 0 } else { local_utc_offset() };
+        let offset = self.local_offset();
         let d = self.now().map(|t| pdfcraft_cos::pdf_date(t + offset)).unwrap_or_default();
         let num = |a: usize, b: usize| d.get(a..b).and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
         let (y, mo, day, hh, mm) = (num(2, 6), num(6, 8), num(8, 10), num(10, 12), num(12, 14));
@@ -3130,7 +3176,7 @@ impl Session {
     }
 
     pub fn today(&self) -> (i64, u32, u32) {
-        let offset = if self.clock.is_some() { 0 } else { local_utc_offset() };
+        let offset = self.local_offset();
         self.now().map(|t| pdfcraft_cos::pdf_date(t + offset)).as_deref().and_then(parse_ymd).unwrap_or((1970, 1, 1))
     }
 
@@ -4412,7 +4458,17 @@ impl Session {
         let doc = self.get(id)?;
         if let Some(editor) = doc.editor.as_ref() {
             let page = pdfcraft_organize::bookmark_page(&editor.cos, offset, limit);
-            let rows = page.bookmarks.into_iter().map(|b| BookmarkRow { path: b.path, title: b.title, open: b.open, page: b.page }).collect();
+            let rows = page
+                .bookmarks
+                .into_iter()
+                .map(|b| {
+                    let view = b.view.map_or_else(Default::default, |(kind, numbers)| {
+                        let numbers: Vec<Option<f32>> = numbers.iter().map(|n| n.map(|n| n as f32)).collect();
+                        pdfcraft_render::DestView::from_operands(Some(&kind), &numbers)
+                    });
+                    BookmarkRow { path: b.path, title: b.title, open: b.open, page: b.page, view }
+                })
+                .collect();
             return Some(BookmarkPage { rows, next: page.next, truncated: false });
         }
         let all = outline_rows(&doc.info.outline);
@@ -4580,7 +4636,7 @@ impl Session {
 
     /// The signing time as a PDF date in local time with its offset (`D:…+02'00'`).
     pub fn signing_date(&self) -> String {
-        let offset = if self.clock.is_some() { 0 } else { local_utc_offset() };
+        let offset = self.local_offset();
         let local = pdfcraft_cos::pdf_date(self.now().unwrap_or(0) + offset);
         let stamp = local.trim_end_matches('Z');
         if offset == 0 {

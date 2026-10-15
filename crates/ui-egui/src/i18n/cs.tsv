@@ -1363,6 +1363,7 @@ key	Space	Mezerník
 	Copy text	Kopírovat text
 	Properties…	Vlastnosti…
 	Make Current Properties Default	Nastavit aktuální vlastnosti jako výchozí
+	Make Properties Default	Nastavit vlastnosti jako výchozí
 	More options	Další možnosti
 	Sort by	Seřadit podle
 	Author	Autor
@@ -2263,6 +2264,7 @@ certificate	Subject	Subjekt
 	Remove page	Odebrat stránku
 	Remove {n} pages	Odebrat stránky ({n})
 	Looking for printers…	Hledání tiskáren…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Nebyly nalezeny žádné tiskárny. Zkontrolujte, že je tiskárna nainstalovaná a zařazování tisku běží, a pak znovu otevřete Tisk.
 	Sending to {printer}…	Odesílání na {printer}…
 	Fill colour	Barva výplně
 	Fill colour: none	Barva výplně: žádná
@@ -2330,7 +2332,7 @@ certificate	Subject	Subjekt
 	Active	Aktivní
 	Dark theme	Tmavý motiv
 	Appearance settings…	Nastavení vzhledu…
-	Mouse wheel scroll speed	Rychlost posouvání kolečkem myši
+	Scroll speed (mouse wheel and arrow keys)	Rychlost posouvání (kolečko myši a šipky)
 scroll speed	Slow	Pomalá
 scroll speed	Normal	Normální
 scroll speed	Fast	Rychlá

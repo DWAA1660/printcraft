@@ -1293,6 +1293,7 @@
 	Copy text	Копіювати текст
 	Properties…	Властивості…
 	Make Current Properties Default	Зробити поточні властивості типовими
+	Make Properties Default	Зробити властивості типовими
 	More options	Додаткові параметри
 	Sort by	Сортувати за
 	Author	Автор
@@ -1613,6 +1614,7 @@
 	Sent to {printer}	Надіслано на {printer}
 	Sent to {printer}: {msg}	Надіслано на {printer}: {msg}
 	Looking for printers…	Пошук принтерів…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Принтери не знайдено. Перевірте, що принтер установлено, а диспетчер друку працює, і знову відкрийте «Друк».
 	Sending to {printer}…	Надсилання на {printer}…
 	Choose a folder for the searchable files	Виберіть теку для файлів із пошуком
 	Files are combined from top to bottom. Leave Pages empty to take every page.	Файли об’єднуються згори донизу. Залиште «Сторінки» порожнім, щоб узяти всі сторінки.
@@ -2301,7 +2303,7 @@ key	Space	Пробіл
 	Rotate page {label} counterclockwise	Повернути сторінку {label} проти годинникової стрілки
 	Rotate page {label} clockwise	Повернути сторінку {label} за годинниковою стрілкою
 	Delete page {label}	Видалити сторінку {label}
-	Mouse wheel scroll speed	Швидкість прокручування коліщатком миші
+	Scroll speed (mouse wheel and arrow keys)	Швидкість прокручування (коліщатко миші та клавіші зі стрілками)
 scroll speed	Slow	Повільна
 scroll speed	Normal	Звичайна
 scroll speed	Fast	Швидка

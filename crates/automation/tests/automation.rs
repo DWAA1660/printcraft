@@ -245,6 +245,30 @@ fn autotag_preview_proposes_text_without_changing_the_pdf() {
 }
 
 #[test]
+fn render_pixels_agrees_with_page_render_and_skips_the_png() {
+    let dir = workdir("render-pixels");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+
+    let (width, height, pixels) = a.render_pixels(doc, 1, 1.0).unwrap();
+    let png = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap();
+    let Content::Png { width: png_width, height: png_height, .. } = png[0] else { panic!("expected an image") };
+    assert_eq!((width, height), (png_width, png_height), "scale 1.0 is 72 dpi, like the tool");
+    assert_eq!(pixels.as_ref().len(), width as usize * height as usize * 4, "RGBA, four bytes a pixel");
+    assert!(pixels.as_ref().as_chunks::<4>().0.iter().any(|p| p[..3] != [255, 255, 255]), "the page text is drawn, not a blank sheet");
+
+    let (double_width, _, _) = a.render_pixels(doc, 1, 2.0).unwrap();
+    assert_eq!(double_width, width * 2, "the scale is pixels per point");
+
+    for scale in [0.0_f32, -1.0, f32::NAN, f32::INFINITY, 1.0e6] {
+        assert!(matches!(a.render_pixels(doc, 1, scale), Err(ToolError::InvalidArgs(_))), "scale {scale} must be refused");
+    }
+    assert!(matches!(a.render_pixels(doc, 0, 1.0), Err(ToolError::InvalidArgs(_))), "pages are 1-based");
+    assert!(matches!(a.render_pixels(doc, 99, 1.0), Err(ToolError::InvalidArgs(_))), "a page past the end");
+    assert!(matches!(a.render_pixels(9_999, 1, 1.0), Err(ToolError::Failed(_))), "a document that is not open");
+}
+
+#[test]
 fn autotag_apply_writes_reviewable_tags_and_survives_save_reopen() {
     let dir = workdir("autotag-apply");
     let mut a = auto(&dir);
@@ -1539,6 +1563,54 @@ fn bookmark_list_pages_reach_bookmarks_past_the_hundred_thousandth() {
     assert_eq!((titles.first().copied(), titles.last().copied(), late["next"].clone()), (Some("Item 100000"), Some("Item 100004"), json!(null)));
     assert!(matches!(a.call("bookmark_list", &json!({ "doc": doc, "limit": 1001 })), Err(ToolError::InvalidArgs(_))));
     assert!(matches!(a.call("bookmark_list", &json!({ "doc": doc, "offset": -1 })), Err(ToolError::InvalidArgs(_))));
+}
+
+/// Bookmarks and links say where on the page they go, in the same top-left points as rect, and a
+/// link through a named destination says which page that is.
+#[test]
+fn destinations_are_listed_with_their_position() {
+    let dir = workdir("destination-positions");
+    let objs: Vec<&str> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 5 0 R /Names << /Dests << /Names [(sec-b) [4 0 R /XYZ 72 500 0]] >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 612 792] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [8 0 R 9 0 R 10 0 R] >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+        "<< /Type /Outlines /First 6 0 R /Last 7 0 R /Count 2 >>",
+        "<< /Title (Section B) /Parent 5 0 R /Next 7 0 R /Dest [4 0 R /XYZ 72 500 0] >>",
+        "<< /Title (Wide view) /Parent 5 0 R /Prev 6 0 R /Dest [4 0 R /FitH 400] >>",
+        "<< /Type /Annot /Subtype /Link /Rect [72 700 300 716] /Border [0 0 0] /Dest [4 0 R /XYZ 72 500 2] >>",
+        "<< /Type /Annot /Subtype /Link /Rect [72 670 300 686] /Border [0 0 0] /Dest (sec-b) >>",
+        "<< /Type /Annot /Subtype /Link /Rect [72 640 300 656] /Border [0 0 0] /A << /S /URI /URI (https://example.com) >> >>",
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    std::fs::write(dir.join("dests.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "dests.pdf" }))["doc"].as_u64().unwrap();
+    let marks = ok(&mut a, "bookmark_list", json!({ "doc": doc }));
+    // 792 − 500 = 292 points from the top; a zoom of 0 keeps the reader's zoom.
+    assert_eq!(marks["bookmarks"][0]["destination"], json!({ "fit": "XYZ", "left": 72.0, "top": 292.0, "zoom": null }), "{marks}");
+    assert_eq!(marks["bookmarks"][1]["destination"], json!({ "fit": "FitH", "left": null, "top": 392.0 }), "{marks}");
+    let links = ok(&mut a, "link_list", json!({ "doc": doc }));
+    let explicit = &links["links"][0];
+    assert_eq!(
+        (explicit["to_page"].clone(), explicit["destination"].clone()),
+        (json!(2), json!({ "fit": "XYZ", "left": 72.0, "top": 292.0, "zoom": 2.0 }))
+    );
+    let named = &links["links"][1];
+    assert_eq!((named["to_page"].clone(), named["named"].clone(), named.get("other")), (json!(2), json!(true), None), "{links}");
+    assert_eq!(named["destination"]["top"], 292.0);
+    assert_eq!((links["links"][2]["url"].clone(), links["links"][2].get("destination")), (json!("https://example.com"), None));
 }
 
 #[test]
@@ -3336,6 +3408,67 @@ fn an_applied_redaction_at_the_end_of_a_line_audits_clean() {
     assert!(text.contains("Mail the team:") && !text.contains("someone") && !text.contains("0042"), "{text}");
     let r = ok(&mut a, "doc_audit_redactions", json!({ "doc": doc }));
     assert_eq!(r["count"], 0, "{r}");
+}
+
+/// A long tagged document lists its tags a page at a time, and only the types, pages or depths
+/// asked for: a 20-page guide has hundreds of tags, more than one tool result should hold.
+#[test]
+fn structure_tags_are_listed_a_page_at_a_time() {
+    let dir = workdir("tags-paging");
+    // A Document holding, on each of 3 pages, one H1 and 149 P: 451 tags.
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R /MarkInfo << /Marked true >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 200 200] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        String::new(), // 6: the root, below
+        String::new(), // 7: the Document, below
+    ];
+    let mut kids = Vec::new();
+    for page in 0..3 {
+        for i in 0..150 {
+            let n = objs.len() + 1;
+            kids.push(format!("{n} 0 R"));
+            objs.push(format!("<< /S /{} /P 7 0 R /Pg {} 0 R >>", if i == 0 { "H1" } else { "P" }, 3 + page));
+        }
+    }
+    objs[5] = "<< /Type /StructTreeRoot /K 7 0 R >>".into();
+    objs[6] = format!("<< /S /Document /P 6 0 R /K [{}] >>", kids.join(" "));
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    std::fs::write(dir.join("long.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "long.pdf" }))["doc"].as_u64().unwrap();
+    let first = ok(&mut a, "accessibility_tags", json!({ "doc": doc }));
+    assert_eq!((first["count"].as_u64(), first["tags"].as_array().map(Vec::len), first["next"].as_u64()), (Some(451), Some(200), Some(200)));
+    assert_eq!(first["tags"][0]["type"], "Document");
+    let last = ok(&mut a, "accessibility_tags", json!({ "doc": doc, "offset": 400, "limit": 100 }));
+    assert_eq!((last["tags"].as_array().map(Vec::len), last["next"].clone()), (Some(51), Value::Null));
+    let headings = ok(&mut a, "accessibility_tags", json!({ "doc": doc, "types": ["H1"] }));
+    let pages: Vec<u64> = headings["tags"].as_array().unwrap().iter().map(|t| t["page"].as_u64().unwrap()).collect();
+    assert_eq!((headings["count"].as_u64(), pages), (Some(3), vec![1, 2, 3]));
+    let page2 = ok(&mut a, "accessibility_tags", json!({ "doc": doc, "pages": [2], "types": ["H1", "P"], "limit": 1000 }));
+    assert_eq!((page2["count"].as_u64(), page2["next"].clone()), (Some(150), Value::Null));
+    assert_eq!(ok(&mut a, "accessibility_tags", json!({ "doc": doc, "max_depth": 0 }))["count"], 1, "the Document alone");
+    for bad in [
+        json!({ "doc": doc, "limit": 0 }),
+        json!({ "doc": doc, "limit": 1001 }),
+        json!({ "doc": doc, "offset": -1 }),
+        json!({ "doc": doc, "pages": [0] }),
+    ] {
+        assert!(matches!(a.call("accessibility_tags", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
 }
 
 #[test]

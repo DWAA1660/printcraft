@@ -1243,6 +1243,7 @@
 	Copy text	复制文本
 	Properties…	属性…
 	Make Current Properties Default	将当前属性设为默认
+	Make Properties Default	将属性设为默认
 	More options	更多选项
 	Sort by	排序方式
 	Author	作者
@@ -1583,6 +1584,7 @@
 	Sent to {printer}	已发送到{printer}
 	Sent to {printer}: {msg}	已发送到{printer}：{msg}
 	Looking for printers…	正在查找打印机…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	未找到打印机。请检查打印机是否已安装、打印后台处理程序是否在运行，然后重新打开“打印”。
 	Sending to {printer}…	正在发送到{printer}…
 	Choose a folder for the searchable files	选择可搜索文件的文件夹
 	Files are combined from top to bottom. Leave Pages empty to take every page.	文件按从上到下的顺序合并。页码留空表示取全部页面。
@@ -2243,7 +2245,7 @@ key	Space	空格
 	Rotate page {label} counterclockwise	逆时针旋转页面 {label}
 	Rotate page {label} clockwise	顺时针旋转页面 {label}
 	Delete page {label}	删除页面 {label}
-	Mouse wheel scroll speed	鼠标滚轮滚动速度
+	Scroll speed (mouse wheel and arrow keys)	滚动速度（鼠标滚轮和方向键）
 scroll speed	Slow	慢
 scroll speed	Normal	正常
 scroll speed	Fast	快

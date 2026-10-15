@@ -25,6 +25,9 @@ const THUMB_TAG: u64 = 1 << 63;
 const TEXT_TAG: u64 = 1 << 62;
 /// A page rendered for the organize grid at the size it is drawn there.
 const GRID_TAG: u64 = 1 << 61;
+/// Preview rasters tagged with this bit are converted to luminance on receipt, matching the
+/// monochrome print requested by Print ▸ Print in grayscale.
+const GRAYSCALE_TAG: u64 = 1 << 60;
 /// The tag of a raster that is out of date (shown until its replacement arrives).
 const STALE_TAG: u64 = u64::MAX;
 /// Pages whose raster would exceed this many device pixels on a side are drawn in tiles.
@@ -358,6 +361,8 @@ pub struct DocView {
     current_scale_tag: u64,
     /// Print dialog: the current sheet's pages at the preview pane's device resolution.
     print_pages: HashMap<usize, (u64, TextureHandle)>,
+    /// Print dialog: preview rasters become luminance when Print ▸ Print in grayscale is on.
+    grayscale: bool,
     /// Sharp tiles of large pages: (page, scale tag, tile x, tile y) → texture. Tiles of an
     /// earlier zoom stay, drawn stretched, until those of the current one cover the page.
     tiles: HashMap<(usize, u64, u32, u32), TextureHandle>,
@@ -410,6 +415,9 @@ pub struct DocView {
     /// line being edited.
     pub(crate) edit_lines: HashMap<usize, (u64, Vec<pdfcraft_engine::TextBlock>)>,
     pub line_editor: Option<crate::edit_text_ui::LineEditor>,
+    /// The box a click switched to while another paragraph was being edited: it opens once the
+    /// queued edit has applied, so its index and geometry come from the document it now is (#2022).
+    pub(crate) pending_text_open: Option<(usize, usize)>,
     pub(crate) text_background: crate::edit_text_ui::TextBackground,
     pub(crate) move_background: crate::content_ui::MoveBackground,
     /// Edit text & images: the images per page (by document generation), and the selected one.
@@ -635,6 +643,7 @@ impl DocView {
             stale_tiles: HashSet::new(),
             current_scale_tag: 0,
             print_pages: HashMap::new(),
+            grayscale: false,
             tiles: HashMap::new(),
             texts: HashMap::new(),
             text_failed: HashSet::new(),
@@ -664,6 +673,7 @@ impl DocView {
             pending_edit: None,
             edit_lines: HashMap::new(),
             line_editor: None,
+            pending_text_open: None,
             text_background: Default::default(),
             move_background: Default::default(),
             edit_images: HashMap::new(),
@@ -830,6 +840,13 @@ impl DocView {
 
     pub fn render_pending(&self) -> bool {
         !self.last_queue.is_empty() || self.text_background.pending() || self.move_background.pending()
+    }
+
+    /// The cached tile keys of a page, as (scale tag, tile x, tile y) (diagnostics and tests).
+    pub fn tiles_debug(&self, page: usize) -> Vec<(u64, u32, u32)> {
+        let mut k: Vec<(u64, u32, u32)> = self.tiles.keys().filter(|key| key.0 == page).map(|key| (key.1, key.2, key.3)).collect();
+        k.sort_unstable();
+        k
     }
 
     /// Re-render every page and text layer (the document's appearance changed, e.g. a layer
@@ -1558,8 +1575,13 @@ impl DocView {
         }
         self.pages.retain(|p, _| pages.contains(p));
         // Tiles of an earlier zoom (not a demanded scale) stay while the canvas keeps them, a
-        // bounded few under a page whose current tiles are still missing (OLD_TILES).
-        self.tiles.retain(|key, _| tiles.contains(key) || !tile_tags.contains(&key.1));
+        // bounded few under a page whose current tiles are still missing (OLD_TILES). Tiles of a
+        // page on screen stay too even when this frame does not demand them (#2196): the viewport
+        // moves while zooming, so a tile that was sharp a moment ago falls outside the demanded
+        // rectangle, and dropping it made every pan or zoom back a cold miss that re-blurred the
+        // page and re-interpreted it once per tile. The per-frame cap below (OLD_TILES,
+        // nearest scale first) is what bounds how much of that stays.
+        self.tiles.retain(|key, _| tiles.contains(key) || !tile_tags.contains(&key.1) || self.frame_visible.contains(&key.0));
         self.stale_tiles.retain(|key| self.tiles.contains_key(key));
         queue.extend(grid);
         // Opening (or turning to) a page queues its pixels alongside thumbnails and
@@ -1714,7 +1736,11 @@ impl DocView {
                 self.comments.page_rendered(page);
             }
         } else if r.request.tag & PRINT_TAG != 0 {
-            let tex = ctx.load_texture(format!("print-{:?}-{page}", self.id), img, TextureOptions::LINEAR);
+            let tex = ctx.load_texture(
+                format!("print-{:?}-{page}", self.id),
+                if r.request.tag & GRAYSCALE_TAG != 0 { grayscale(img) } else { img },
+                TextureOptions::LINEAR,
+            );
             self.print_pages.insert(page, (r.request.tag, tex));
         } else if r.request.tag & GRID_TAG != 0 {
             let tex = ctx.load_texture(format!("grid-{:?}-{page}", self.id), img, TextureOptions::LINEAR);
@@ -1850,6 +1876,15 @@ impl DocView {
         self.zoom * PT * ppp
     }
 
+    /// Set whether the print preview rasters become luminance before upload. Toggling it drops
+    /// the colour previews: new requests carry the grayscale tag, so stale ones are replaced.
+    pub(crate) fn set_print_grayscale(&mut self, grayscale: bool) {
+        if self.grayscale != grayscale {
+            self.grayscale = grayscale;
+            self.print_pages.clear();
+        }
+    }
+
     /// Queue sharp rasters for the print preview. Pages that leave the nearby sheets are dropped.
     /// Previews render with reading colours off (the request's tag tells the renderer): they must
     /// match the printout, which is imposed from the uncoloured document.
@@ -1859,7 +1894,7 @@ impl DocView {
             if self.errors.contains_key(&page) || !scale.is_finite() || scale <= 0.0 {
                 continue;
             }
-            let tag = scale_tag(scale) | PRINT_TAG;
+            let tag = scale_tag(scale) | PRINT_TAG | if self.grayscale { GRAYSCALE_TAG } else { 0 };
             let fresh = self.print_pages.get(&page).is_some_and(|(have, _)| *have == tag);
             if !fresh {
                 self.frame_queue.push(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale, tag, preview: false });
@@ -2032,7 +2067,7 @@ impl PageXform {
     }
 }
 
-pub fn shortcuts(view: &mut DocView, ctx: &egui::Context) {
+pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_speed::ScrollSpeed) {
     use egui::{Key, KeyboardShortcut, Modifiers};
     if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::F))) {
         view.open_find();
@@ -2122,9 +2157,12 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context) {
     // ↓ / ↑ scroll a line, and Page Down / Page Up a screen where the pages scroll. In
     // single-page view, ↓ / ↑ turn the page once there is nothing left to scroll that way, as
     // the wheel does (#273): always on a page that fits.
+    // The Scroll speed preference sets how far ↓ / ↑ go as well as the wheel (#985); Page Down /
+    // Page Up keep a screen.
     if !command {
+        let line = KEY_SCROLL_LINE * speed.factor();
         let screen = (view.viewport_h - KEY_SCROLL_LINE).max(KEY_SCROLL_LINE);
-        let steps = [(Key::ArrowDown, KEY_SCROLL_LINE), (Key::ArrowUp, -KEY_SCROLL_LINE), (Key::PageDown, screen), (Key::PageUp, -screen)];
+        let steps = [(Key::ArrowDown, line), (Key::ArrowUp, -line), (Key::PageDown, screen), (Key::PageUp, -screen)];
         for (k, by) in steps {
             let arrow = matches!(k, Key::ArrowDown | Key::ArrowUp);
             if !key(k) || !(scrolls || arrow) {
@@ -2150,8 +2188,8 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context) {
     }
 }
 
-/// How far ↓ / ↑ scroll: a mouse-wheel line on the desktop. Page Down / Page Up keep this much
-/// of the previous screen in view.
+/// How far ↓ / ↑ scroll at Normal speed (Scroll speed halves or doubles it). Page Down / Page Up
+/// keep this much of the previous screen in view.
 const KEY_SCROLL_LINE: f32 = 40.0;
 
 pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
@@ -2460,6 +2498,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let redact_mark = (app.redact_prefs.hover_fill, app.redact_prefs.opacity);
     let units = app.units;
     let allowed = doc.allows_annotation();
+    let can_copy = doc.allows_copying();
+    let mut copy_selected = false;
     let comments_hidden = doc.comments_hidden();
     let form = doc.form.clone();
     let can_fill = doc.allows_form_filling();
@@ -3321,6 +3361,15 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 }
                 return;
             }
+            if view.comments.selected.is_none() {
+                let selected = view.selected_text().is_some_and(|t| !t.is_empty());
+                let key = crate::commands::shortcut_label(ui.ctx(), crate::commands::COPY);
+                if ui.add_enabled(can_copy && selected, egui::Button::new(tl!("Copy")).shortcut_text(key)).clicked() {
+                    copy_selected = true;
+                    ui.close();
+                }
+                ui.separator();
+            }
             // Over a picture (and no comment): Copy Image, as in Acrobat's page menu.
             let mut copy_image = None;
             if view.comments.selected.is_none()
@@ -3364,7 +3413,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     view.viewport_screen = out.inner_rect;
     view.auto_scroll.paint(ui, avail);
     if unobstructed && matches!(tool, QuickTool::Select | QuickTool::ColumnSelect) {
-        selection_actions(ui, avail, view, info, prefs, allowed && !comments_hidden);
+        copy_selected |= selection_actions(ui, avail, view, info, prefs, allowed && !comments_hidden, can_copy);
     }
 
     // Collect all main-page demand, including cached surfaces, for byte admission later.
@@ -3387,17 +3436,36 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let (mut wanted, visible_now) = out.inner;
     let cur = view.current;
     wanted.sort_by_key(|w| (!visible_now.contains(&w.0), w.0.abs_diff(cur), w.3.is_some()));
-    // Tiles of far-away pages are useless: free them. Tiles of other zooms stay only while a
-    // current tile of their page is still missing, at most `OLD_TILES` of them, nearest scale first.
+    // Tiles of far-away pages are useless: free them. Tiles of an earlier zoom stay for a page
+    // that is on screen, whether or not the page is tiled at this zoom (#2196): a zoom out below
+    // the tiling threshold used to drop the tiles of the zoom just left, so coming back to it
+    // was a cold miss and the page re-blurred through the backdrop while every tile was
+    // interpreted again. `OLD_TILES` still bounds how many older tiles are kept, nearest scale
+    // first, and admission keeps them inside `TILE_BYTES`.
     let missing: HashSet<usize> = wanted.iter().filter(|w| w.3.is_some()).map(|w| w.0).collect();
-    view.tiles.retain(|(p, t, _, _), _| p.abs_diff(cur) <= 2 && (*t == tag || missing.contains(p)));
+    let on_screen: HashSet<usize> = visible_now.iter().copied().collect();
+    view.tiles.retain(|(p, t, _, _), _| p.abs_diff(cur) <= 2 && (*t == tag || missing.contains(p) || on_screen.contains(p)));
     let mut older: Vec<(f32, (usize, u64, u32, u32))> =
         view.tiles.keys().filter(|k| k.1 != tag).map(|k| ((tag_scale(k.1) / scale).ln().abs(), *k)).collect();
-    if older.len() > OLD_TILES {
-        older.sort_by(|a, b| a.0.total_cmp(&b.0));
-        for (_, k) in older.drain(OLD_TILES..) {
-            view.tiles.remove(&k);
+    // Tiles of earlier zooms are kept nearest scale first, and bounded by count *and* bytes: a
+    // large scan renders a tile up to 4096² (about 67 MiB), so a count alone let a few tiles of
+    // a few zooms run far past the tile allowance. #2196 keeps a zoom already visited, which
+    // makes that reachable in ordinary zooming, so the byte bound has to be here too.
+    older.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut kept = 0usize;
+    let mut kept_bytes = 0usize;
+    let mut drop: Vec<(usize, u64, u32, u32)> = Vec::new();
+    for (_dist, key) in older {
+        let bytes = view.tiles.get(&key).map_or(0, texture_bytes);
+        if kept >= OLD_TILES || kept_bytes.saturating_add(bytes) > TILE_BYTES {
+            drop.push(key);
+        } else {
+            kept = kept.saturating_add(1);
+            kept_bytes = kept_bytes.saturating_add(bytes);
         }
+    }
+    for key in drop {
+        view.tiles.remove(&key);
     }
     let mut queue: Vec<RenderRequest> = wanted
         .iter()
@@ -3640,6 +3708,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if let Some((name, action)) = app.views[index].forms.button.take() {
         run_button(app, index, &name, action);
     }
+    if copy_selected {
+        app.execute("edit.copy");
+    }
     quick_bar(app, avail, ui);
     if let Some((source, file, destination)) = remote_open {
         app.open_remote_link(source, file, destination);
@@ -3655,21 +3726,29 @@ enum SelectionAction {
 }
 
 /// Actions on an existing text selection, next to the selected words.
-fn selection_actions(ui: &mut egui::Ui, viewport: Rect, view: &mut DocView, info: &DocInfo, prefs: &comments::CommentPrefs, can_comment: bool) {
+fn selection_actions(
+    ui: &mut egui::Ui,
+    viewport: Rect,
+    view: &mut DocView,
+    info: &DocInfo,
+    prefs: &comments::CommentPrefs,
+    can_comment: bool,
+    can_copy: bool,
+) -> bool {
     if ui.input(|input| input.pointer.is_decidedly_dragging()) {
-        return;
+        return false;
     }
-    let Some(selection) = view.selection else { return };
-    let Some(text) = view.texts.get(&selection.page) else { return };
-    let Some(xf) = view.page_xform(selection.page) else { return };
-    let Some(last) = selection.rects(text).last().copied() else { return };
+    let Some(selection) = view.selection else { return false };
+    let Some(text) = view.texts.get(&selection.page) else { return false };
+    let Some(xf) = view.page_xform(selection.page) else { return false };
+    let Some(last) = selection.rects(text).last().copied() else { return false };
     let selected = selection.text(text);
     if selected.is_empty() {
-        return;
+        return false;
     }
     let rect = xf.view_rect(last);
     if !viewport.intersects(rect) {
-        return;
+        return false;
     }
     let x = rect.left().clamp(viewport.left() + 8.0, (viewport.right() - 520.0).max(viewport.left() + 8.0));
     let y = if rect.bottom() + 48.0 < viewport.bottom() { rect.bottom() + 6.0 } else { (rect.top() - 44.0).max(viewport.top() + 6.0) };
@@ -3688,18 +3767,17 @@ fn selection_actions(ui: &mut egui::Ui, viewport: Rect, view: &mut DocView, info
                         chosen = Some(action);
                     }
                 }
-                if ui.button(tl!("Copy")).clicked() {
+                if ui.add_enabled(can_copy, egui::Button::new(tl!("Copy"))).clicked() {
                     chosen = Some(SelectionAction::Copy);
                 }
             });
         });
     });
-    let Some(action) = chosen else { return };
+    let Some(action) = chosen else { return false };
     if let SelectionAction::Copy = action {
-        ui.ctx().copy_text(selected);
-        return;
+        return true;
     }
-    let Some((page, quads)) = view.selection_quads(info) else { return };
+    let Some((page, quads)) = view.selection_quads(info) else { return false };
     let last = quads.last().copied().unwrap_or_default();
     let at = [last[2].max(last[6]), last[1].max(last[3])];
     view.clear_selection();
@@ -3718,7 +3796,7 @@ fn selection_actions(ui: &mut egui::Ui, viewport: Rect, view: &mut DocView, info
         }
         SelectionAction::Markup(tool) => {
             // Every markup button carries a markup tool; anything else adds nothing.
-            let Some(kind) = tool.markup() else { return };
+            let Some(kind) = tool.markup() else { return false };
             view.pending_edit = Some(Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
                 page,
                 shape: pdfcraft_engine::Shape::TextMarkup { kind, quads },
@@ -3727,9 +3805,10 @@ fn selection_actions(ui: &mut egui::Ui, viewport: Rect, view: &mut DocView, info
                 author: prefs.author.clone(),
             }));
         }
-        // Copied above.
+        // Copy is dispatched through the app after the view borrow ends.
         SelectionAction::Copy => {}
     }
+    false
 }
 
 /// Run a push button's action (the ones that need no JavaScript engine).
@@ -4776,6 +4855,28 @@ pub(crate) fn texture_image(size: [usize; 2], pixels: pdfcraft_render::Pixels) -
     }
 }
 
+/// A luminance preview for a monochrome print. `Color32` stores premultiplied pixels, so a
+/// non-opaque colour's alpha is restored after multiplying the unmultiplied RGB by its
+/// luminance. This uses the display gamma-space weights users expect in editors/print dialogs,
+/// not the linear-light coefficients of a colour-managed render.
+fn grayscale(mut img: egui::ColorImage) -> egui::ColorImage {
+    for c in img.pixels.iter_mut() {
+        let a = c.a();
+        let luminance = f32::from(c.r()) * 0.299_f32 + f32::from(c.g()) * 0.587_f32 + f32::from(c.b()) * 0.114_f32;
+        let gray = if a == 0 || a == 255 {
+            luminance.round() as u8
+        } else {
+            // Unmultiply first, so translucent content keeps its paper-relative luminance.
+            let f = f32::from(a) / 255.0;
+            let un = [f32::from(c.r()) / f, f32::from(c.g()) / f, f32::from(c.b()) / f];
+            let l = un[0] * 0.299_f32 + un[1] * 0.587_f32 + un[2] * 0.114_f32;
+            (f * l).round() as u8
+        };
+        *c = Color32::from_rgba_premultiplied(gray, gray, gray, a);
+    }
+    img
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -4838,6 +4939,26 @@ mod tests {
     fn hover_popup_skips_fill_and_sign_marks() {
         assert_eq!(annotation_hover_text(&annotation(false)).as_deref(), Some("FreeText\nHello"));
         assert_eq!(annotation_hover_text(&annotation(true)), None);
+    }
+
+    #[test]
+    fn grayscale_converts_colours_to_their_luminance() {
+        let img = egui::ColorImage::new([2, 1], vec![Color32::from_rgb(255, 0, 0), Color32::from_rgba_premultiplied(0, 51, 102, 128)]);
+        let gray = grayscale(img);
+        let opaque = gray.pixels[0];
+        assert_eq!(opaque.to_array(), [76, 76, 76, 255]);
+        // Unmultiply RGB first, so a translucent colour keeps its paper-relative luminance.
+        let translucent = gray.pixels[1];
+        assert_eq!(translucent.to_array(), [42, 42, 42, 128]);
+    }
+
+    #[test]
+    fn black_white_and_transparents_are_preserved_by_grayscale() {
+        let img = egui::ColorImage::new([3, 1], vec![Color32::BLACK, Color32::WHITE, Color32::TRANSPARENT]);
+        let gray = grayscale(img);
+        assert_eq!(gray.pixels[0].to_array(), [0, 0, 0, 255]);
+        assert_eq!(gray.pixels[1].to_array(), [255, 255, 255, 255]);
+        assert_eq!(gray.pixels[2].to_array(), [0, 0, 0, 0]);
     }
 
     #[test]

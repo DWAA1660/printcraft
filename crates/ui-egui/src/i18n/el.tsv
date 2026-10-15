@@ -852,6 +852,7 @@
 	Set status	Ορισμός κατάστασης
 	Properties…	Ιδιότητες…
 	Make Current Properties Default	Ορισμός τρεχουσών ιδιοτήτων ως προεπιλογών
+	Make Properties Default	Ορισμός ιδιοτήτων ως προεπιλογών
 	Colour	Χρώμα
 	Show all comments	Εμφάνιση όλων των σχολίων
 	Create PDF comment summary…	Δημιουργία σύνοψης σχολίων σε PDF…
@@ -2247,6 +2248,7 @@ comment menu	Edit	Επεξεργασία
 	Fill & Sign signature	Υπογραφή από το εργαλείο «Συμπλήρωση και υπογραφή»
 	Choose image…	Επιλογή εικόνας…
 	Looking for printers…	Αναζήτηση εκτυπωτών…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Δεν βρέθηκαν εκτυπωτές. Ελέγξτε ότι ο εκτυπωτής είναι εγκατεστημένος και ότι η ουρά εκτύπωσης εκτελείται και, στη συνέχεια, ανοίξτε ξανά την Εκτύπωση.
 	Sending to {printer}…	Αποστολή στον {printer}…
 	Enter permissions password…	Εισαγωγή κωδικού δικαιωμάτων…
 	Permissions password	Κωδικός δικαιωμάτων
@@ -2284,7 +2286,7 @@ comment menu	Edit	Επεξεργασία
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Αυτό το αρχείο άλλαξε στον δίσκο. Η επαναφόρτωση δείχνει τη νέα έκδοση και απορρίπτει τις μη αποθηκευμένες αλλαγές σας· η αποθήκευση την αντικαθιστά με αυτή την έκδοση.
 	Reload	Επαναφόρτωση
 	Couldn't reload {name}: {e}	Δεν ήταν δυνατή η επαναφόρτωση του {name}: {e}
-	Mouse wheel scroll speed	Ταχύτητα κύλισης τροχού ποντικιού
+	Scroll speed (mouse wheel and arrow keys)	Ταχύτητα κύλισης (τροχός ποντικιού και πλήκτρα βέλους)
 scroll speed	Slow	Αργή
 scroll speed	Normal	Κανονική
 scroll speed	Fast	Γρήγορη

@@ -511,6 +511,28 @@ fn comments_are_selected_moved_and_deleted_with_the_select_tool() {
 }
 
 #[test]
+fn a_shape_just_drawn_resizes_from_its_handles_without_the_select_tool() {
+    // #2338: the new shape showed its handles, but only the Select tool answered them.
+    let square = QuickTool::Comment(pdfcraft_ui_egui::comments::CommentTool::Rectangle);
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the new rectangle is selected");
+    let before = comments(&h)[0].rect;
+    // Drag its bottom-right handle 40 pt right and 20 pt down.
+    drag_pt(&mut h, (before[2], before[1]), (before[2] + 40.0, before[1] - 20.0));
+    let c = comments(&h);
+    assert_eq!(c.len(), 1, "the handle resized the rectangle instead of drawing another: {c:?}");
+    let r = c[0].rect;
+    assert!((r[2] - (before[2] + 40.0)).abs() < 3.0 && (r[1] - (before[1] - 20.0)).abs() < 3.0, "resized: {before:?} → {r:?}");
+    assert!((r[0] - before[0]).abs() < 1.0 && (r[3] - before[3]).abs() < 1.0, "the opposite corner stays: {before:?} → {r:?}");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Resize comment"));
+    assert_eq!(h.state().quick_tool, square, "the rectangle tool stays on");
+    // Away from the handles the tool still draws, over the shape too.
+    drag_pt(&mut h, (60.0, 90.0), (120.0, 60.0));
+    assert_eq!(comments(&h).len(), 2, "a drag inside the rectangle draws a second one");
+}
+
+#[test]
 fn the_panel_posts_comments_and_replies() {
     let mut h = harness(|app| app.set_option("panel", "comments").unwrap());
     field(&h, "Add a comment").click();
@@ -938,6 +960,54 @@ fn make_current_properties_default() {
     let c = comments(&h);
     let last = c.iter().rfind(|a| a.subtype == "Square").unwrap();
     assert_eq!(last.color, Some([0.0, 0.47, 0.84]));
+}
+
+/// Acrobat's Properties ▸ Make Properties Default: OK with the box ticked makes the edited look
+/// the tool's default (here a strikethrough's colour); without it, only the comment changes.
+#[test]
+fn properties_dialog_makes_the_strikethrough_colour_default() {
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let mut h = harness(|app| app.set_option("quick", "strikeout").unwrap());
+    let green = [0.18, 0.62, 0.36];
+    let blue = [0.0, 0.47, 0.84];
+    assert_ne!(h.state().comment_prefs.style(CommentTool::StrikeOut).color, green);
+    drag_pt(&mut h, (18.0, 155.0), (150.0, 155.0));
+    assert_eq!(comments(&h).iter().filter(|a| a.subtype == "StrikeOut").count(), 1);
+
+    // Without the box: the comment turns blue, the tool keeps its colour.
+    let before = h.state().comment_prefs.style(CommentTool::StrikeOut);
+    h.state_mut().open_comment_props(0, 0);
+    h.run_steps(2);
+    h.state_mut().comment_props.as_mut().expect("open").edited.color = Some(blue);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(h.state().comment_prefs.style(CommentTool::StrikeOut).color, before.color);
+
+    // With it: green, and a 0% opacity is clamped so the next strikethrough stays visible.
+    h.state_mut().open_comment_props(0, 0);
+    h.run_steps(2);
+    {
+        let d = h.state_mut().comment_props.as_mut().expect("open");
+        d.edited.color = Some(green);
+        d.edited.opacity = 0.0;
+    }
+    h.get_by_label("Make Properties Default").click();
+    h.run_steps(1);
+    assert!(h.state().comment_props.as_ref().is_some_and(|d| d.make_default));
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let st = h.state().comment_prefs.style(CommentTool::StrikeOut);
+    assert_eq!((st.color, st.opacity), (green, 0.1));
+    let fresh = {
+        let mut fresh = PdfCraftApp::new();
+        fresh.restore(&h.state().persist());
+        fresh.comment_prefs.style(CommentTool::StrikeOut).color
+    };
+    assert_eq!(fresh, green, "the default persisted");
+    drag_pt(&mut h, (18.0, 155.0), (150.0, 155.0));
+    let c = comments(&h);
+    let made = c.iter().rfind(|a| a.subtype == "StrikeOut").and_then(|a| a.color).expect("a colougreen strikethrough");
+    assert!(made.iter().zip(green).all(|(m, r)| (f64::from(*m) - r).abs() < 0.01), "the next strikethrough is green: {made:?}");
 }
 
 /// #1302: making an arrow's properties the default updates the Arrow tool, not later plain lines.

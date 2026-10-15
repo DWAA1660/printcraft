@@ -705,10 +705,12 @@
 	Locked	Užrakinta
 	Looking for PDFs…	Ieškoma PDF failų…
 	Looking for printers…	Ieškoma spausdintuvų…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Spausdintuvų nerasta. Patikrinkite, ar spausdintuvas įdiegtas ir ar veikia spausdinimo eilė, tada vėl atverkite Spausdinti.
 	Low Resolution (150 dpi)	Maža raiška (150 dpi)
 	Low resolution	Maža raiška
 	Magnification	Didinimas
 	Make Current Properties Default	Dabartines savybes nustatyti kaip numatytąsias
+	Make Properties Default	Savybes nustatyti kaip numatytąsias
 	Margins	Paraštės
 	Mark Page Range	Pažymėti puslapių intervalą
 	Mark as comments	Pažymėti kaip komentarus
@@ -723,7 +725,7 @@
 	More options	Daugiau parinkčių
 	More options:	Daugiau parinkčių:
 	More ways to add files	Daugiau būdų pridėti failų
-	Mouse wheel scroll speed	Slinkimo ratuku greitis
+	Scroll speed (mouse wheel and arrow keys)	Slinkimo greitis (pelės ratukas ir rodyklių klavišai)
 	Move down	Perkelti žemyn
 	Move earlier	Perkelti anksčiau
 	Move later	Perkelti vėliau

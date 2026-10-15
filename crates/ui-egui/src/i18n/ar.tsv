@@ -1295,6 +1295,7 @@
 	Copy text	نسخ النص
 	Properties…	خصائص…
 	Make Current Properties Default	جعل الخصائص الحالية افتراضية
+	Make Properties Default	جعل الخصائص افتراضية
 	More options	خيارات أخرى
 	Sort by	فرز حسب
 	Author	المؤلف
@@ -1615,6 +1616,7 @@
 	Sent to {printer}	أُرسل إلى {printer}
 	Sent to {printer}: {msg}	أُرسل إلى {printer}: {msg}
 	Looking for printers…	جارٍ البحث عن الطابعات…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	لم يُعثر على أي طابعة. تحقّق من أن الطابعة مثبّتة وأن خدمة التخزين المؤقت للطباعة تعمل، ثم افتح «طباعة» مرة أخرى.
 	Sending to {printer}…	جارٍ الإرسال إلى {printer}…
 	Choose a folder for the searchable files	اختر مجلدًا للملفات القابلة للبحث
 	Files are combined from top to bottom. Leave Pages empty to take every page.	تُدمج الملفات من الأعلى إلى الأسفل. اترك «الصفحات» فارغًا لأخذ كل الصفحات.
@@ -2300,7 +2302,7 @@ key	Space	مسافة
 	Rotate page {label} counterclockwise	تدوير الصفحة {label} عكس اتجاه عقارب الساعة
 	Rotate page {label} clockwise	تدوير الصفحة {label} باتجاه عقارب الساعة
 	Delete page {label}	حذف الصفحة {label}
-	Mouse wheel scroll speed	سرعة التمرير بعجلة الماوس
+	Scroll speed (mouse wheel and arrow keys)	سرعة التمرير (عجلة الفأرة ومفاتيح الأسهم)
 scroll speed	Slow	بطيئة
 scroll speed	Normal	عادية
 scroll speed	Fast	سريعة
