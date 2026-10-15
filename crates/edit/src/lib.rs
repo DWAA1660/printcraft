@@ -19,7 +19,8 @@ use pdfcraft_fonts::{helvetica_width, literal, win_ansi};
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum EditError {
-    #[error("page {0} does not exist")]
+    /// Holds the 0-based index; the message names the 1-based page a user counts (#1550).
+    #[error("page {} does not exist", .0.saturating_add(1))]
     NoSuchPage(usize),
     #[error("{0}")]
     Invalid(String),
@@ -169,6 +170,13 @@ fn add_picture_resource(doc: &mut Document, page: &pdfcraft_model::Page, src: &M
 pub struct Context {
     /// Today's date: (year, month 1–12, day 1–31).
     pub date: (i64, u32, u32),
+}
+
+// Model-derived transforms can contain tiny scale factors; retain their PDF decimal precision.
+fn matrix_number(value: f64) -> String {
+    let mut bytes = Vec::new();
+    pdfcraft_cos::serialize(&Object::Real(value), &mut bytes);
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 fn n(v: f64) -> String {
@@ -364,12 +372,12 @@ fn begin(kind: MarkKind, subtype: &str, matrix: [f64; 6]) -> String {
     format!(
         "q\n/Artifact <</Type /Pagination /Subtype /{subtype} /PCMark /{}>> BDC\n{} {} {} {} {} {} cm\n",
         kind.tag(),
-        n(matrix[0]),
-        n(matrix[1]),
-        n(matrix[2]),
-        n(matrix[3]),
-        n(matrix[4]),
-        n(matrix[5])
+        matrix_number(matrix[0]),
+        matrix_number(matrix[1]),
+        matrix_number(matrix[2]),
+        matrix_number(matrix[3]),
+        matrix_number(matrix[4]),
+        matrix_number(matrix[5])
     )
 }
 
@@ -624,6 +632,8 @@ pub use flatten::{flatten, flatten_fill_sign};
 pub mod images;
 pub use images::{ImageChange, PageImage, change_image, page_images, reading_images, rect_to_rect, turn_about_centre};
 pub mod bidi;
+pub mod indic;
+mod linebreak;
 pub mod text;
 pub use text::{
     BlockStyle, LineEdit, RangeStyle, TextBlock, TextLine, clear_block, reading_blocks, replace_block, replace_line, rewrite_block, text_blocks,

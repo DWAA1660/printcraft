@@ -5,6 +5,7 @@
 //! remains the compatibility fallback. When neither can inspect a renderable file, panels
 //! are empty and `warnings` says why.
 
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -365,6 +366,13 @@ pub struct FontInfo {
     pub embedded: bool,
     pub subset: bool,
     pub encoding: Option<String>,
+    /// The face standing in for a program the document does not embed. `None` when the font is
+    /// embedded (nothing stands in) or when no face was available at all -- `substitution` then
+    /// says which of the two it is.
+    pub substitute: Option<String>,
+    /// Why a face was substituted, as a sentence for whoever has to act on it. `None` only when
+    /// the document's own glyphs are being shown.
+    pub substitution: Option<String>,
 }
 
 /// Check that `bytes` still open as the same document: the parser reads them and the page
@@ -492,13 +500,17 @@ struct Inspector<'a> {
     /// Named destinations (`/Names /Dests` tree), keyed by raw string bytes, built once.
     /// Looking each name up by walking the tree was O(links × names): minutes on manuals.
     named: HashMap<Vec<u8>, &'a Object>,
+    /// The page of each annotation (the first page that lists it), built when a field's widget
+    /// has no `/P`. Searching every page's `/Annots` for each such field was O(fields ×
+    /// annotations): a second on a form of 8,000 fields.
+    annotation_pages: OnceCell<HashMap<ObjectId, usize>>,
 }
 
 impl<'a> Inspector<'a> {
     fn new(doc: &'a dyn Structure) -> Self {
         let page_ids = doc.page_ids();
         let page_index = page_ids.iter().copied().enumerate().map(|(index, id)| (id, index)).collect();
-        let mut me = Self { doc, page_ids, page_index, named: HashMap::new() };
+        let mut me = Self { doc, page_ids, page_index, named: HashMap::new(), annotation_pages: OnceCell::new() };
         let mut named = HashMap::new();
         if let Some(tree) =
             doc.catalog().ok().and_then(|c| c.get(b"Names").ok()).and_then(|o| me.dict(o)).and_then(|n| n.get(b"Dests").ok()).and_then(|o| me.dict(o))
@@ -1177,17 +1189,25 @@ impl<'a> Inspector<'a> {
         out.push(Field { name: full, kind, value, page, tooltip: self.text(d, b"TU"), has_actions, rect });
     }
 
+    /// The first page whose `/Annots` lists the field or one of its kids.
     fn find_widget_page(&self, field: &Object, kids: &[Object]) -> Option<usize> {
-        let targets: HashSet<ObjectId> =
-            std::iter::once(field).chain(kids.iter()).filter_map(|o| if let Object::Reference(id) = o { Some(*id) } else { None }).collect();
-        if targets.is_empty() {
-            return None;
+        let pages = self.annotation_pages.get_or_init(|| self.annotation_pages());
+        std::iter::once(field).chain(kids).filter_map(|o| if let Object::Reference(id) = o { pages.get(id).copied() } else { None }).min()
+    }
+
+    /// Each annotation listed in a page's `/Annots`, with the first page that lists it.
+    fn annotation_pages(&self) -> HashMap<ObjectId, usize> {
+        let mut pages = HashMap::new();
+        for (idx, &pid) in self.page_ids.iter().enumerate() {
+            let Some(annots) = self.doc.get_dictionary(pid).ok().and_then(|d| d.get(b"Annots").ok()) else { continue };
+            let Ok(annots) = self.resolve(annots).as_array() else { continue };
+            for a in annots {
+                if let Object::Reference(id) = a {
+                    pages.entry(*id).or_insert(idx);
+                }
+            }
         }
-        self.page_index.iter().find_map(|(&pid, &idx)| {
-            let annots = self.doc.get_dictionary(pid).ok()?.get(b"Annots").ok()?;
-            let arr = self.resolve(annots).as_array().ok()?;
-            arr.iter().any(|a| matches!(a, Object::Reference(id) if targets.contains(id))).then_some(idx)
-        })
+        pages
     }
 
     /// The topmost field above widget `id` (itself without a `/Parent`), or `None` when it or an
@@ -1290,20 +1310,38 @@ impl<'a> Inspector<'a> {
                     _ => None,
                 };
                 // Embedded: FontFile/2/3 in the descriptor (for Type0, in the descendant font).
-                let descriptor_of = |d: &Dictionary| d.get(b"FontDescriptor").ok().and_then(|o| self.dict(o)).cloned();
-                let desc = descriptor_of(f).or_else(|| {
-                    f.get(b"DescendantFonts")
-                        .ok()
-                        .and_then(|o| self.resolve(o).as_array().ok())
-                        .and_then(|a| a.first())
-                        .and_then(|o| self.dict(o))
-                        .and_then(descriptor_of)
-                });
+                let descriptor_of = |d: &'a Dictionary| d.get(b"FontDescriptor").ok().and_then(|o| self.dict(o));
+                let descendant =
+                    f.get(b"DescendantFonts").ok().and_then(|o| self.resolve(o).as_array().ok()).and_then(|a| a.first()).and_then(|o| self.dict(o));
+                let desc = descriptor_of(f).or_else(|| descendant.and_then(descriptor_of));
                 let embedded =
                     kind == "Type3" || desc.is_some_and(|d| d.get(b"FontFile").is_ok() || d.get(b"FontFile2").is_ok() || d.get(b"FontFile3").is_ok());
+                // What the substitution chain needs beyond the name: the descriptor flags, and for
+                // a composite font the script its descendant declares (ISO 32000-2 9.7.3).
+                let flags = desc
+                    .and_then(|d| d.get(b"Flags").ok())
+                    .and_then(|o| self.resolve(o).as_i64().ok())
+                    .and_then(|n| u32::try_from(n).ok())
+                    .unwrap_or(0);
+                let ordering =
+                    descendant.and_then(|d| d.get(b"CIDSystemInfo").ok()).and_then(|o| self.dict(o)).and_then(|c| self.text(c, b"Ordering"));
                 let subset = base.len() > 7 && base.as_bytes()[6] == b'+' && base[..6].bytes().all(|b| b.is_ascii_uppercase());
                 let name = if subset { base[7..].to_string() } else { base };
-                let info = FontInfo { name, kind, embedded, subset, encoding };
+                let chosen = pdfcraft_fonts::fallback::substitute(&pdfcraft_fonts::fallback::Request {
+                    base_font: &name,
+                    embedded,
+                    flags,
+                    ordering: ordering.as_deref(),
+                });
+                let info = FontInfo {
+                    name,
+                    kind,
+                    embedded,
+                    subset,
+                    encoding,
+                    substitute: chosen.face_name(),
+                    substitution: (!chosen.why.is_faithful()).then(|| chosen.why.note().to_owned()),
+                };
                 if seen.insert((info.name.clone(), info.kind.clone(), info.embedded)) {
                     out.push(info);
                 }
@@ -1981,7 +2019,20 @@ trailer << /Root 1 0 R >>
             let expected: &[u8] = if a.name == "notes.txt" { b"hello notes" } else { b"a,b,c" };
             assert_eq!(data, expected, "{}", a.name);
         }
-        assert_eq!(info.fonts, vec![FontInfo { name: "Helvetica".into(), kind: "Type1".into(), embedded: false, subset: true, encoding: None }]);
+        // A non-embedded /Helvetica is reported as standing in for itself: the standard-14
+        // metrics are exact, so the substitution is named rather than left implicit.
+        assert_eq!(
+            info.fonts,
+            vec![FontInfo {
+                name: "Helvetica".into(),
+                kind: "Type1".into(),
+                embedded: false,
+                subset: true,
+                encoding: None,
+                substitute: Some("Helvetica".into()),
+                substitution: Some(pdfcraft_fonts::fallback::Why::NamedStandard14.note().into()),
+            }]
+        );
     }
 
     const LAYERS: &[u8] = b"%PDF-1.7
@@ -2022,6 +2073,70 @@ trailer << /Root 1 0 R >>
         let info = inspect(Arc::new(ORPHAN_FIELDS.to_vec()), None).expect("opens");
         let listed: Vec<_> = info.fields.iter().map(|f| (f.name.as_str(), f.value.as_deref(), f.page)).collect();
         assert_eq!(listed, [("alpha", Some("one"), Some(0)), ("beta", None, Some(0))], "{:?}", info.fields);
+    }
+
+    /// A `Structure` that counts the objects read through it.
+    struct CountingReads<'a> {
+        doc: &'a Document,
+        reads: std::cell::Cell<usize>,
+    }
+
+    impl Structure for CountingReads<'_> {
+        fn trailer(&self) -> &Dictionary {
+            &self.doc.trailer
+        }
+        fn get_object(&self, id: ObjectId) -> lopdf::Result<&Object> {
+            self.reads.set(self.reads.get() + 1);
+            self.doc.get_object(id)
+        }
+        fn encrypted(&self) -> bool {
+            false
+        }
+    }
+
+    /// Widgets without `/P` are placed on the page that lists them with one pass over the pages'
+    /// `/Annots`, not a search of every page per field: that was O(fields × annotations), a
+    /// second to open a form of 8,000 fields. A widget two pages list is on the first of them.
+    #[test]
+    fn widgets_without_a_page_entry_are_placed_in_one_pass() {
+        const PAGES: usize = 100;
+        const PER_PAGE: usize = 10;
+        let field = |p: usize, k: usize| 4 + PAGES + p * PER_PAGE + k;
+        let mut pdf = String::from("%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm 3 0 R >> endobj\n");
+        let kids: Vec<String> = (0..PAGES).map(|p| format!("{} 0 R", 4 + p)).collect();
+        pdf += &format!("2 0 obj << /Type /Pages /Kids [{}] /Count {PAGES} >> endobj\n", kids.join(" "));
+        let fields: Vec<String> = (0..PAGES).flat_map(|p| (0..PER_PAGE).map(move |k| format!("{} 0 R", field(p, k)))).collect();
+        pdf += &format!("3 0 obj << /Fields [{}] >> endobj\n", fields.join(" "));
+        for p in 0..PAGES {
+            let mut annots: Vec<String> = (0..PER_PAGE).map(|k| format!("{} 0 R", field(p, k))).collect();
+            // The last page lists the first page's first widget too.
+            if p == PAGES - 1 {
+                annots.push(format!("{} 0 R", field(0, 0)));
+            }
+            pdf += &format!("{} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [{}] >> endobj\n", 4 + p, annots.join(" "));
+        }
+        for p in 0..PAGES {
+            for k in 0..PER_PAGE {
+                pdf += &format!("{} 0 obj << /Type /Annot /Subtype /Widget /FT /Tx /T (f{p}_{k}) /Rect [10 10 90 30] >> endobj\n", field(p, k));
+            }
+        }
+        pdf += "trailer << /Root 1 0 R >>\n%%EOF";
+        let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+        let counting = CountingReads { doc: &doc, reads: std::cell::Cell::new(0) };
+        let mut info = DocInfo {
+            pages: (0..PAGES)
+                .map(|_| PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() })
+                .collect(),
+            ..Default::default()
+        };
+        Inspector::new(&counting).fill(&mut info);
+        let placed: Vec<_> = info.fields.iter().map(|f| (f.name.clone(), f.page)).collect();
+        let want: Vec<_> = (0..PAGES).flat_map(|p| (0..PER_PAGE).map(move |k| (format!("f{p}_{k}"), Some(p)))).collect();
+        assert_eq!(placed, want);
+        // A handful of reads per page and field; searching the pages for each field read the
+        // page dictionaries about 50,000 times.
+        let reads = counting.reads.get();
+        assert!(reads < 20 * (PAGES + PAGES * PER_PAGE), "{reads} object reads");
     }
 
     #[test]
@@ -2518,5 +2633,99 @@ mod version_tests {
         assert_eq!(super::version_label("Pdf17"), "1.7");
         assert_eq!(super::version_label("V2_0"), "2.0");
         assert_eq!(super::version_label("Unknown"), "Unknown");
+    }
+}
+
+#[cfg(test)]
+mod substitution_tests {
+    use std::sync::Arc;
+
+    use super::{FontInfo, inspect};
+
+    /// One page naming four fonts the document does not embed: a Chinese CID font (Adobe-GB1), a
+    /// Japanese one (Adobe-Japan1), an unknown serif-flagged simple font, and an aliased
+    /// standard-14 name.
+    const NOT_EMBEDDED: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 4 0 R /F2 6 0 R /F3 8 0 R /F4 9 0 R /F5 11 0 R >> >> >> endobj
+4 0 obj << /Type /Font /Subtype /Type0 /BaseFont /STSong-Light /Encoding /UniGB-UCS2-H /DescendantFonts [5 0 R] >> endobj
+5 0 obj << /Type /Font /Subtype /CIDFontType0 /BaseFont /STSong-Light /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 2 >> >> endobj
+6 0 obj << /Type /Font /Subtype /Type0 /BaseFont /KozMinPro-Regular /Encoding /UniJIS-UCS2-H /DescendantFonts [7 0 R] >> endobj
+7 0 obj << /Type /Font /Subtype /CIDFontType0 /BaseFont /KozMinPro-Regular /CIDSystemInfo << /Registry (Adobe) /Ordering (Japan1) /Supplement 4 >> >> endobj
+8 0 obj << /Type /Font /Subtype /TrueType /BaseFont /SomeHouseSerif /FontDescriptor 10 0 R >> endobj
+9 0 obj << /Type /Font /Subtype /TrueType /BaseFont /ArialMT >> endobj
+10 0 obj << /Type /FontDescriptor /FontName /SomeHouseSerif /Flags 34 >> endobj
+11 0 obj << /Type /Font /Subtype /TrueType /BaseFont /HouseGrotesk /FontDescriptor 12 0 R >> endobj
+12 0 obj << /Type /FontDescriptor /FontName /HouseGrotesk /Flags 33 >> endobj
+trailer << /Size 13 /Root 1 0 R >>
+%%EOF";
+
+    fn font<'a>(fonts: &'a [FontInfo], name: &str) -> &'a FontInfo {
+        fonts.iter().find(|f| f.name == name).unwrap_or_else(|| panic!("{name} listed; got {:?}", fonts.iter().map(|f| &f.name).collect::<Vec<_>>()))
+    }
+
+    #[test]
+    fn doc_info_says_which_face_stands_in_and_why() {
+        let info = inspect(Arc::new(NOT_EMBEDDED.to_vec()), None).expect("opens");
+
+        // The one that matters most to a user: a Chinese PDF that draws nothing. Before this,
+        // doc_info said only `embedded: false` and left them to guess.
+        let cjk = font(&info.fonts, "STSong-Light");
+        assert!(!cjk.embedded);
+        assert_eq!(cjk.substitute, None, "no licensed Chinese face, so nothing stands in");
+        let why = cjk.substitution.as_deref().unwrap_or_default();
+        assert!(why.contains("no licensed face") && why.contains("rather than the wrong glyphs"), "{why}");
+
+        // An aliased standard-14 name resolves to the real face, whose metrics are exact.
+        let arial = font(&info.fonts, "ArialMT");
+        assert_eq!(arial.substitute.as_deref(), Some("Helvetica"));
+        assert!(arial.substitution.as_deref().unwrap_or_default().contains("standard 14"));
+
+        // A house font whose name merely contains "Serif" gets Times -- reported as the guess it
+        // is, not as a standard-14 name, which would be untrue of a font nobody has heard of.
+        let serif = font(&info.fonts, "SomeHouseSerif");
+        assert_eq!(serif.substitute.as_deref(), Some("Times-Roman"));
+        assert!(serif.substitution.as_deref().unwrap_or_default().contains("hints at one"), "{serif:?}");
+
+        // No hint in the name at all, so the descriptor flags decide: 33 = fixed pitch + nonsymbolic.
+        let grotesk = font(&info.fonts, "HouseGrotesk");
+        assert_eq!(grotesk.substitute.as_deref(), Some("Courier"));
+        assert!(grotesk.substitution.as_deref().unwrap_or_default().contains("descriptor flags"), "{grotesk:?}");
+
+        // Japanese depends on the optional craft-fonts build input; either way it is reported,
+        // and never as a Latin face.
+        let jpan = font(&info.fonts, "KozMinPro-Regular");
+        assert!(jpan.substitution.is_some(), "a substitution is always explained");
+        match &jpan.substitute {
+            Some(face) => {
+                assert!(!face.starts_with("Helvetica") && !face.starts_with("Times"), "a Latin face is never a Japanese substitute: {face}")
+            }
+            None => assert!(jpan.substitution.as_deref().unwrap_or_default().contains("no licensed face")),
+        }
+
+        // Nothing claims to be embedded, so every font here carries a reason.
+        assert!(info.fonts.iter().all(|f| !f.embedded && f.substitution.is_some()), "{:?}", info.fonts);
+    }
+
+    /// An embedded font is reported as faithful: nothing stands in, and there is nothing to explain.
+    const EMBEDDED: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 4 0 R >> >> >> endobj
+4 0 obj << /Type /Font /Subtype /TrueType /BaseFont /ABCDEF+SomeHouseSans /FontDescriptor 5 0 R >> endobj
+5 0 obj << /Type /FontDescriptor /FontName /ABCDEF+SomeHouseSans /Flags 32 /FontFile2 6 0 R >> endobj
+6 0 obj << /Length 4 >> stream
+test
+endstream endobj
+trailer << /Size 7 /Root 1 0 R >>
+%%EOF";
+
+    #[test]
+    fn an_embedded_font_reports_no_substitution_at_all() {
+        let info = inspect(Arc::new(EMBEDDED.to_vec()), None).expect("opens");
+        let f = font(&info.fonts, "SomeHouseSans");
+        assert!(f.embedded && f.subset, "{f:?}");
+        assert_eq!((f.substitute.as_deref(), f.substitution.as_deref()), (None, None), "the document's own glyphs are shown");
     }
 }

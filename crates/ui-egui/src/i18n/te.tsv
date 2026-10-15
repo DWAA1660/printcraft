@@ -57,6 +57,8 @@ comment menu	Edit	సవరించు
 	Column select	నిలువు వరుస ఎంపిక
 	Full screen mode	పూర్తి స్క్రీన్ మోడ్
 	Read mode	చదివే మోడ్
+	Next tab	తదుపరి ట్యాబ్
+	Previous tab	మునుపటి ట్యాబ్
 	Switch light / dark theme	లేత / ముదురు థీమ్‌ల మధ్య మారు
 	Comments panel	వ్యాఖ్యల ప్యానెల్
 	Form fields panel	ఫారం ఫీల్డ్‌ల ప్యానెల్
@@ -735,6 +737,12 @@ comment menu	Edit	సవరించు
 	Flip Vertical	నిలువుగా తిరగేయి
 	Replace Image…	చిత్రాన్ని భర్తీ చేయి…
 	Save Image As…	చిత్రాన్ని ఫైల్‌గా సేవ్ చేయి…
+	Copy Image	చిత్రాన్ని కాపీ చేయి
+	The image has been copied ({w} × {h} pixels)	చిత్రం కాపీ చేయబడింది ({w} × {h} పిక్సెల్‌లు)
+	Couldn't copy the image: {e}	చిత్రాన్ని కాపీ చేయడం సాధ్యం కాలేదు: {e}
+	Copy Image in Original Format	చిత్రాన్ని అసలు ఫార్మాట్‌లో కాపీ చేయి
+	The image has been copied as a {ext} file	చిత్రం {ext} ఫైల్‌గా కాపీ చేయబడింది
+	The page has changed; select the image again	పేజీ మారింది; చిత్రాన్ని మళ్లీ ఎంచుకోండి
 	Check for updates	అప్‌డేట్‌ల కోసం తనిఖీ చేయి
 	No check has run yet.	ఇంకా తనిఖీ జరగలేదు.
 	Checking for a newer version…	కొత్త వెర్షన్ కోసం తనిఖీ చేస్తోంది…
@@ -820,8 +828,15 @@ comment menu	Edit	సవరించు
 	Keychain  ·  	Keychain  ·  
 	Issued by: 	జారీ చేసినవారు: 
 	, Expires: 	, గడువు: 
+	Digitally signed by	డిజిటల్ సంతకం చేసినవారు
+	DN: 	DN: 
+	Reason: 	కారణం: 
+	Location: 	స్థానం: 
+	Date: 	తేదీ: 
+	The labels are in English: the signature's font can't draw them in this language.	లేబుళ్లు ఆంగ్లంలో ఉన్నాయి: సంతకం ఫాంట్ ఈ భాషలో వాటిని చూపించలేదు.
 	No digital IDs yet.	ఇంకా డిజిటల్ ఐడీలు ఏవీ లేవు.
 	Configure New Digital ID	కొత్త డిజిటల్ ఐడీని కాన్ఫిగర్ చేయి
+	Remove "{name}" from this list? The file itself is not deleted.	ఈ జాబితా నుండి "{name}"ని తీసివేయాలా? ఫైల్ తొలగించబడదు.
 	Continue	కొనసాగించు
 	Configure a Digital ID for Signing	సంతకం కోసం డిజిటల్ ఐడీని కాన్ఫిగర్ చేయి
 	Use a Digital ID from a file	ఫైల్‌లోని డిజిటల్ ఐడీని ఉపయోగించు
@@ -2245,3 +2260,46 @@ animation effects	Off	ఆఫ్
 	Local cross-PDF links require the desktop app	PDFల మధ్య స్థానిక లింక్‌లకు డెస్క్‌టాప్ యాప్ అవసరం
 	The existing action will be preserved.	ఉన్న చర్య అలాగే ఉంచబడుతుంది.
 	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	ఒక స్క్రిప్ట్ చాలా సేపు నడిచినందున ఈ ఫారమ్ స్క్రిప్ట్‌లు ఆపివేయబడ్డాయి. వాటిని మళ్లీ నడపడానికి పత్రాన్ని మళ్లీ తెరవండి.
+	Minimize	కనిష్ఠీకరించు
+	Maximize	గరిష్ఠీకరించు
+	Restore	పునరుద్ధరించు
+	Use system title bar	సిస్టమ్ శీర్షిక పట్టీని ఉపయోగించు
+	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	ట్యాబ్ పట్టీకి బదులుగా విండో బటన్‌ల కోసం సాధారణ శీర్షిక పట్టీని చూపించు. GNOME యాప్‌లకు శీర్షిక పట్టీలను గీయదు, కాబట్టి ఇది దాని థీమ్‌ను అనుసరించదు.
+
+# Absolute local GoToR confirmation (#1364).
+	Allow	అనుమతించు
+	Only allow this if you trust the source document.	మూల పత్రాన్ని విశ్వసిస్తే మాత్రమే దీన్ని అనుమతించండి.
+	Open this local PDF?	ఈ స్థానిక PDF ఫైల్‌ను తెరవాలా?
+	This document is trying to open a local file:	ఈ పత్రం ఒక స్థానిక ఫైల్‌ను తెరవడానికి ప్రయత్నిస్తోంది:
+	Move tag earlier	ట్యాగ్‌ను ముందుకు తరలించు
+	Move tag later	ట్యాగ్‌ను వెనుకకు తరలించు
+	Mark as artifact	ఆర్టిఫాక్ట్‌గా గుర్తించు
+	Remove this leaf tag from reading order and mark its direct content as an artifact	ఈ లీఫ్ ట్యాగ్‌ను పఠన క్రమం నుంచి తీసివేసి, దాని ప్రత్యక్ష కంటెంట్‌ను ఆర్టిఫాక్ట్‌గా గుర్తించండి
+	Mark content as artifact	కంటెంట్‌ను ఆర్టిఫాక్ట్‌గా గుర్తించు
+	Word count	పదాల లెక్క
+	Current page only	ప్రస్తుత పేజీ మాత్రమే
+	Exclude tagged tables	ట్యాగ్ చేసిన పట్టికలను మినహాయించు
+	Exclude tagged code blocks	ట్యాగ్ చేసిన కోడ్ బ్లాక్‌లను మినహాయించు
+	Exclude image/OCR text	చిత్రాలు/OCR వచనాన్ని మినహాయించు
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	మినహాయింపులు PDF ట్యాగ్‌లను ఉపయోగిస్తాయి. ట్యాగ్‌లు లేని పట్టికలు, కోడ్ లెక్కలో ఉంటాయి. చిత్రాలను మినహాయిస్తే కనిపించని వచనం కూడా తొలగించబడుతుంది.
+	Words	పదాలు
+	Characters	అక్షరాలు
+	Characters without spaces	ఖాళీలు లేని అక్షరాలు
+	Pages counted	లెక్కించిన పేజీలు
+	Some pages contain no countable text. Scanned images need OCR first.	కొన్ని పేజీల్లో లెక్కించగల వచనం లేదు. స్కాన్ చేసిన చిత్రాలకు ముందుగా OCR అవసరం.
+	Some content could not be classified safely and was kept in the count.	కొంత కంటెంట్‌ను విశ్వసనీయంగా వర్గీకరించలేకపోయాం, కాబట్టి దాన్ని లెక్కలో ఉంచాం.
+	Counting words… {n} pages read	పదాలను లెక్కిస్తోంది… {n} పేజీలు చదివింది
+	Word counting stopped unexpectedly.	పదాల లెక్క అనుకోకుండా ఆగిపోయింది.
+	Word count…	పదాల లెక్క…
+@id	file.word_count	పదాల లెక్క…
+	Standard	ప్రామాణికం
+	Mobile	మొబైల్
+	Merge image fragments	చిత్ర శకలాలను విలీనం చేయి
+	Optimizing… merging image fragments	ఆప్టిమైజ్ చేస్తోంది… చిత్ర శకలాలను విలీనం చేస్తోంది
+	Side by side	పక్కపక్కన
+	New file only	కొత్త ఫైల్ మాత్రమే
+	Old file: {name}	పాత ఫైల్: {name}
+	New file: {name}	కొత్త ఫైల్: {name}
+	Print as image	చిత్రంగా ముద్రించు
+	Resolution:	రిజల్యూషన్:
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	ప్రింటర్ వచనం, షేడింగ్ లేదా పారదర్శకతను వదిలేసినప్పుడు దీన్ని వాడండి. ముద్రణ ఇక శోధించగల వచనం కాదు; బూడిద రంగులో ముద్రించినప్పుడు చిత్రాలు బూడిద రంగులో ఉంటాయి.

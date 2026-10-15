@@ -76,6 +76,8 @@
 	Take a snapshot	Zrób migawkę
 	Full screen mode	Tryb pełnoekranowy
 	Read mode	Tryb czytania
+	Next tab	Następna karta
+	Previous tab	Poprzednia karta
 	Switch light / dark theme	Przełącz jasny / ciemny motyw
 	Comments panel	Panel komentarzy
 	Form fields panel	Panel pól formularza
@@ -753,6 +755,12 @@
 	Flip Vertical	Odbij w pionie
 	Replace Image…	Zastąp obraz…
 	Save Image As…	Zapisz obraz jako…
+	Copy Image	Kopiuj obraz
+	The image has been copied ({w} × {h} pixels)	Obraz został skopiowany ({w} × {h} pikseli)
+	Couldn't copy the image: {e}	Nie można skopiować obrazu: {e}
+	Copy Image in Original Format	Kopiuj obraz w oryginalnym formacie
+	The image has been copied as a {ext} file	Obraz został skopiowany jako plik {ext}
+	The page has changed; select the image again	Strona się zmieniła; zaznacz obraz ponownie
 	Check for updates	Sprawdź aktualizacje
 	No check has run yet.	Nie sprawdzono jeszcze aktualizacji.
 	Checking for a newer version…	Sprawdzanie dostępności nowszej wersji…
@@ -839,8 +847,15 @@
 	Windows store  ·  	Magazyn Windows  ·  
 	Issued by: 	Wystawca: 
 	, Expires: 	, Wygasa: 
+	Digitally signed by	Podpisany cyfrowo przez
+	DN: 	DN: 
+	Reason: 	Powód: 
+	Location: 	Lokalizacja: 
+	Date: 	Data: 
+	The labels are in English: the signature's font can't draw them in this language.	Etykiety są po angielsku: czcionka podpisu nie potrafi ich wyświetlić w tym języku.
 	No digital IDs yet.	Brak identyfikatorów cyfrowych.
 	Configure New Digital ID	Skonfiguruj nowy identyfikator cyfrowy
+	Remove "{name}" from this list? The file itself is not deleted.	Usunąć „{name}” z tej listy? Sam plik nie zostanie usunięty.
 	Continue	Kontynuuj
 	Configure a Digital ID for Signing	Skonfiguruj identyfikator cyfrowy do podpisywania
 	Use a Digital ID from a file	Użyj identyfikatora cyfrowego z pliku
@@ -2312,3 +2327,46 @@ animation effects	Off	Wyłączone
 	Local cross-PDF links require the desktop app	Lokalne łącza między plikami PDF wymagają aplikacji komputerowej
 	The existing action will be preserved.	Istniejąca akcja zostanie zachowana.
 	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Skrypty tego formularza są wyłączone, ponieważ jeden z nich działał zbyt długo. Otwórz dokument ponownie, aby znów je uruchomić.
+	Minimize	Zminimalizuj
+	Maximize	Zmaksymalizuj
+	Restore	Przywróć
+	Use system title bar	Używaj systemowego paska tytułu
+	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Pokazuj prosty pasek tytułu z przyciskami okna zamiast paska kart. GNOME nie rysuje pasków tytułu dla aplikacji, więc ten nie pasuje do jego motywu.
+
+# Absolute local GoToR confirmation (#1364).
+	Allow	Zezwól
+	Only allow this if you trust the source document.	Zezwól na to tylko wtedy, gdy ufasz dokumentowi źródłowemu.
+	Open this local PDF?	Otworzyć ten lokalny plik PDF?
+	This document is trying to open a local file:	Ten dokument próbuje otworzyć plik lokalny:
+	Move tag earlier	Przenieś znacznik wcześniej
+	Move tag later	Przenieś znacznik później
+	Mark as artifact	Oznacz jako artefakt
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Usuń ten znacznik liścia z kolejności odczytu i oznacz jego bezpośrednią zawartość jako artefakt
+	Mark content as artifact	Oznacz zawartość jako artefakt
+	Word count	Liczba słów
+	Current page only	Tylko bieżąca strona
+	Exclude tagged tables	Wyklucz oznaczone tabele
+	Exclude tagged code blocks	Wyklucz oznaczone bloki kodu
+	Exclude image/OCR text	Wyklucz tekst obrazów/OCR
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Wykluczenia używają znaczników PDF. Nieoznaczone tabele i kod nadal są uwzględniane. Wykluczenie obrazów usuwa również niewidoczny tekst.
+	Words	Słowa
+	Characters	Znaki
+	Characters without spaces	Znaki bez spacji
+	Pages counted	Policzone strony
+	Some pages contain no countable text. Scanned images need OCR first.	Niektóre strony nie zawierają tekstu do policzenia. Zeskanowane obrazy wymagają najpierw OCR.
+	Some content could not be classified safely and was kept in the count.	Części treści nie udało się wiarygodnie sklasyfikować, więc pozostała uwzględniona w liczbie.
+	Counting words… {n} pages read	Liczenie słów… odczytane strony: {n}
+	Word counting stopped unexpectedly.	Liczenie słów zostało nieoczekiwanie przerwane.
+	Word count…	Liczba słów…
+@id	file.word_count	Liczba słów…
+	Standard	Standardowe
+	Mobile	Urządzenie mobilne
+	Merge image fragments	Scal fragmenty obrazów
+	Optimizing… merging image fragments	Optymalizacja… scalanie fragmentów obrazów
+	Side by side	Obok siebie
+	New file only	Tylko nowy plik
+	Old file: {name}	Stary plik: {name}
+	New file: {name}	Nowy plik: {name}
+	Print as image	Drukuj jako obraz
+	Resolution:	Rozdzielczość:
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Użyj, gdy drukarka pomija tekst, cieniowanie lub przezroczystość. Wydruk nie jest już tekstem do przeszukiwania; przy druku w skali szarości obrazy są szare.

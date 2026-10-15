@@ -42,6 +42,8 @@
 	Take a snapshot	Anlık görüntü al
 	Full screen mode	Tam ekran modu
 	Read mode	Okuma modu
+	Next tab	Sonraki sekme
+	Previous tab	Önceki sekme
 	Switch light / dark theme	Açık / koyu temaya geç
 	Comments panel	Yorumlar paneli
 	Form fields panel	Form alanları paneli
@@ -716,6 +718,12 @@
 	Flip Vertical	Dikey Çevir
 	Replace Image…	Resmi Değiştir…
 	Save Image As…	Resmi Farklı Kaydet…
+	Copy Image	Resmi Kopyala
+	The image has been copied ({w} × {h} pixels)	Resim kopyalandı ({w} × {h} piksel)
+	Couldn't copy the image: {e}	Resim kopyalanamadı: {e}
+	Copy Image in Original Format	Resmi Özgün Biçimde Kopyala
+	The image has been copied as a {ext} file	Resim {ext} dosyası olarak kopyalandı
+	The page has changed; select the image again	Sayfa değişti; resmi yeniden seçin
 	Check for updates	Güncellemeleri denetle
 	No check has run yet.	Henüz denetim yapılmadı.
 	Checking for a newer version…	Daha yeni bir sürüm denetleniyor…
@@ -802,8 +810,15 @@
 	Windows store  ·  	Windows depolama alanı  ·  
 	Issued by: 	Veren: 
 	, Expires: 	, Son kullanma tarihi: 
+	Digitally signed by	Dijital olarak imzalayan
+	DN: 	DN: 
+	Reason: 	Neden: 
+	Location: 	Konum: 
+	Date: 	Tarih: 
+	The labels are in English: the signature's font can't draw them in this language.	Etiketler İngilizce: imzanın yazı tipi bu dilde onları çizemiyor.
 	No digital IDs yet.	Henüz dijital kimlik yok.
 	Configure New Digital ID	Yeni Dijital Kimlik Yapılandır
+	Remove "{name}" from this list? The file itself is not deleted.	"{name}" bu listeden kaldırılsın mı? Dosyanın kendisi silinmez.
 	Continue	Devam Et
 	Configure a Digital ID for Signing	İmzalama için Dijital Kimlik Yapılandır
 	Use a Digital ID from a file	Dosyadan Dijital Kimlik Kullan
@@ -2328,3 +2343,46 @@ animation effects	Off	Kapalı
 	The linked PDF opened, but its named destination was not applied.	Bağlantılı PDF açıldı, ancak adlandırılmış hedefi uygulanmadı.
 	The linked PDF opened, but its page destination was out of range.	Bağlantılı PDF açıldı, ancak sayfa hedefi aralık dışında.
 	Local cross-PDF links require the desktop app	PDF'ler arası yerel bağlantılar masaüstü uygulamasını gerektirir
+	Minimize	Küçült
+	Maximize	Büyüt
+	Restore	Geri yükle
+	Use system title bar	Sistem başlık çubuğunu kullan
+	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Sekme çubuğu yerine pencere düğmeleri için basit bir başlık çubuğu göster. GNOME uygulamalar için başlık çubuğu çizmez, bu yüzden bu çubuk onun temasına uymaz.
+
+# Absolute local GoToR confirmation (#1364).
+	Allow	İzin ver
+	Only allow this if you trust the source document.	Buna yalnızca kaynak belgeye güveniyorsanız izin verin.
+	Open this local PDF?	Bu yerel PDF açılsın mı?
+	This document is trying to open a local file:	Bu belge yerel bir dosya açmaya çalışıyor:
+	Move tag earlier	Etiketi daha erken taşı
+	Move tag later	Etiketi daha geç taşı
+	Mark as artifact	Yapıt olarak işaretle
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Bu yaprak etiketini okuma sırasından kaldırın ve doğrudan içeriğini yapıt olarak işaretleyin
+	Mark content as artifact	İçeriği yapıt olarak işaretle
+	Word count	Sözcük sayısı
+	Current page only	Yalnızca geçerli sayfa
+	Exclude tagged tables	Etiketli tabloları hariç tut
+	Exclude tagged code blocks	Etiketli kod bloklarını hariç tut
+	Exclude image/OCR text	Görüntü/OCR metnini hariç tut
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Hariç tutma işlemleri PDF etiketlerini kullanır. Etiketsiz tablolar ve kod sayılmaya devam eder. Görüntüleri hariç tutmak görünmez metni de kaldırır.
+	Words	Sözcükler
+	Characters	Karakterler
+	Characters without spaces	Boşluksuz karakterler
+	Pages counted	Sayılan sayfalar
+	Some pages contain no countable text. Scanned images need OCR first.	Bazı sayfalarda sayılabilecek metin yok. Taranmış görüntüler için önce OCR gerekir.
+	Some content could not be classified safely and was kept in the count.	Bazı içerikler güvenilir biçimde sınıflandırılamadığı için sayıma dahil edildi.
+	Counting words… {n} pages read	Sözcükler sayılıyor… {n} sayfa okundu
+	Word counting stopped unexpectedly.	Sözcük sayımı beklenmedik şekilde durdu.
+	Word count…	Sözcük sayısı…
+@id	file.word_count	Sözcük sayısı…
+	Standard	Standart
+	Mobile	Mobil
+	Merge image fragments	Görüntü parçalarını birleştir
+	Optimizing… merging image fragments	İyileştiriliyor… görüntü parçaları birleştiriliyor
+	Side by side	Yan yana
+	New file only	Yalnızca yeni dosya
+	Old file: {name}	Eski dosya: {name}
+	New file: {name}	Yeni dosya: {name}
+	Print as image	Resim olarak yazdır
+	Resolution:	Çözünürlük:
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Yazıcı metni, gölgelendirmeyi veya saydamlığı atladığında kullanın. Çıktı artık aranabilir metin değildir; gri tonlamalı yazdırmayla resimler gri olur.

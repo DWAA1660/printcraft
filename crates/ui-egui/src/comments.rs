@@ -315,6 +315,21 @@ pub(crate) fn made_by(a: &Annotation, tool: CommentTool) -> bool {
     }
 }
 
+/// The tool whose defaults "Make Current Properties Default" should update.
+///
+/// Arrows are stored as Line annotations. An arrow ending belongs to the Arrow tool, so its
+/// defaults stay separate from a plain line.
+pub(crate) fn tool_for_default(a: &Annotation, endings: Option<&[LineEnding]>) -> Option<CommentTool> {
+    match tool_for(a) {
+        Some(CommentTool::Line) if endings.is_some_and(|ends| ends.iter().copied().any(arrow_ending)) => Some(CommentTool::Arrow),
+        other => other,
+    }
+}
+
+fn arrow_ending(ending: LineEnding) -> bool {
+    matches!(ending, LineEnding::OpenArrow | LineEnding::ClosedArrow | LineEnding::ROpenArrow | LineEnding::RClosedArrow)
+}
+
 /// The tool that makes comments like `a` (for Make Current Properties Default).
 pub fn tool_for(a: &Annotation) -> Option<CommentTool> {
     Some(match (a.subtype.as_str(), a.intent.as_deref()) {
@@ -659,6 +674,18 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
                     view.pending_edit = Some(new_comment(cx, tool, shape, String::new()));
                 }
             }
+            // A quick press/release does not start an egui drag, but Acrobat's Draw tool treats
+            // it as a one-point ink stroke (a dot). The appearance uses round line caps, so a
+            // single PDF point is visible and remains editable like any other drawing.
+            if tool == CommentTool::Ink
+                && resp.clicked()
+                && over_page
+                && let Some(p) = pointer
+                && let Some(shape) = drawn_shape(tool, &[cx.to_user(p)])
+            {
+                cv.selected = None;
+                view.pending_edit = Some(new_comment(cx, tool, shape, String::new()));
+            }
             true
         }
         QuickTool::Comment(tool) if tool.clicks_points() => {
@@ -931,7 +958,18 @@ fn select_input(
     // (egui clears the press origin on release, so clicks are located by the pointer.)
     let on_page = pointer.is_some_and(|p| cx.xf.rect.contains(p));
     if resp.clicked() && on_page {
+        let follow_link = cx.tool == QuickTool::Select
+            && !consumed
+            && cv.gesture.is_none()
+            && !resp.double_clicked()
+            && pointer
+                .is_some_and(|p| cx.info.links.iter().any(|link| link.page == cx.page && cx.xf.user_rect(cx.info, cx.page, link.rect).contains(p)));
         match pointer.and_then(|p| cx.hit(p)) {
+            Some(a) if a.subtype == "Highlight" && follow_link => {
+                // A plain click follows the link beneath text highlighting. Keep other
+                // annotations and active gestures in control of their own input.
+                cv.selected = None;
+            }
             Some(a) => {
                 cv.selected = Some((cx.page, a.index));
                 cv.reveal = true;
@@ -1083,7 +1121,7 @@ fn drawn_shape(tool: CommentTool, points: &[[f64; 2]]) -> Option<Shape> {
     let rect = [first[0].min(last[0]), first[1].min(last[1]), first[0].max(last[0]), first[1].max(last[1])];
     let big = rect[2] - rect[0] >= 2.0 && rect[3] - rect[1] >= 2.0;
     match tool {
-        CommentTool::Ink if points.len() >= 2 => Some(Shape::Ink { strokes: vec![points.to_vec()] }),
+        CommentTool::Ink if !points.is_empty() => Some(Shape::Ink { strokes: vec![points.to_vec()] }),
         CommentTool::Line | CommentTool::Arrow if far => Some(Shape::Line {
             from: first,
             to: last,
@@ -1172,7 +1210,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                 edit.request_focus();
                 c.focus = false;
             }
-            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command);
+            let enter = submit_key(ui, &edit, false);
             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 cancel = true;
             }
@@ -1214,11 +1252,17 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
         }
         ComposerKind::TextBox => {
             view.comments.tool_done = true;
-            Some(new_comment(&cx, CommentTool::TextBox, Shape::TextBox { rect: text_box_rect(c.at, &text, 12.0), font_size: 12.0 }, text))
+            Some(new_comment(
+                &cx,
+                CommentTool::TextBox,
+                Shape::TextBox { rect: text_box_rect(c.at, &text, 12.0, page_rotation(info, page)), font_size: 12.0 },
+                text,
+            ))
         }
         ComposerKind::Callout { point } => {
             view.comments.tool_done = true;
-            let rect = text_box_rect(c.at, &text, 10.0);
+            // A callout's leader and box stay in user-space axes (its appearance isn't turned).
+            let rect = text_box_rect(c.at, &text, 10.0, 0);
             let side = if point[0] < rect[0] {
                 rect[0]
             } else if point[0] > rect[2] {
@@ -1248,6 +1292,27 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
             Some(new_comment(&cx, CommentTool::Caret, Shape::Caret { rect: [x - half, y - size, x + half, y] }, text))
         }
     }
+}
+
+/// Submit only from the focused comment editor. Match each key event's modifiers exactly,
+/// so Shift+Enter stays a newline and another editor cannot submit this draft. Replies also
+/// keep their existing unmodified Enter-to-post behavior.
+pub(crate) fn submit_key(ui: &mut egui::Ui, field: &egui::Response, plain_enter: bool) -> bool {
+    field.has_focus()
+        && ui.input_mut(|input| {
+            let mut submit = false;
+            input.events.retain(|event| {
+                let matched = matches!(event,
+                    egui::Event::Key { key: egui::Key::Enter, pressed: true, modifiers, .. }
+                        if modifiers.matches_exact(egui::Modifiers::CTRL)
+                            || modifiers.matches_exact(egui::Modifiers::COMMAND)
+                            || plain_enter && modifiers.matches_exact(egui::Modifiers::NONE)
+                );
+                submit |= matched;
+                !matched
+            });
+            submit
+        })
 }
 
 /// The side of the caret's box, in user space units, away from text.
@@ -1302,14 +1367,21 @@ pub(crate) fn caret_snap(text: &PageText, vx: f32, vy: f32) -> Option<([f32; 2],
 }
 
 /// A text box sized to its text (at most 300 pt wide), hanging from its top-left corner.
-pub fn text_box_rect(at: [f64; 2], text: &str, size: f64) -> [f64; 4] {
+/// The box for `text` at `size` with its displayed top-left corner at `at`, on a page turned by
+/// `rotation` (its `/Rotate`): on a quarter-turned page it is taller than wide in user space.
+pub fn text_box_rect(at: [f64; 2], text: &str, size: f64, rotation: i64) -> [f64; 4] {
     use pdfcraft_engine::annot_text::{text_width, wrap};
     let pad = 2.0;
     let longest = text.lines().map(|l| text_width(l, size)).fold(0.0, f64::max);
     let w = (longest + 2.0 * pad + 4.0).clamp(40.0, 300.0);
     let lines = wrap(text, size, w - 2.0 * pad).len().max(1);
     let h = lines as f64 * size * 1.2 + 2.0 * pad + 2.0;
-    [at[0], at[1] - h, at[0] + w, at[1]]
+    pdfcraft_engine::text_box_at(rotation, at, w, h).unwrap_or([at[0], at[1] - h, at[0] + w, at[1]])
+}
+
+/// The `/Rotate` of `page` (0 when it is unknown).
+pub(crate) fn page_rotation(info: &DocInfo, page: usize) -> i64 {
+    info.pages.get(page).map_or(0, |p| i64::from(p.rotation))
 }
 
 /// Delete / Escape handling for comments (only while no text field has focus).
@@ -1431,6 +1503,10 @@ pub enum CanvasAction {
     OpenComments,
     /// Comment Properties for (page, index).
     Properties(usize, usize),
+    /// Copy Image: image (page, index in `page_images`) to the clipboard.
+    CopyImage(usize, usize),
+    /// Copy Image in Original Format: the same image as a file (JPEG as stored, else PNG).
+    CopyImageFile(usize, usize),
 }
 
 /// How many custom colours the "Recent colours" row keeps.
@@ -1848,7 +1924,7 @@ mod tests {
     fn drawn_shapes_ignore_slips() {
         assert_eq!(drawn_shape(CommentTool::Rectangle, &[[0.0, 0.0], [1.0, 1.0]]), None);
         assert_eq!(drawn_shape(CommentTool::Rectangle, &[[10.0, 0.0], [0.0, 10.0]]), Some(Shape::Rectangle { rect: [0.0, 0.0, 10.0, 10.0] }));
-        assert_eq!(drawn_shape(CommentTool::Ink, &[[0.0, 0.0]]), None);
+        assert_eq!(drawn_shape(CommentTool::Ink, &[[0.0, 0.0]]), Some(Shape::Ink { strokes: vec![vec![[0.0, 0.0]]] }));
         assert!(matches!(
             drawn_shape(CommentTool::Arrow, &[[0.0, 0.0], [5.0, 0.0]]),
             Some(Shape::Line { start: LineEnding::None, end: LineEnding::OpenArrow, .. })
@@ -1857,10 +1933,10 @@ mod tests {
 
     #[test]
     fn text_boxes_fit_their_text() {
-        let r = text_box_rect([100.0, 500.0], "Hi", 12.0);
+        let r = text_box_rect([100.0, 500.0], "Hi", 12.0, 0);
         assert_eq!((r[0], r[3]), (100.0, 500.0));
         assert!(r[2] - r[0] < 60.0);
-        let long = text_box_rect([0.0, 500.0], &"word ".repeat(80), 12.0);
+        let long = text_box_rect([0.0, 500.0], &"word ".repeat(80), 12.0, 0);
         assert_eq!(long[2], 300.0);
         assert!(long[3] - long[1] > 50.0);
     }

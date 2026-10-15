@@ -51,6 +51,8 @@
 	Column select	Oszlopkijelölés
 	Full screen mode	Teljes képernyő
 	Read mode	Olvasási mód
+	Next tab	Következő lap
+	Previous tab	Előző lap
 	Switch light / dark theme	Világos / sötét téma váltása
 	Comments panel	Megjegyzések panel
 	Form fields panel	Űrlapmezők panel
@@ -731,6 +733,12 @@
 	Flip Vertical	Függőleges tükrözés
 	Replace Image…	Kép cseréje…
 	Save Image As…	Kép mentése másként…
+	Copy Image	Kép másolása
+	The image has been copied ({w} × {h} pixels)	A kép a vágólapra került ({w} × {h} képpont)
+	Couldn't copy the image: {e}	A képet nem sikerült másolni: {e}
+	Copy Image in Original Format	Kép másolása eredeti formátumban
+	The image has been copied as a {ext} file	A kép {ext}-fájlként a vágólapra került
+	The page has changed; select the image again	Az oldal megváltozott; jelölje ki újra a képet
 	Check for updates	Frissítések keresése
 	No check has run yet.	Még nem futott ellenőrzés.
 	Checking for a newer version…	Újabb verzió keresése…
@@ -818,8 +826,15 @@
 	Windows store  ·  	Windows-tároló  ·  
 	Issued by: 	Kiállította: 
 	, Expires: 	, lejár: 
+	Digitally signed by	Digitálisan aláírta
+	DN: 	DN: 
+	Reason: 	Indok: 
+	Location: 	Hely: 
+	Date: 	Dátum: 
+	The labels are in English: the signature's font can't draw them in this language.	A címkék angolul jelennek meg: az aláírás betűtípusa ezen a nyelven nem tudja megjeleníteni őket.
 	No digital IDs yet.	Még nincs digitális azonosító.
 	Configure New Digital ID	Új digitális azonosító beállítása
+	Remove "{name}" from this list? The file itself is not deleted.	Eltávolítja a(z) „{name}” elemet erről a listáról? Maga a fájl nem törlődik.
 	Continue	Tovább
 	Configure a Digital ID for Signing	Digitális azonosító beállítása aláíráshoz
 	Use a Digital ID from a file	Digitális azonosító használata fájlból
@@ -2331,3 +2346,46 @@ animation effects	Off	Ki
 	The linked PDF opened, but its named destination was not applied.	A hivatkozott PDF megnyílt, de a nevesített cél nem lett alkalmazva.
 	The linked PDF opened, but its page destination was out of range.	A hivatkozott PDF megnyílt, de a céloldal a tartományon kívül esik.
 	Local cross-PDF links require the desktop app	A PDF-ek közötti helyi hivatkozásokhoz az asztali alkalmazás szükséges
+	Minimize	Minimalizálás
+	Maximize	Maximalizálás
+	Restore	Visszaállítás
+	Use system title bar	Rendszer címsorának használata
+	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Egyszerű címsor megjelenítése az ablakgombokkal a lapsáv helyett. A GNOME nem rajzol címsort az alkalmazásoknak, ezért ez nem követi a témáját.
+
+# Absolute local GoToR confirmation (#1364).
+	Allow	Engedélyezés
+	Only allow this if you trust the source document.	Csak akkor engedélyezze ezt, ha megbízik a forrásdokumentumban.
+	Open this local PDF?	Megnyitja ezt a helyi PDF-fájlt?
+	This document is trying to open a local file:	Ez a dokumentum egy helyi fájlt próbál megnyitni:
+	Move tag earlier	Címke korábbra helyezése
+	Move tag later	Címke későbbre helyezése
+	Mark as artifact	Megjelölés műtárgyként
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Távolítsa el ezt a levélcímkét az olvasási sorrendből, és jelölje meg a közvetlen tartalmát műtárgyként
+	Mark content as artifact	Tartalom megjelölése műtárgyként
+	Word count	Szavak száma
+	Current page only	Csak az aktuális oldal
+	Exclude tagged tables	Címkézett táblázatok kizárása
+	Exclude tagged code blocks	Címkézett kódblokkok kizárása
+	Exclude image/OCR text	Képek és OCR szövegének kizárása
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	A kizárások PDF-címkéket használnak. A címkézetlen táblázatok és kódok továbbra is beleszámítanak. A képek kizárása a láthatatlan szöveget is eltávolítja.
+	Words	Szavak
+	Characters	Karakterek
+	Characters without spaces	Karakterek szóközök nélkül
+	Pages counted	Megszámolt oldalak
+	Some pages contain no countable text. Scanned images need OCR first.	Egyes oldalakon nincs megszámolható szöveg. A beolvasott képeken először OCR-t kell futtatni.
+	Some content could not be classified safely and was kept in the count.	Egyes tartalmakat nem lehetett megbízhatóan besorolni, ezért beleszámítanak az eredménybe.
+	Counting words… {n} pages read	Szavak számlálása… {n} oldal beolvasva
+	Word counting stopped unexpectedly.	A szavak számlálása váratlanul leállt.
+	Word count…	Szavak száma…
+@id	file.word_count	Szavak száma…
+	Standard	Normál
+	Mobile	Mobil
+	Merge image fragments	Képtöredékek egyesítése
+	Optimizing… merging image fragments	Optimalizálás… képtöredékek egyesítése
+	Side by side	Egymás mellett
+	New file only	Csak az új fájl
+	Old file: {name}	Régi fájl: {name}
+	New file: {name}	Új fájl: {name}
+	Print as image	Nyomtatás képként
+	Resolution:	Felbontás:
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Akkor használja, ha a nyomtató kihagy szöveget, árnyékolást vagy átlátszóságot. A nyomat már nem kereshető szöveg; szürkeárnyalatos nyomtatással a képek szürkék.

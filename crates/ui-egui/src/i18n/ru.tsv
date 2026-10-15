@@ -71,6 +71,8 @@
 	Column select	Выделение столбца
 	Full screen mode	Полноэкранный режим
 	Read mode	Режим чтения
+	Next tab	Следующая вкладка
+	Previous tab	Предыдущая вкладка
 	Switch light / dark theme	Переключить светлую / тёмную тему
 	Comments panel	Панель комментариев
 	Form fields panel	Панель полей формы
@@ -754,6 +756,12 @@
 	Flip Vertical	Отразить по вертикали
 	Replace Image…	Заменить изображение…
 	Save Image As…	Сохранить изображение как…
+	Copy Image	Копировать изображение
+	The image has been copied ({w} × {h} pixels)	Изображение скопировано ({w} × {h} пикселей)
+	Couldn't copy the image: {e}	Не удалось скопировать изображение: {e}
+	Copy Image in Original Format	Копировать изображение в исходном формате
+	The image has been copied as a {ext} file	Изображение скопировано как файл {ext}
+	The page has changed; select the image again	Страница изменилась; выберите изображение снова
 	Check for updates	Проверить обновления
 	No check has run yet.	Проверка ещё не выполнялась.
 	Checking for a newer version…	Проверка новой версии…
@@ -841,8 +849,15 @@
 	Windows store  ·  	Хранилище Windows  ·
 	Issued by: 	Выдан:
 	, Expires: 	, Истекает:
+	Digitally signed by	Цифровая подпись
+	DN: 	DN: 
+	Reason: 	Причина: 
+	Location: 	Местоположение: 
+	Date: 	Дата: 
+	The labels are in English: the signature's font can't draw them in this language.	Метки на английском: шрифт подписи не может отобразить их на этом языке.
 	No digital IDs yet.	Нет цифровых идентификаторов.
 	Configure New Digital ID	Настроить новый цифровой идентификатор
+	Remove "{name}" from this list? The file itself is not deleted.	Убрать «{name}» из этого списка? Сам файл не удаляется.
 	Continue	Продолжить
 	Configure a Digital ID for Signing	Настроить цифровой идентификатор для подписи
 	Use a Digital ID from a file	Использовать цифровой идентификатор из файла
@@ -2245,3 +2260,46 @@ animation effects	Off	Выкл
 	The linked PDF opened, but its named destination was not applied.	Связанный PDF открыт, но его именованное назначение не применено.
 	The linked PDF opened, but its page destination was out of range.	Связанный PDF открыт, но страница назначения вне допустимого диапазона.
 	Local cross-PDF links require the desktop app	Локальные ссылки между PDF работают только в настольном приложении
+	Minimize	Свернуть
+	Maximize	Развернуть
+	Restore	Восстановить
+	Use system title bar	Использовать системный заголовок окна
+	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Показывать простой заголовок окна с кнопками вместо полосы вкладок. GNOME не рисует заголовки для приложений, поэтому этот заголовок не следует его теме.
+
+# Absolute local GoToR confirmation (#1364).
+	Allow	Разрешить
+	Only allow this if you trust the source document.	Разрешите это действие, только если доверяете исходному документу.
+	Open this local PDF?	Открыть этот локальный PDF?
+	This document is trying to open a local file:	Этот документ пытается открыть локальный файл:
+	Move tag earlier	Переместить тег раньше
+	Move tag later	Переместить тег позже
+	Mark as artifact	Пометить как артефакт
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Удалите этот конечный тег из порядка чтения и пометьте его непосредственное содержимое как артефакт
+	Mark content as artifact	Пометить содержимое как артефакт
+	Word count	Количество слов
+	Current page only	Только текущая страница
+	Exclude tagged tables	Исключить таблицы с тегами
+	Exclude tagged code blocks	Исключить блоки кода с тегами
+	Exclude image/OCR text	Исключить текст изображений и OCR
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Исключения используют теги PDF. Таблицы и код без тегов остаются в подсчёте. Исключение изображений также удаляет невидимый текст.
+	Words	Слова
+	Characters	Символы
+	Characters without spaces	Символы без пробелов
+	Pages counted	Подсчитанные страницы
+	Some pages contain no countable text. Scanned images need OCR first.	На некоторых страницах нет текста для подсчёта. Для отсканированных изображений сначала требуется OCR.
+	Some content could not be classified safely and was kept in the count.	Часть содержимого не удалось надёжно классифицировать, поэтому она осталась в подсчёте.
+	Counting words… {n} pages read	Подсчёт слов… прочитано страниц: {n}
+	Word counting stopped unexpectedly.	Подсчёт слов неожиданно остановился.
+	Word count…	Количество слов…
+@id	file.word_count	Количество слов…
+	Standard	Стандартные
+	Mobile	Мобильные устройства
+	Merge image fragments	Объединять фрагменты изображений
+	Optimizing… merging image fragments	Оптимизация… объединение фрагментов изображений
+	Side by side	Рядом
+	New file only	Только новый файл
+	Old file: {name}	Старый файл: {name}
+	New file: {name}	Новый файл: {name}
+	Print as image	Печать как изображение
+	Resolution:	Разрешение:
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Используйте, когда принтер пропускает текст, заливки или прозрачность. Отпечаток больше не текст с поиском; при печати в оттенках серого изображения серые.

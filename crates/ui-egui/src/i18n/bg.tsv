@@ -116,6 +116,8 @@
 	Column select	Избор на колона
 	Full screen mode	Цял екран
 	Read mode	Режим на четене
+	Next tab	Следващ раздел
+	Previous tab	Предишен раздел
 	Switch light / dark theme	Превключи светла / тъмна тема
 	Comments panel	Панел с коментари
 	Form fields panel	Панел с полета на формуляра
@@ -436,6 +438,12 @@
 	Flip Vertical	Обърни вертикално
 	Replace Image…	Замени изображението…
 	Save Image As…	Запиши изображението като…
+	Copy Image	Копирай изображението
+	The image has been copied ({w} × {h} pixels)	Изображението е копирано ({w} × {h} пиксела)
+	Couldn't copy the image: {e}	Изображението не можа да бъде копирано: {e}
+	Copy Image in Original Format	Копирай изображението в оригиналния формат
+	The image has been copied as a {ext} file	Изображението е копирано като файл {ext}
+	The page has changed; select the image again	Страницата е променена; изберете изображението отново
 	Check for updates	Провери за актуализации
 	No check has run yet.	Още не е извършвана проверка.
 	Checking for a newer version…	Проверка за по-нова версия…
@@ -522,8 +530,15 @@
 	Windows store  ·  	Хранилище на Windows  ·  
 	Issued by: 	Издаден от: 
 	, Expires: 	, валиден до: 
+	Digitally signed by	Цифрово подписано от
+	DN: 	DN: 
+	Reason: 	Причина: 
+	Location: 	Местоположение: 
+	Date: 	Дата: 
+	The labels are in English: the signature's font can't draw them in this language.	Етикетите са на английски: шрифтът на подписа не може да ги изобрази на този език.
 	No digital IDs yet.	Все още няма цифрови идентификатори.
 	Configure New Digital ID	Конфигурирай нов цифров идентификатор
+	Remove "{name}" from this list? The file itself is not deleted.	Да се премахне ли „{name}“ от този списък? Самият файл няма да бъде изтрит.
 	Continue	Продължи
 	Configure a Digital ID for Signing	Конфигуриране на цифров идентификатор за подписване
 	Use a Digital ID from a file	Използвай цифров идентификатор от файл
@@ -2295,3 +2310,46 @@ animation effects	Off	Изключени
 	The linked PDF opened, but its named destination was not applied.	Свързаният PDF се отвори, но именуваната му цел не беше приложена.
 	The linked PDF opened, but its page destination was out of range.	Свързаният PDF се отвори, но целевата му страница е извън обхвата.
 	Local cross-PDF links require the desktop app	Локалните връзки между PDF файлове изискват настолното приложение
+	Minimize	Минимизиране
+	Maximize	Максимизиране
+	Restore	Възстановяване
+	Use system title bar	Използване на системната заглавна лента
+	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Показване на обикновена заглавна лента за бутоните на прозореца вместо лентата с раздели. GNOME не рисува заглавни ленти за приложенията, затова тази не следва темата му.
+
+# Absolute local GoToR confirmation (#1364).
+	Allow	Разреши
+	Only allow this if you trust the source document.	Разрешете това само ако имате доверие на изходния документ.
+	Open this local PDF?	Да се отвори ли този локален PDF?
+	This document is trying to open a local file:	Този документ се опитва да отвори локален файл:
+	Move tag earlier	Преместване на етикета по-рано
+	Move tag later	Преместване на етикета по-късно
+	Mark as artifact	Маркиране като артефакт
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Премахнете този листов етикет от реда на четене и маркирайте прякото му съдържание като артефакт
+	Mark content as artifact	Маркиране на съдържание като артефакт
+	Word count	Брой думи
+	Current page only	Само текущата страница
+	Exclude tagged tables	Изключване на маркираните таблици
+	Exclude tagged code blocks	Изключване на маркираните блокове с код
+	Exclude image/OCR text	Изключване на текст от изображения/OCR
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Изключването използва PDF тагове. Немаркираните таблици и код остават включени. Изключването на изображения премахва и невидимия текст.
+	Words	Думи
+	Characters	Знаци
+	Characters without spaces	Знаци без интервали
+	Pages counted	Преброени страници
+	Some pages contain no countable text. Scanned images need OCR first.	Някои страници не съдържат текст за преброяване. Сканираните изображения първо изискват OCR.
+	Some content could not be classified safely and was kept in the count.	Част от съдържанието не може да бъде класифицирана надеждно и е включена в броя.
+	Counting words… {n} pages read	Преброяване на думи… прочетени страници: {n}
+	Word counting stopped unexpectedly.	Преброяването на думи спря неочаквано.
+	Word count…	Брой думи…
+@id	file.word_count	Брой думи…
+	Standard	Стандартни
+	Mobile	Мобилни устройства
+	Merge image fragments	Обединяване на фрагменти от изображения
+	Optimizing… merging image fragments	Оптимизиране… обединяване на фрагменти от изображения
+	Side by side	Един до друг
+	New file only	Само новият файл
+	Old file: {name}	Стар файл: {name}
+	New file: {name}	Нов файл: {name}
+	Print as image	Печат като изображение
+	Resolution:	Разделителна способност:
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Използвайте го, когато принтерът пропуска текст, сенки или прозрачност. Отпечатаното вече не е текст за търсене; с печат в сиво изображенията са сиви.

@@ -28,7 +28,7 @@ const GRID_TAG: u64 = 1 << 61;
 /// The tag of a raster that is out of date (shown until its replacement arrives).
 const STALE_TAG: u64 = u64::MAX;
 /// Pages whose raster would exceed this many device pixels on a side are drawn in tiles.
-const TILE_THRESHOLD: f32 = 4096.0;
+pub(crate) const TILE_THRESHOLD: f32 = 4096.0;
 /// Base device-pixel side of a page tile. The actual side grows with the zoom
 /// ([`tile_side`]), so a zoomed viewport is covered by a few tiles instead of many.
 const TILE: u32 = 1024;
@@ -266,6 +266,16 @@ impl Selection {
     }
 }
 
+/// The glyphs `clicks` quick clicks select around glyph `a`: two the word, three the line, more
+/// the page.
+fn click_unit(text: &PageText, clicks: u32, a: usize) -> Option<(usize, usize)> {
+    match clicks {
+        2 => text.word_at(a),
+        3 => text.line_at(a),
+        _ => text.glyphs.len().checked_sub(1).map(|last| (0, last)),
+    }
+}
+
 struct PageTex {
     tag: u64,
     tex: TextureHandle,
@@ -299,6 +309,8 @@ pub struct DocView {
     pub organize: bool,
     pub highlight_fields: bool,
     pub page_input: String,
+    /// Select the replacement page label once if its editor remains focused.
+    pub(crate) page_input_reselect: bool,
     pub notice_dismissed: bool,
     /// The user has been told that the form's scripts were turned off (it is said once).
     pub scripts_off_noted: bool,
@@ -354,6 +366,9 @@ pub struct DocView {
     pub(crate) text_failed: HashSet<usize>,
     pub find: Option<Find>,
     selection: Option<Selection>,
+    /// The drag in progress started a text selection: the wheel scrolls the page during it
+    /// (#721), which egui's scroll area refuses while anything is dragged.
+    selection_drag: bool,
     /// Clicks in the current run on the text layer: two select a word, three the line, four the page.
     clicks: u32,
     last_press_time: f64,
@@ -381,6 +396,8 @@ pub struct DocView {
     /// (#759). The window outlasts a single frame so egui's internal easing tail is suppressed as
     /// it decays, instead of adding on top of the 1:1 motion.
     precise_scroll_until: f64,
+    /// Touchpad momentum after the fingers lift (#531).
+    fling: crate::fling::Fling,
     pub(crate) auto_scroll: crate::autoscroll::AutoScroll,
     /// Pages selected in the organize grid or the Pages panel (0-based). Empty means "the current page".
     pub selected: BTreeSet<usize>,
@@ -394,10 +411,13 @@ pub struct DocView {
     pub(crate) edit_lines: HashMap<usize, (u64, Vec<pdfcraft_engine::TextBlock>)>,
     pub line_editor: Option<crate::edit_text_ui::LineEditor>,
     pub(crate) text_background: crate::edit_text_ui::TextBackground,
+    pub(crate) move_background: crate::content_ui::MoveBackground,
     /// Edit text & images: the images per page (by document generation), and the selected one.
     pub(crate) edit_images: HashMap<usize, (u64, Vec<pdfcraft_engine::PageImage>)>,
     pub(crate) objects: crate::object_ui::ObjectSelection,
     pub image_selection: Option<crate::edit_text_ui::ImageSelection>,
+    /// Select tool: the picture clicked, to copy in its original format.
+    pub picked_image: Option<crate::image_pick::PickedImage>,
     /// A paragraph box being dragged (moved, or resized from its right edge) in Edit text.
     pub block_drag: Option<crate::edit_text_ui::BlockDrag>,
     /// Commenting state: selected comment, gestures, composer.
@@ -443,6 +463,11 @@ pub struct DocView {
     /// The page-grid gap under the pointer this frame (where dropped files go), when it can
     /// take pages.
     pub grid_gap: Option<usize>,
+    /// The visible part of the Pages panel as last drawn, when it can take dropped files
+    /// (cleared each frame before the panels draw).
+    pub pages_panel: Option<Rect>,
+    /// The Pages-panel gap under the pointer (where dropped files go), when it can take pages.
+    pub panel_gap: Option<usize>,
     /// How large the page grid draws its pages (1.0 = the usual thumbnails).
     grid_zoom: f32,
     /// A zoom asked for this frame (toolbar, pinch, keys); the grid applies it once it has laid
@@ -466,7 +491,9 @@ pub struct DocView {
     /// interpret, so a drag would otherwise queue a storm of them (one per frame) while the
     /// in-flight ones cannot be cancelled mid-operator. Older tiles and the backdrop stay
     /// stretched meanwhile; fresh tiles go out once the pan settles.
-    last_scroll: Vec2,
+    pub(crate) last_scroll: Vec2,
+    /// Side-by-side compare: scroll to here this frame, following the other half.
+    pub(crate) sync_scroll: Option<Vec2>,
     pan_hold_until: f64,
     /// Pages whose raster proved slow (see `SLOW_MILLIS`): only these get the zoom/pan
     /// settle holds. Fast pages render straight through, with no added latency.
@@ -582,6 +609,7 @@ impl DocView {
             organize: false,
             highlight_fields: defaults.highlight_fields,
             page_input: "1".into(),
+            page_input_reselect: false,
             notice_dismissed: false,
             scripts_off_noted: false,
             disk_changed: false,
@@ -610,6 +638,7 @@ impl DocView {
             text_failed: HashSet::new(),
             find: None,
             selection: None,
+            selection_drag: false,
             clicks: 0,
             last_press_time: 0.0,
             last_press_pos: None,
@@ -625,6 +654,7 @@ impl DocView {
             shown: false,
             wheel: Default::default(),
             precise_scroll_until: 0.0,
+            fling: Default::default(),
             auto_scroll: Default::default(),
             selected: BTreeSet::new(),
             select_anchor: None,
@@ -633,13 +663,17 @@ impl DocView {
             edit_lines: HashMap::new(),
             line_editor: None,
             text_background: Default::default(),
+            move_background: Default::default(),
             edit_images: HashMap::new(),
             objects: Default::default(),
             image_selection: None,
+            picked_image: None,
             block_drag: None,
             pending_action: None,
             insert_at: None,
             grid_gap: None,
+            pages_panel: None,
+            panel_gap: None,
             grid_zoom: 1.0,
             grid_zoom_request: None,
             grid_anchor: None,
@@ -647,6 +681,7 @@ impl DocView {
             last_scale: 0.0,
             sharp_hold_until: 0.0,
             last_scroll: Vec2::ZERO,
+            sync_scroll: None,
             pan_hold_until: 0.0,
             slow_pages: HashSet::new(),
             comments: Default::default(),
@@ -679,7 +714,6 @@ impl DocView {
         self.page_heights = info.pages.iter().map(|p| p.height).collect();
         let last = self.page_count.saturating_sub(1);
         self.current = self.current.min(last);
-        self.page_input = (self.current + 1).to_string();
         self.selected.retain(|p| *p <= last);
         // Text being typed on a page that no longer exists goes with the page.
         if self.content.draft.as_ref().is_some_and(|d| d.page > last || self.page_count == 0) {
@@ -706,6 +740,7 @@ impl DocView {
         fresh.zoom = self.zoom;
         fresh.fit = self.fit;
         fresh.layout = self.layout;
+        fresh.continuous = self.continuous;
         fresh.rotation = self.rotation;
         fresh.current = self.current;
         fresh.organize = self.organize;
@@ -726,6 +761,8 @@ impl DocView {
         *self = fresh;
         // Marks the kept images out of date and clamps the page to the new page count.
         self.document_changed(info);
+        self.page_input = self.current_page_label(info.pages.get(self.current).map(|page| page.label.as_str()));
+        self.page_input_reselect = true;
     }
 
     /// Pages an organize command acts on: the selection, or the current page.
@@ -777,7 +814,7 @@ impl DocView {
     }
 
     pub fn render_pending(&self) -> bool {
-        !self.last_queue.is_empty() || self.text_background.pending()
+        !self.last_queue.is_empty() || self.text_background.pending() || self.move_background.pending()
     }
 
     /// Re-render every page and text layer (the document's appearance changed, e.g. a layer
@@ -865,6 +902,11 @@ impl DocView {
     /// A page's thumbnail texture, when rendered.
     pub(crate) fn thumb_id(&self, page: usize) -> Option<egui::TextureId> {
         self.thumbs.get(&page).map(|t| t.tex.id())
+    }
+
+    /// The whole-page raster on screen for `page` (the low-res backdrop of a tiled page), if any.
+    pub(crate) fn page_raster(&self, page: usize) -> Option<egui::TextureId> {
+        self.pages.get(&page).map(|p| p.tex.id())
     }
 
     /// The print preview's picture of `page`: the sheet raster when it has arrived, otherwise the
@@ -1011,7 +1053,6 @@ impl DocView {
         self.wheel.clear_motion();
         self.goto = Some((page, 0.0));
         self.current = page;
-        self.page_input = (page + 1).to_string();
     }
 
     /// Go to a destination, a bookmark's or a link's (ISO 32000-2 §12.3.2.2): its page, scrolled
@@ -1096,9 +1137,25 @@ impl DocView {
         self.go_to_page(target);
     }
 
-    /// Go to the page typed in the page box: a page label (logical page numbers, as Acrobat
-    /// does), else a page number. `false` when it names no page.
+    /// Page-editor focus and drafts belong to a document, even while another tab is active.
+    pub(crate) fn page_input_id(&self) -> egui::Id {
+        egui::Id::new(("page-input", self.id.0))
+    }
+
+    /// The idle page box and unchanged-input lookup share the same label fallback.
+    pub(crate) fn current_page_label(&self, label: Option<&str>) -> String {
+        label.filter(|l| !l.is_empty()).map(str::to_owned).unwrap_or_else(|| (self.current + 1).to_string())
+    }
+
+    /// Retain the current page when `typed` exactly matches its displayed label, even if
+    /// another page has that label. Otherwise resolve a trimmed label (case-insensitive),
+    /// then a physical page number. `false` when it names no page.
     pub fn go_to_typed(&mut self, typed: &str, labels: &[String]) -> bool {
+        // Compare the displayed value before trimming: a label may itself contain spaces.
+        // Repeated labels occur in restarted sections and prefix-only ranges.
+        if self.current < self.page_count && self.current_page_label(labels.get(self.current).map(String::as_str)) == typed {
+            return true;
+        }
         let t = typed.trim();
         let page = labels
             .iter()
@@ -1121,7 +1178,6 @@ impl DocView {
         let page = page.min(self.page_count.saturating_sub(1));
         self.goto = Some((page, 0.0));
         self.current = page;
-        self.page_input = (page + 1).to_string();
         true
     }
 
@@ -1306,6 +1362,8 @@ impl DocView {
 
     /// Start collecting demand from every consumer before scheduling or uploading results.
     pub(crate) fn begin_render_frame(&mut self) {
+        self.pages_panel = None;
+        self.panel_gap = None;
         self.thumb_demand.clear();
         self.frame_queue.clear();
         self.frame_visible.clear();
@@ -1340,6 +1398,7 @@ impl DocView {
         // Signature previews own a separate renderer and image/background textures.
         self.signature_drag = Default::default();
         self.text_background = Default::default();
+        self.move_background = Default::default();
         if !self.last_queue.is_empty() {
             pool.set_queue(Vec::new());
             self.last_queue.clear();
@@ -1611,6 +1670,7 @@ impl DocView {
             let tex = ctx.load_texture(format!("page-{:?}-{page}", self.id), img, TextureOptions::LINEAR);
             self.pages.insert(page, PageTex { tag: r.request.tag, tex });
             self.signature_drag.page_received(page);
+            self.move_background.page_received(page);
             self.waiting_since.remove(&page);
             if !self.stale_tiles.iter().any(|k| k.0 == page) {
                 self.forms.unbaked.retain(|(_, p)| *p != page);
@@ -1748,6 +1808,17 @@ impl DocView {
             }
         }
     }
+}
+
+/// The hover popup for an annotation. Replies and Fill & Sign marks (typed text, checks, signatures)
+/// show none: they are page content being edited, not comments.
+fn annotation_hover_text(a: &pdfcraft_render::Annotation) -> Option<String> {
+    if a.in_reply_to.is_some() || a.fill_sign {
+        return None;
+    }
+    let who = a.author.clone().unwrap_or_else(|| a.subtype.clone());
+    let body = a.contents.clone().unwrap_or_default();
+    Some(if body.is_empty() { who } else { format!("{who}\n{body}") })
 }
 
 /// The request tag for a raster at `scale`: equal tags mean the same scale (to 1/65536).
@@ -2213,9 +2284,25 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     } else {
         precise_scroll = Vec2::ZERO;
     }
+    // Touchpad momentum (#531): a swipe over the page lifted at speed glides on and slows to a
+    // stop, through the same un-eased path. Never while the pager owns the wheel, a gesture or
+    // dialog has the input, or animations are off; any click, key, zoom or other scrolling ends it.
+    // Asked of the preference, not of egui's animation time, which test harnesses zero.
+    let animates = app.animation_effects.animates(app.motion.reduced);
+    let may_glide = !single_paging && !middle_gesture && navigation_enabled && unobstructed && animates;
+    let over_page = ui.rect_contains_pointer(avail);
+    ui.input(|i| view.fling.read(&i.events, now, may_glide && over_page));
+    let interrupted = ui.input(|i| i.pointer.any_pressed() || i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. })));
+    if !may_glide || interrupted || key_scroll != 0.0 || auto_delta != Vec2::ZERO || zoom_delta != 1.0 {
+        view.fling.stop();
+    }
+    let glide = view.fling.step(now);
+    if view.fling.gliding() {
+        ui.ctx().request_repaint();
+    }
     let visible_pages: Vec<usize> = if view.continuous { (0..rects.len()).collect() } else { row.clone() };
     let (y_shift, content_h) = if view.continuous {
-        (0.0, rects.last().map(|r| r.bottom() + MARGIN).unwrap_or(0.0))
+        (0.0, rects.iter().map(|r| r.bottom()).reduce(f32::max).map(|bottom| bottom + MARGIN).unwrap_or(0.0))
     } else {
         // Only the current row scrolls into view; the content is its bounding box plus margins.
         match row.iter().filter_map(|&i| rects.get(i)).copied().reduce(Rect::union) {
@@ -2241,6 +2328,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // where an earlier session left another document.
     if !std::mem::replace(&mut view.shown, true) {
         scroll = scroll.scroll_offset(Vec2::ZERO);
+    }
+    if let Some(v) = view.sync_scroll.take() {
+        scroll = scroll.scroll_offset(v);
     }
     if let Some((page, fx, fy, rel)) = view.zoom_anchor.take() {
         let r = rects[page.min(rects.len() - 1)];
@@ -2321,6 +2411,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         || app.palette_open
         || app.password_prompt.is_some()
         || app.pending_link.is_some()
+        || app.pending_remote_link.is_some()
         || app.updates.open;
     let mut clicked_link: Option<LinkTarget> = None;
     let mut remote_open: Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)> = None;
@@ -2344,6 +2435,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     } else {
         view.content.selected = None;
     }
+    view.move_background.prepare(ui.ctx(), doc, &view.content, scale);
 
     // A destination's position (bookmarks, links) refines `goto`: its point at the window's
     // top-left, or the centre of a /FitR rectangle at the window's centre.
@@ -2367,13 +2459,18 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             // Only interactions pause; the document must keep its original colours.
             ui.set_opacity(opacity);
         }
-        // Middle-button auto-scroll, the keyboard and precise touchpad input (#759); positive y
-        // moves the content down. All three scroll without easing, unlike egui's wheel default.
-        let delta = auto_delta - vec2(0.0, key_scroll) + precise_scroll;
+        // Middle-button auto-scroll, the keyboard, precise touchpad input (#759) and its glide
+        // (#531); positive y moves the content down. All scroll without easing, unlike egui's
+        // wheel default.
+        let delta = auto_delta - vec2(0.0, key_scroll) + precise_scroll + glide;
         if delta != Vec2::ZERO {
             ui.scroll_with_delta_animation(delta, egui::style::ScrollAnimation::none());
         }
         let (resp_rect, resp) = ui.allocate_exact_size(vec2(content_w, content_h), Sense::click_and_drag());
+        // A drag lasts only while egui reports it, so the mark can't outlive one.
+        if !resp.dragged_by(egui::PointerButton::Primary) {
+            view.selection_drag = false;
+        }
         // The Hand tool pans: the content widget takes every drag, so scroll by its delta.
         if hand {
             if resp.dragged() {
@@ -2543,6 +2640,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 }
             }
             view.text_background.paint(painter, &xf, i, view.line_editor.as_ref());
+            if editing_content {
+                let page_tex = view.pages.get(&i).map(|p| p.tex.id());
+                view.move_background.paint(ui, painter, &xf, i, info, &view.content, page_tex);
+            }
             painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(0.5, t.border.gamma_multiply(0.8)), egui::StrokeKind::Outside);
 
             // Comments: tools, selection, moving and resizing come before text selection.
@@ -2775,17 +2876,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                         // Multi-click highlights immediately on pointer press instead of release (#1024).
                         let clicks = if view.clicks > 2 && tool != QuickTool::Select { 1 } else { view.clicks };
                         if clicks >= 2 && over_text {
-                            let span = text.nearest(vx, vy).and_then(|a| match clicks {
-                                2 => text.word_at(a),
-                                3 => text.line_at(a),
-                                _ => text.glyphs.len().checked_sub(1).map(|last| (0, last)),
-                            });
+                            let span = text.nearest(vx, vy).and_then(|a| click_unit(&text, clicks, a));
                             if let Some((first, last)) = span {
                                 view.selection = Some(Selection::run(i, first, last));
                             }
                         }
                     }
                     if resp.drag_started() && press_here && !over_link {
+                        view.selection_drag = true;
                         let origin = ui.input(|inp| inp.pointer.press_origin()).unwrap_or(p);
                         let (ox, oy) = xf.screen_to_view(origin);
                         if view.clicks < 2 {
@@ -2796,10 +2894,22 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                             };
                         }
                     }
+                    let clicks = if view.clicks > 2 && tool != QuickTool::Select { 1 } else { view.clicks };
                     if resp.dragged()
                         && let Some(sel) = view.selection.as_mut().filter(|s| s.page == i)
                     {
                         match &mut sel.span {
+                            // After a multi-click the drag extends by its unit (#1685), as in
+                            // Acrobat and browsers: whole words or lines, always keeping the one
+                            // clicked, which holds the anchor whichever way the drag went.
+                            Span::Run { anchor, head } if clicks >= 2 => {
+                                if let Some(h) = text.nearest(vx, vy)
+                                    && let Some((first, last)) = click_unit(&text, clicks, *anchor)
+                                {
+                                    let (to_first, to_last) = click_unit(&text, clicks, h).unwrap_or((h, h));
+                                    (*anchor, *head) = if to_first < first { (last, to_first) } else { (first, to_last.max(last)) };
+                                }
+                            }
                             Span::Run { head, .. } => {
                                 if let Some(h) = text.nearest(vx, vy) {
                                     *head = h;
@@ -2835,11 +2945,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     // (a highlight made by the double-click left its word selected).
                     if release_clicks > 0 && clicks >= 2 && over_text {
                         if view.selection.is_none() {
-                            let span = text.nearest(vx, vy).and_then(|a| match clicks {
-                                2 => text.word_at(a),
-                                3 => text.line_at(a),
-                                _ => text.glyphs.len().checked_sub(1).map(|last| (0, last)),
-                            });
+                            let span = text.nearest(vx, vy).and_then(|a| click_unit(&text, clicks, a));
                             if let Some((first, last)) = span {
                                 view.selection = Some(Selection::run(i, first, last));
                             }
@@ -2858,6 +2964,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 }
             }
 
+            if tool == QuickTool::Select && !consumed {
+                crate::image_pick::page_input(&resp, &xf, i, info, doc, pointer, view);
+            }
+            crate::image_pick::paint(painter, &xf, i, info, view);
             comments::page_after_text(&resp, &pcx, view);
             if tool == QuickTool::Redact && can_modify {
                 crate::redact_ui::after_text(&resp, i, info, view);
@@ -2935,12 +3045,13 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 // freehand, where it would cover the next stroke (#429).
                 let freehand = matches!(tool, QuickTool::Comment(comments::CommentTool::Ink | comments::CommentTool::Eraser));
                 let gesturing = view.comments.gesture.is_some() || freehand;
-                for a in info.annotations.iter().filter(|a| a.page == i && a.in_reply_to.is_none() && !gesturing) {
+                for a in info.annotations.iter().filter(|a| a.page == i && !gesturing) {
                     let sr = xf.user_rect(info, i, a.rect);
-                    if sr.contains(p) && hover_text.is_none() {
-                        let who = a.author.clone().unwrap_or_else(|| a.subtype.clone());
-                        let body = a.contents.clone().unwrap_or_default();
-                        hover_text = Some((p, if body.is_empty() { who } else { format!("{who}\n{body}") }));
+                    if sr.contains(p)
+                        && hover_text.is_none()
+                        && let Some(text) = annotation_hover_text(a)
+                    {
+                        hover_text = Some((p, text));
                     }
                 }
             }
@@ -2972,6 +3083,38 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 }
             }
         }
+        // ScrollArea ignores the wheel while any widget is dragged, so a text-selection drag
+        // scrolls the page itself (#721). After the page loop, so it keeps scrolling once the
+        // pointer leaves the selection's page for the gap or the next page; over the whole
+        // document area, like #759. A Line/Page event clears precise_scroll_until; a Point
+        // gesture's eased tail after its suppression deadline is not picked up.
+        if view.selection_drag
+            && navigation_enabled
+            && unobstructed
+            && !single_paging
+            && view.precise_scroll_until == 0.0
+            && ui.rect_contains_pointer(avail)
+        {
+            let delta = ui.input_mut(|input| std::mem::take(&mut input.smooth_scroll_delta));
+            if delta != Vec2::ZERO {
+                ui.scroll_with_delta_animation(delta, egui::style::ScrollAnimation::none());
+            }
+        }
+        // Held at the top or bottom edge, or dragged past it, a text selection scrolls the view
+        // so it can reach text off screen (#1670); the selection follows the pointer on its page.
+        if view.selection_drag
+            && navigation_enabled
+            && unobstructed
+            && !single_paging
+            && let Some(p) = ui.input(|i| i.pointer.latest_pos())
+        {
+            let dy = crate::autoscroll::edge_delta(p.y, avail, ui.input(|i| i.stable_dt));
+            if dy != 0.0 {
+                ui.scroll_with_delta_animation(vec2(0.0, dy), egui::style::ScrollAnimation::none());
+                // Keep scrolling while the pointer rests there and sends no events.
+                ui.ctx().request_repaint();
+            }
+        }
         // The page navigated to stays current while no page shows more of itself, so the next
         // page step starts from it rather than from a page further down the screen (#188).
         // It also stays current while it is wholly on screen: a short page (a cheque) gone to
@@ -2982,9 +3125,6 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         }
         if view.continuous {
             view.current = current;
-            if !ui.memory(|m| m.has_focus(egui::Id::new("page-input"))) {
-                view.page_input = (current + 1).to_string();
-            }
         }
         resp.context_menu(|ui| {
             // Preparing a form: the selected field's menu.
@@ -3055,7 +3195,35 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 }
                 return;
             }
-            canvas_action = comments::context_menu(ui, view, info, prefs, allowed);
+            // Over a picture (and no comment): Copy Image, as in Acrobat's page menu.
+            let mut copy_image = None;
+            if view.comments.selected.is_none()
+                && let Some((page, at)) = view.comments.context_at
+            {
+                // The page's content is parsed once per right-click, not on every frame the menu is open.
+                let key = egui::Id::new("copy-image-under-menu");
+                let cached = ui.data(|d| d.get_temp::<(usize, [f64; 2], Option<usize>)>(key)).filter(|c| c.0 == page && c.1 == at);
+                let hit = match cached {
+                    Some(c) => c.2,
+                    None => {
+                        let hit = doc.page_image_at(page, at);
+                        ui.data_mut(|d| d.insert_temp(key, (page, at, hit)));
+                        hit
+                    }
+                };
+                if let Some(image) = hit {
+                    if ui.button(tl!("Copy Image")).clicked() {
+                        copy_image = Some(comments::CanvasAction::CopyImage(page, image));
+                        ui.close();
+                    }
+                    if ui.button(tl!("Copy Image in Original Format")).clicked() {
+                        copy_image = Some(comments::CanvasAction::CopyImageFile(page, image));
+                        ui.close();
+                    }
+                    ui.separator();
+                }
+            }
+            canvas_action = comments::context_menu(ui, view, info, prefs, allowed).or(copy_image);
         });
         (wanted, visible_now)
     });
@@ -3084,6 +3252,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if (scroll_offset - view.last_scroll).length() > 2.0 {
         view.pan_hold_until = now_settle + 0.25;
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(280));
+    }
+    if glide != Vec2::ZERO {
+        view.fling.moved((scroll_offset - view.last_scroll).length() > 0.01);
     }
     view.last_scroll = scroll_offset;
     let pan_held = now_settle < view.pan_hold_until;
@@ -3236,6 +3407,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             app.comments_panel_closed = false;
         }
         Some(comments::CanvasAction::Properties(p, i)) => open_props = Some((p, i)),
+        Some(comments::CanvasAction::CopyImage(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::Copy(p, i)),
+        Some(comments::CanvasAction::CopyImageFile(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::CopyFile(p, i)),
         None => {}
     }
     match clicked_link {
@@ -3314,6 +3487,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     match image_action {
         Some(crate::edit_text_ui::ImageAction::Replace(page, index)) => app.replace_page_image_dialog(page, index),
         Some(crate::edit_text_ui::ImageAction::Save(page, index)) => app.save_page_image(page, index),
+        Some(crate::edit_text_ui::ImageAction::Copy(page, index)) => app.copy_page_image(page, index),
+        Some(crate::edit_text_ui::ImageAction::CopyFile(page, index)) => app.copy_page_image_file(page, index),
         None => {}
     }
     if let Some(why) = refused {
@@ -4458,6 +4633,32 @@ pub(crate) fn texture_image(size: [usize; 2], pixels: pdfcraft_render::Pixels) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn annotation(fill_sign: bool) -> pdfcraft_render::Annotation {
+        pdfcraft_render::Annotation {
+            page: 0,
+            subtype: "FreeText".into(),
+            author: None,
+            contents: Some("Hello".into()),
+            modified: None,
+            name: None,
+            in_reply_to: None,
+            rect: [0.0; 4],
+            color: None,
+            index: 0,
+            state: None,
+            quads: Vec::new(),
+            locked: false,
+            intent: None,
+            fill_sign,
+        }
+    }
+
+    #[test]
+    fn hover_popup_skips_fill_and_sign_marks() {
+        assert_eq!(annotation_hover_text(&annotation(false)).as_deref(), Some("FreeText\nHello"));
+        assert_eq!(annotation_hover_text(&annotation(true)), None);
+    }
 
     #[test]
     fn rendered_rasters_become_texture_images_without_a_copy() {

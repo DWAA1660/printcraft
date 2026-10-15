@@ -12,6 +12,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod a11y;
+mod batch;
 mod comments;
 mod content;
 mod conventions;
@@ -24,6 +25,7 @@ mod printing;
 mod reading;
 mod redact;
 mod signing;
+mod text_cache;
 mod tools;
 
 use std::collections::HashMap;
@@ -95,8 +97,11 @@ const MAX_BOOKMARK_PAGE: usize = 1000;
 const FIND_FIRST_BATCH: usize = 8;
 const FIND_MAX_BATCH: usize = 128;
 
-/// Page texts of one document version: (the working bytes, one slot per page).
-type TextCache = (Arc<Vec<u8>>, Vec<Option<Arc<PageText>>>);
+use text_cache::TextCache;
+
+type PageTexts = Vec<(usize, std::result::Result<Arc<PageText>, String>)>;
+const FIND_MAX_WARNINGS: usize = 100;
+const FIND_MAX_WARNING_BYTES: usize = 1024;
 
 /// A headless PdfCraft session driven by tool calls.
 pub struct Automation {
@@ -104,8 +109,8 @@ pub struct Automation {
     root: Option<PathBuf>,
     /// Synchronous renderers, rebuilt when a document's working bytes change.
     renderers: HashMap<DocId, (Arc<Vec<u8>>, PageRenderer)>,
-    /// Extracted page text per document version (the working bytes it was taken from).
-    texts: HashMap<DocId, TextCache>,
+    /// Extracted page text, under one memory budget across all open documents.
+    texts: TextCache,
 }
 
 impl Default for Automation {
@@ -116,7 +121,7 @@ impl Default for Automation {
 
 impl Automation {
     pub fn new() -> Self {
-        Self { session: Session::new(), root: None, renderers: HashMap::new(), texts: HashMap::new() }
+        Self { session: Session::new(), root: None, renderers: HashMap::new(), texts: TextCache::default() }
     }
 
     /// Confine every path the tools read or write to `root` (relative paths resolve inside it).
@@ -165,6 +170,7 @@ impl Automation {
         let a = Args(args);
         let out = match name {
             "doc_open" => self.doc_open(&a)?,
+            "doc_batch" => self.doc_batch(&a)?,
             "doc_list" => json!({ "documents": self.session.docs().iter().map(summary).collect::<Vec<_>>() }),
             "doc_info" => {
                 let id = self.doc(&a)?.id;
@@ -180,6 +186,7 @@ impl Automation {
             "page_render" => return self.page_render(&a).map(|c| vec![c]),
             "comment_image_preview" => return self.comment_image_preview(&a),
             "text_extract" => self.text_extract(&a)?,
+            "text_word_count" => self.text_word_count(&a)?,
             "text_find" => self.text_find(&a)?,
             "page_rotate" => {
                 let degrees = a.int("degrees")?;
@@ -347,6 +354,7 @@ impl Automation {
             }
             "page_set_box" => self.page_set_box(&a)?,
             "doc_create" => self.doc_create(&a)?,
+            "xfa_to_static" => self.apply(&a, Edit::XfaToStatic)?,
             "doc_flatten" => {
                 let (comments, fields) = (a.opt_bool("comments")?.unwrap_or(true), a.opt_bool("fields")?.unwrap_or(true));
                 if !comments && !fields {
@@ -716,6 +724,8 @@ impl Automation {
             "comment_set_status" => self.comment_set_status(&a)?,
             "sign_list" => self.sign_list(&a)?,
             "accessibility_check" => self.a11y_check(&a)?,
+            "accessibility_autotag_preview" => self.accessibility_autotag_preview(&a)?,
+            "accessibility_autotag_apply" => self.accessibility_autotag_apply(&a)?,
             "ocr_recognize" => self.ocr_recognize(&a)?,
             "js_run" => self.js_run(&a)?,
             "js_document_scripts" => self.js_document_scripts(&a)?,
@@ -728,6 +738,7 @@ impl Automation {
             "doc_compare" => self.doc_compare(&a)?,
             "action_list" => self.action_list()?,
             "pdfa_verify" => self.pdfa_verify(&a)?,
+            "print_readiness" => self.print_readiness(&a)?,
             "doc_export_office" => self.doc_export_office(&a)?,
             "pdfa_convert" => self.pdfa_convert(&a)?,
             "action_run" => self.action_run(&a)?,
@@ -746,6 +757,7 @@ impl Automation {
             "accessibility_set_alt" => self.accessibility_set_alt(&a)?,
             "accessibility_tags" => self.accessibility_tags(&a)?,
             "accessibility_set_tag_property" => self.accessibility_set_tag_property(&a)?,
+            "accessibility_mark_tag_artifact" => self.accessibility_mark_tag_artifact(&a)?,
             "accessibility_move_tag" => self.accessibility_move_tag(&a)?,
             "sign_id_create" => self.sign_id_create(&a)?,
             "sign_document" => self.sign_document(&a)?,
@@ -849,6 +861,10 @@ impl Automation {
     }
 
     fn doc_save(&mut self, a: &Args) -> Result<Value> {
+        self.doc_save_with(a, write_atomic)
+    }
+
+    fn doc_save_with(&mut self, a: &Args, write: impl FnOnce(&Path, &[u8]) -> Result<()>) -> Result<Value> {
         let doc = self.doc(a)?;
         let id = doc.id;
         let target = match a.opt_str("path")? {
@@ -863,10 +879,14 @@ impl Automation {
             self.apply(a, Edit::FlattenFillSign)?;
         }
         let bytes = if full { self.session.save_full_bytes(id) } else { self.session.save_bytes(id) }.map_err(failed)?;
-        write_atomic(&target, &bytes)?;
+        // A save that adds or removes encryption, or must not keep the old revision (Sanitize,
+        // redaction), is rewritten in full even when an incremental save was asked for.
+        let incremental = !full && bytes.starts_with(&self.doc(a)?.saved_bytes());
+        self.session.check_save(id, &bytes).map_err(failed)?;
+        write(&target, &bytes)?;
         let path = target.to_string_lossy().into_owned();
         self.session.mark_saved(id, bytes.clone(), Some(path.clone())).map_err(failed)?;
-        Ok(json!({ "path": path, "bytes": bytes.len(), "incremental": !full, "document": summary(self.doc(a)?) }))
+        Ok(json!({ "path": path, "bytes": bytes.len(), "incremental": incremental, "document": summary(self.doc(a)?) }))
     }
 
     fn doc_revisions(&mut self, a: &Args) -> Result<Value> {
@@ -976,11 +996,14 @@ impl Automation {
     }
 
     fn doc_optimize(&mut self, a: &Args) -> Result<Value> {
-        use pdfcraft_engine::optimize::{Compression, ImageSettings, Settings};
+        use pdfcraft_engine::optimize::{Compression, ImageSettings, Preset};
         let id = self.doc(a)?.id;
         let before = self.doc(a)?.bytes.len();
         let path = self.resolve(a.str("path")?, true)?;
-        let mut settings = Settings::default();
+        let mut settings = match a.opt_str("preset")? {
+            None => Preset::Standard.settings(),
+            Some(p) => Preset::from_name(p).ok_or_else(|| ToolError::InvalidArgs(format!("unknown preset {p:?} (standard, mobile)")))?.settings(),
+        };
         let images = |key: &str, base: ImageSettings| -> Result<ImageSettings> {
             let Some(v) = a.get(key) else { return Ok(base) };
             let mut s = base;
@@ -1008,6 +1031,7 @@ impl Automation {
         settings.color = images("color", settings.color)?;
         settings.gray = images("gray", settings.gray)?;
         for (key, flag) in [
+            ("merge_fragments", &mut settings.merge_fragments),
             ("discard_thumbnails", &mut settings.discard_thumbnails),
             ("discard_alternate_images", &mut settings.discard_alternate_images),
             ("discard_tags", &mut settings.discard_tags),
@@ -1040,6 +1064,8 @@ impl Automation {
             "path": path.to_string_lossy(),
             "bytes_before": before,
             "bytes_after": bytes.len(),
+            "merged_images": o.merged_images,
+            "fragments_merged": o.fragments_merged,
             "images": o.images,
             "images_resampled": o.images_resampled,
             "images_recompressed": o.images_recompressed,
@@ -1697,23 +1723,69 @@ impl Automation {
 
     /// The text of `pages` (0-based), from the cache or extracted in parallel.
     fn page_texts(&mut self, id: DocId, pages: &[usize]) -> Result<Vec<Arc<PageText>>> {
+        self.page_text_results(id, pages, &mut extract_parallel)?
+            .into_iter()
+            .map(|(p, text)| text.map_err(|e| failed(format!("page {}: {e}", p + 1))))
+            .collect()
+    }
+
+    /// Keep per-page failures until the caller chooses strict or partial-result semantics.
+    fn page_text_results(
+        &mut self,
+        id: DocId,
+        pages: &[usize],
+        extract: &mut impl FnMut(&Arc<Vec<u8>>, Option<Arc<str>>, &[usize]) -> PageTexts,
+    ) -> Result<PageTexts> {
         let doc = self.session.get(id).ok_or_else(|| failed("no such document"))?;
         let (bytes, n) = (doc.bytes.clone(), doc.info.pages.len());
         let password: Option<Arc<str>> = doc.password.as_deref().map(Arc::from);
-        let entry = self.texts.entry(id).or_insert_with(|| (bytes.clone(), Vec::new()));
-        if !Arc::ptr_eq(&entry.0, &bytes) || entry.1.len() != n {
-            *entry = (bytes.clone(), vec![None; n]);
-        }
-        let mut missing: Vec<usize> = pages.iter().copied().filter(|p| entry.1.get(*p).is_some_and(Option::is_none)).collect();
-        missing.sort_unstable();
-        missing.dedup();
-        for (p, text) in extract_parallel(&bytes, password, &missing) {
-            let text = Arc::new(text.map_err(|e| failed(format!("page {}: {e}", p + 1)))?);
-            if let Some(slot) = entry.1.get_mut(p) {
-                *slot = Some(text);
+        self.texts.prepare(id, &bytes);
+        let mut results = HashMap::new();
+        let mut missing = Vec::new();
+        for &p in pages {
+            if p >= n {
+                results.insert(p, Err("page is out of range".to_owned()));
+            } else if let Some(text) = self.texts.get(id, p) {
+                results.insert(p, Ok(text));
+            } else {
+                missing.push(p);
             }
         }
-        pages.iter().map(|p| entry.1.get(*p).cloned().flatten().ok_or_else(|| failed(format!("page {} has no text", p + 1)))).collect()
+        missing.sort_unstable();
+        missing.dedup();
+        if !missing.is_empty() {
+            for (p, text) in extract(&bytes, password, &missing) {
+                if let Ok(text) = &text {
+                    self.texts.insert(id, p, &bytes, text.clone());
+                }
+                results.insert(p, text);
+            }
+        }
+        // The batch owns its Arcs: evicting a cache entry cannot lose a requested result. A
+        // worker that fails to return a page is an explicit failure, never an empty success.
+        Ok(pages.iter().map(|p| (*p, results.get(p).cloned().unwrap_or_else(|| Err("text extraction returned no result".into())))).collect())
+    }
+
+    fn text_word_count(&self, a: &Args) -> Result<Value> {
+        use pdfcraft_engine::word_count::{self, Counts, Options};
+        let doc = self.doc_to_copy(a)?;
+        let pages = match a.opt_ints("pages")? {
+            Some(_) => self.pages(a, "pages")?,
+            None => (0..doc.info.pages.len()).collect(),
+        };
+        let options = Options {
+            exclude_tables: a.opt_bool("exclude_tables")?.unwrap_or(false),
+            exclude_code: a.opt_bool("exclude_code")?.unwrap_or(false),
+            exclude_images: a.opt_bool("exclude_images")?.unwrap_or(false),
+        };
+        let report = word_count::count(doc.export_source(), &pages, options, |_| true).map_err(failed)?;
+        let counts = |c: Counts| json!({ "words": c.words, "characters": c.characters, "characters_without_spaces": c.characters_without_spaces });
+        Ok(json!({
+            "total": counts(report.total),
+            "pages": report.pages.into_iter().map(|(p, c)| json!({ "page": p + 1, "counts": counts(c) })).collect::<Vec<_>>(),
+            "pages_without_text": report.pages_without_text,
+            "unclassified_structure": report.unclassified_structure,
+        }))
     }
 
     fn text_extract(&mut self, a: &Args) -> Result<Value> {
@@ -1736,9 +1808,13 @@ impl Automation {
 
     /// Matches in document order, extracting page text in growing batches and stopping as soon as
     /// `limit` is reached, so a bounded search doesn't extract (and cache) the whole document
-    /// (#971). One match past the limit is looked for, so `complete` is true only when no more
-    /// exist; otherwise `next` holds the arguments that continue the search.
+    /// (#971). One match past the limit supplies `next`. Reached extraction failures are reported
+    /// as bounded warnings; `complete` requires both no continuation and no failed pages.
     fn text_find(&mut self, a: &Args) -> Result<Value> {
+        self.text_find_with(a, &mut extract_parallel)
+    }
+
+    fn text_find_with(&mut self, a: &Args, extract: &mut impl FnMut(&Arc<Vec<u8>>, Option<Arc<str>>, &[usize]) -> PageTexts) -> Result<Value> {
         let doc = self.doc(a)?;
         let (id, n) = (doc.id, doc.info.pages.len());
         let query = a.str("query")?;
@@ -1751,13 +1827,28 @@ impl Automation {
         let skip = usize::try_from(a.opt_int("skip")?.unwrap_or(0).max(0)).unwrap_or(usize::MAX);
         let mut matches = Vec::new();
         let mut next = None;
+        let mut warnings = Vec::new();
+        let mut warning_count = 0usize;
         let (mut first, mut batch) = (start, FIND_FIRST_BATCH);
         'search: while first < n {
             let end = first.saturating_add(batch).min(n);
             let pages: Vec<usize> = (first..end).collect();
-            let texts = self.page_texts(id, &pages)?;
-            for (p, text) in pages.iter().zip(&texts) {
-                let skip_here = if *p == start { skip } else { 0 };
+            let texts = self.page_text_results(id, &pages, extract)?;
+            for (p, text) in texts {
+                let text = match text {
+                    Ok(text) => text,
+                    Err(mut error) => {
+                        warning_count += 1;
+                        if warnings.len() < FIND_MAX_WARNINGS {
+                            let end = error.floor_char_boundary(FIND_MAX_WARNING_BYTES.min(error.len()));
+                            let truncated = end < error.len();
+                            error.truncate(end);
+                            warnings.push(json!({ "page": p + 1, "error": error, "error_truncated": truncated }));
+                        }
+                        continue;
+                    }
+                };
+                let skip_here = if p == start { skip } else { 0 };
                 // One extra match proves that the caller needs a continuation. Include skipped
                 // matches on the starting page when bounding the temporary per-page result.
                 let needed = limit.saturating_sub(matches.len()).saturating_add(skip_here).saturating_add(1);
@@ -1772,7 +1863,8 @@ impl Automation {
             first = end;
             batch = batch.saturating_mul(2).min(FIND_MAX_BATCH);
         }
-        let mut out = json!({ "query": query, "count": matches.len(), "complete": next.is_none(), "matches": matches });
+        let mut out = json!({ "query": query, "count": matches.len(), "complete": next.is_none() && warning_count == 0, "matches": matches,
+            "warnings_truncated": warning_count > warnings.len(), "warning_count": warning_count, "warnings": warnings });
         if let (Some(next), Some(o)) = (next, out.as_object_mut()) {
             o.insert("next".into(), next);
         }
@@ -1847,8 +1939,17 @@ impl Automation {
             return Err(outside());
         }
         if !rest.is_empty() && !for_write {
-            // Missing, below a folder inside the root: say why, as the system reports it.
-            real = joined.canonicalize().map_err(|e| failed(format!("{path}: {e}")))?;
+            // Missing, below a folder inside the root: say where it was looked for, so a path
+            // written for another working directory can be corrected (#1890), and otherwise
+            // why, as the system reports it. `joined` is under the root, so naming it reveals
+            // nothing outside.
+            real = joined.canonicalize().map_err(|e| {
+                let (looked, root) = (joined.display(), root.display());
+                match e.kind() {
+                    std::io::ErrorKind::NotFound => failed(format!("{path} not found (looked for {looked}, --root {root})")),
+                    _ => failed(format!("{path}: {e} (looked for {looked}, --root {root})")),
+                }
+            })?;
             if !real.starts_with(root) {
                 return Err(outside()); // it appeared, as a link out, since the check above
             }
@@ -2149,17 +2250,24 @@ fn info(d: &Document) -> Value {
         })).collect::<Vec<_>>(),
         "layers": i.layers.iter().map(|l| json!({ "name": l.name, "visible": l.visible })).collect::<Vec<_>>(),
         "attachments": i.attachments.iter().map(|a| json!({ "name": a.name, "description": a.description, "size": a.size })).collect::<Vec<_>>(),
+        // `substitute` names the face standing in for a program the document does not embed, and
+        // `substitution` says why. Both are null for an embedded font: nothing stands in. A null
+        // `substitute` with a non-null `substitution` means no face was available at all, so
+        // nothing is drawn for that font -- which is the answer to "why is my text missing?".
         "fonts": i.fonts.iter().map(|f| json!({
             "name": f.name, "kind": f.kind, "embedded": f.embedded, "subset": f.subset, "encoding": f.encoding,
+            "substitute": f.substitute, "substitution": f.substitution,
         })).collect::<Vec<_>>(),
         "warnings": i.warnings,
         "repairs": d.repair_log(),
     })
 }
 
-/// A user-space rectangle on 0-based `page` in displayed-page coordinates; unchanged when the
-/// page is unknown (a malformed annotation that points at no page).
-fn view_rect(i: &pdfcraft_render::DocInfo, page: usize, rect: [f32; 4]) -> [f32; 4] {
+/// A user-space rectangle on 0-based `page` in displayed-page coordinates (points from the
+/// top-left of the page as displayed, y down, after `/Rotate`), the way every tool reports
+/// rectangles; unchanged when the page is unknown (a malformed annotation that points at no page).
+/// Public so `pdfcraft-cli` reports the same rectangles as the tools.
+pub fn view_rect(i: &pdfcraft_render::DocInfo, page: usize, rect: [f32; 4]) -> [f32; 4] {
     i.pages.get(page).map_or(rect, |p| comments::rect_to_view(p, rect))
 }
 
@@ -2188,12 +2296,12 @@ fn encode_png(width: u32, height: u32, premultiplied: &[u8]) -> Result<Vec<u8>> 
 }
 
 /// Extract the text of `pages` (0-based) with one renderer per worker thread.
-fn extract_parallel(bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[usize]) -> Vec<(usize, std::result::Result<PageText, String>)> {
+fn extract_parallel(bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[usize]) -> PageTexts {
     let extract = |r: &mut PageRenderer, p: usize| {
         let out = r.render(RenderRequest { page: p, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false });
         match out.error {
             Some(e) => Err(e),
-            None => Ok(out.text.map(|t| (*t).clone()).unwrap_or_default()),
+            None => Ok(out.text.unwrap_or_default()),
         }
     };
     let config = RenderConfig { password, ..Default::default() };
@@ -2204,7 +2312,7 @@ fn extract_parallel(bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[u
         return pages.iter().map(|p| (*p, extract(&mut r, *p))).collect();
     }
     let next = std::sync::atomic::AtomicUsize::new(0);
-    let mut out: Vec<(usize, std::result::Result<PageText, String>)> = std::thread::scope(|s| {
+    let mut out: PageTexts = std::thread::scope(|s| {
         let handles: Vec<_> = (0..workers)
             .map(|_| {
                 s.spawn(|| {
@@ -2245,13 +2353,24 @@ fn unused(dir: &Path, stem: &str) -> PathBuf {
     (2..10_000u32).map(|n| child(dir, &format!("{stem} ({n}).pdf"))).find(|p| !p.exists()).unwrap_or(first)
 }
 
-/// Write via a temporary file in the same directory, then rename over the target.
+/// Write and sync a temporary file in the same directory, then rename over the target.
+/// This flushes staged contents; it does not promise parent-directory durability after a
+/// power loss. Filesystems that refuse sync cause the save to fail before publication.
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     write_atomic_with(path, bytes, staging_suffixes())
 }
 
 /// [`write_atomic`], trying the staging names that `suffixes` give.
 fn write_atomic_with(path: &Path, bytes: &[u8], suffixes: impl IntoIterator<Item = u64>) -> Result<()> {
+    write_atomic_synced(path, bytes, suffixes, std::fs::File::sync_all)
+}
+
+fn write_atomic_synced(
+    path: &Path,
+    bytes: &[u8],
+    suffixes: impl IntoIterator<Item = u64>,
+    sync: impl FnOnce(&std::fs::File) -> std::io::Result<()>,
+) -> Result<()> {
     use std::io::Write;
     // A folder can't be replaced, and staging beside it could land outside the root: "." names
     // the root itself, whose parent isn't ours to write in.
@@ -2266,7 +2385,9 @@ fn write_atomic_with(path: &Path, bytes: &[u8], suffixes: impl IntoIterator<Item
     // Closed at the end of the block, before the rename.
     let written = {
         let mut file = file;
-        file.write_all(bytes)
+        // Surface delayed writeback failures before replacing the destination or marking
+        // a document clean. The handle is closed before rename (required on Windows).
+        file.write_all(bytes).and_then(|()| sync(&file))
     };
     if let Err(e) = written {
         let _ = std::fs::remove_file(&tmp);
@@ -2316,6 +2437,118 @@ mod tests {
         }
     }
 
+    fn search_document(a: &mut Automation, pages: usize) -> DocId {
+        a.session.open("synthetic.pdf", None, Arc::new(numbered_pages(pages)), None).unwrap()
+    }
+
+    #[test]
+    fn search_cache_stays_bounded_reextracts_and_follows_edits_and_close() {
+        let mut a = Automation::new();
+        a.texts = TextCache::new(16 * 1024);
+        let first = search_document(&mut a, 200);
+        let second = search_document(&mut a, 200);
+        for id in [first, second] {
+            let result = json(&mut a, "text_find", json!({ "doc": id.0, "query": "absent" }));
+            assert_eq!(result["complete"], true);
+            assert!(a.texts.bytes() <= 16 * 1024);
+            assert!(a.texts.len() < 200, "an exhaustive search must not retain every page");
+            let found = json(&mut a, "text_find", json!({ "doc": id.0, "query": "Page", "limit": 1000 }));
+            assert_eq!(found["count"], 200, "eviction inside a batch must not discard its matches");
+            eprintln!("200 pages searched: {} resident pages, {} estimated bytes (budget 16384)", a.texts.len(), a.texts.bytes());
+        }
+        assert!(a.texts.get(first, 0).is_none());
+        let text = a.page_texts(first, &[0]).unwrap().remove(0);
+        assert_eq!(text.plain_text(), "Page 1");
+        let again = a.page_texts(first, &[0]).unwrap().remove(0);
+        assert!(Arc::ptr_eq(&text, &again), "cache hits reuse glyph storage");
+        assert!(a.texts.bytes() <= 16 * 1024);
+        json(&mut a, "page_delete", json!({ "doc": first.0, "pages": [1] }));
+        let edited = a.page_texts(first, &[0]).unwrap().remove(0);
+        assert_eq!(edited.plain_text(), "Page 2");
+        assert!(!Arc::ptr_eq(&text, &edited));
+        json(&mut a, "doc_close", json!({ "doc": first.0, "discard_changes": true }));
+        json(&mut a, "doc_close", json!({ "doc": second.0 }));
+        assert_eq!((a.texts.bytes(), a.texts.len()), (0, 0));
+    }
+
+    #[test]
+    fn strict_text_collection_refuses_partial_results_but_keeps_successful_pages() {
+        let mut a = Automation::new();
+        let id = search_document(&mut a, 3);
+        let error = a.page_texts(id, &[0, 3, 1]).unwrap_err();
+        assert!(error.to_string().contains("page 4: page is out of range"));
+        assert!(a.texts.get(id, 0).is_some());
+        assert!(a.texts.get(id, 1).is_some(), "successful extraction after the failed entry is retained");
+        let results = a.page_text_results(id, &[2], &mut |_, _, _| vec![]).unwrap();
+        assert!(results[0].1.is_err(), "a missing worker result must not become an empty page");
+    }
+
+    #[test]
+    fn search_keeps_matches_around_failed_pages_and_continuations() {
+        let mut a = Automation::new();
+        let id = search_document(&mut a, 16);
+        let mut extract = |bytes: &Arc<Vec<u8>>, password, pages: &[usize]| {
+            extract_parallel(bytes, password, pages)
+                .into_iter()
+                .map(|(p, result)| (p, if [2, 6].contains(&p) { Err(format!("synthetic page {} failure", p + 1)) } else { result }))
+                .collect()
+        };
+        let all = a.text_find_with(&Args(&json!({ "doc": id.0, "query": "Page" })), &mut extract).unwrap();
+        assert_eq!(all["count"], 14);
+        assert_eq!(all["complete"], false);
+        assert_eq!(all["warning_count"], 2);
+        assert_eq!(all["warnings"][0]["page"], 3);
+        assert_eq!(all["warnings"][1]["page"], 7);
+        assert!(all.get("next").is_none());
+        assert_eq!(all["matches"][13]["page"], 16);
+        assert!(a.texts.get(id, 7).is_some(), "success after a failure in the same batch is cached");
+        let mut args = json!({ "doc": id.0, "query": "Page", "limit": 4 });
+        let mut matches = Vec::new();
+        let mut warned = Vec::new();
+        loop {
+            let part = a.text_find_with(&Args(&args), &mut extract).unwrap();
+            matches.extend(part["matches"].as_array().unwrap().iter().cloned());
+            warned.extend(part["warnings"].as_array().unwrap().iter().map(|w| w["page"].clone()));
+            if !part["warnings"].as_array().unwrap().is_empty() {
+                assert_eq!(part["complete"], false);
+            }
+            let Some(next) = part.get("next") else { break };
+            args["start_page"] = next["start_page"].clone();
+            args["skip"] = next["skip"].clone();
+        }
+        assert_eq!(matches, *all["matches"].as_array().unwrap(), "no readable match is lost or repeated");
+        assert_eq!(warned, vec![json!(3), json!(7)]);
+    }
+
+    #[test]
+    fn search_bounds_warning_volume_and_does_not_reach_distant_failures() {
+        let mut a = Automation::new();
+        let id = search_document(&mut a, 200);
+        let first = a
+            .text_find_with(&Args(&json!({ "doc": id.0, "query": "Page", "limit": 1 })), &mut |bytes, password, pages| {
+                assert!(pages.iter().all(|p| *p < FIND_FIRST_BATCH), "a bounded search must not reach the bad page at the end");
+                extract_parallel(bytes, password, pages)
+            })
+            .unwrap();
+        assert_eq!(first["count"], 1);
+        assert_eq!(first["warning_count"], 0);
+        assert_eq!(first["next"], json!({ "start_page": 2, "skip": 0 }));
+        a.texts.remove(&id);
+        let failures = a
+            .text_find_with(&Args(&json!({ "doc": id.0, "query": "Page" })), &mut |_, _, pages| {
+                pages.iter().map(|p| (*p, Err("界".repeat(2000)))).collect()
+            })
+            .unwrap();
+        assert_eq!(failures["count"], 0);
+        assert_eq!(failures["complete"], false);
+        assert!(failures.get("next").is_none());
+        assert_eq!(failures["warning_count"], 200);
+        assert_eq!(failures["warnings_truncated"], true);
+        let warnings = failures["warnings"].as_array().unwrap();
+        assert_eq!(warnings.len(), FIND_MAX_WARNINGS);
+        assert!(warnings.iter().all(|w| w["error"].as_str().unwrap().len() <= FIND_MAX_WARNING_BYTES && w["error_truncated"] == true));
+    }
+
     #[test]
     fn a_bounded_text_find_reads_only_the_pages_it_needs_and_says_it_stopped() {
         let dir = std::env::temp_dir().join(format!("pdfcraft-automation-find-{}", std::process::id()));
@@ -2324,7 +2557,7 @@ mod tests {
         std::fs::write(dir.join("long.pdf"), numbered_pages(200)).unwrap();
         let mut a = Automation::new().with_root(&dir).unwrap();
         let doc = json(&mut a, "doc_open", json!({ "path": "long.pdf" }))["doc"].clone();
-        let extracted = |a: &Automation| a.texts.values().map(|(_, pages)| pages.iter().filter(|t| t.is_some()).count()).sum::<usize>();
+        let extracted = |a: &Automation| a.texts.len();
 
         // #971: the first match is on page 1 and the next on page 10, so the rest of the 200 pages
         // aren't extracted or cached.
@@ -2510,6 +2743,79 @@ mod tests {
             assert_eq!(read(&staged(&dir, s)), "PLANTED");
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_staging_sync_keeps_the_destination_and_cleans_up() {
+        for exists in [false, true] {
+            let dir = staging_dir(if exists { "sync-existing" } else { "sync-new" });
+            let target = dir.join("out.pdf");
+            if exists {
+                std::fs::write(&target, "OLD").unwrap();
+            }
+            let result = write_atomic_synced(&target, b"NEW", [1], |_| {
+                assert_eq!(std::fs::read(staged(&dir, 1)).unwrap(), b"NEW", "sync follows writing");
+                if exists {
+                    assert_eq!(read(&target), "OLD", "sync precedes publication");
+                }
+                Err(std::io::Error::other("injected storage sync failure"))
+            });
+            assert!(result.is_err(), "sync failure must refuse publication");
+            assert!(result.unwrap_err().to_string().contains("injected storage sync failure"));
+            if exists {
+                assert_eq!(read(&target), "OLD");
+                assert_eq!(listing(&dir), ["out.pdf"]);
+            } else {
+                assert!(!target.exists());
+                assert!(listing(&dir).is_empty());
+            }
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_failed_save_sync_keeps_the_document_dirty_and_can_be_retried() {
+        let dir = staging_dir("sync-dirty");
+        let target = dir.join("out.pdf");
+        let mut a = Automation::new().with_root(&dir).unwrap();
+        let id = search_document(&mut a, 2);
+        json(&mut a, "doc_save", json!({"doc": id.0, "path": "out.pdf"}));
+        let old = std::fs::read(&target).unwrap();
+        json(&mut a, "page_rotate", json!({"doc": id.0, "pages": [1], "degrees": 90}));
+        let args = json!({"doc": id.0});
+        let before = summary(a.doc(&Args(&args)).unwrap());
+        let result = a.doc_save_with(&Args(&args), |path, bytes| {
+            write_atomic_synced(path, bytes, [1], |_| Err(std::io::Error::other("injected storage sync failure")))
+        });
+        assert!(result.is_err());
+        let doc = a.doc(&Args(&args)).unwrap();
+        assert!(doc.dirty);
+        assert_eq!(summary(doc), before, "failed save must not reset history or saved state");
+        assert_eq!(std::fs::read(&target).unwrap(), old);
+        assert_eq!(listing(&dir), ["out.pdf"]);
+        json(&mut a, "doc_save", args.clone());
+        assert!(!a.doc(&Args(&args)).unwrap().dirty);
+        assert_ne!(std::fs::read(&target).unwrap(), old);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn successful_staging_sync_precedes_publication() {
+        let dir = staging_dir("sync-success");
+        let target = dir.join("out.pdf");
+        std::fs::write(&target, "OLD").unwrap();
+        let mut called = false;
+        write_atomic_synced(&target, b"NEW", [1], |file| {
+            called = true;
+            assert_eq!(read(&target), "OLD");
+            assert_eq!(std::fs::read(staged(&dir, 1)).unwrap(), b"NEW");
+            file.sync_all()
+        })
+        .unwrap();
+        assert!(called);
+        assert_eq!(read(&target), "NEW");
+        assert_eq!(listing(&dir), ["out.pdf"]);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// The names in a folder: what a test can see was left behind.

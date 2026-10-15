@@ -156,13 +156,15 @@ impl DigestCache {
         candidates
     }
 
-    /// The signed revision `bytes[..end]`, parsed (and kept).
-    fn revision(&self, bytes: &[u8], end: usize) -> Option<Document> {
+    /// The signed revision `bytes[..end]`, parsed (and kept). An encrypted one is opened with
+    /// `doc`'s own key (the same `/Encrypt` and `/ID`), so a user password the document was
+    /// opened with is neither needed again nor kept here (#1808).
+    fn revision(&self, doc: &Document, bytes: &[u8], end: usize) -> Option<Document> {
         let key = (end, fingerprint(&bytes[..end]));
         if let Some(d) = self.revisions.lock().ok().and_then(|m| m.get(&key).cloned()) {
             return Some(d);
         }
-        let d = Document::open(Arc::new(bytes[..end].to_vec())).ok()?;
+        let d = doc.open_with_same_credentials(Arc::new(bytes[..end].to_vec())).ok()?;
         if let Ok(mut m) = self.revisions.lock() {
             if m.len() > 8 {
                 m.clear();
@@ -491,6 +493,12 @@ impl Field {
     fn signature(&self, doc: &Document) -> Option<Dict> {
         self.dict.get(b"V").map(|v| doc.resolve(v)).and_then(|v| v.as_dict().cloned())
     }
+
+    /// True when /V holds something that is neither null nor a signature dictionary: signing the
+    /// field would overwrite a value we can't read as a signature.
+    fn has_foreign_value(&self, doc: &Document) -> bool {
+        self.dict.get(b"V").map(|v| doc.resolve(v)).is_some_and(|v| !matches!(*v, Object::Null) && v.as_dict().is_none())
+    }
 }
 
 /// Every signature field, depth first in `/Fields` order.
@@ -720,7 +728,7 @@ fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, inf
     let covered = o1 + l1;
     info.signed_len = covered;
     // The signed revision's number: its cross-reference sections (1 for a reconstructed file).
-    info.revision = cache.revision(bytes, covered).map_or(1, |d| d.revisions().len().max(1));
+    info.revision = cache.revision(doc, bytes, covered).map_or(1, |d| d.revisions().len().max(1));
     // What can't be checked is unknown, not invalid: only data that is wrong or fails its check
     // is "invalid".
     let unsupported = |info: &mut SignatureInfo, why: &str| {
@@ -847,7 +855,7 @@ fn finish_validation(
     info.modification = if covered == bytes.len() || bytes[covered..].iter().all(|b| b.is_ascii_whitespace() || *b == 0) {
         Modification::None
     } else {
-        classify_changes(doc, cache.revision(bytes, covered), info.certify)
+        classify_changes(doc, cache.revision(doc, bytes, covered), info.certify)
     };
     let mut problems = false;
     // The changes are handed over as the words they are, not stitched into the sentence, so an
@@ -1009,7 +1017,7 @@ fn validate_doc_timestamp(doc: &Document, bytes: &[u8], v: &Dict, info: &mut Sig
     };
     let covered = o1 + l1;
     info.signed_len = covered;
-    info.revision = cache.revision(bytes, covered).map_or(1, |d| d.revisions().len().max(1));
+    info.revision = cache.revision(doc, bytes, covered).map_or(1, |d| d.revisions().len().max(1));
     let token = match crate::timestamp::parse_token(&contents) {
         Ok(t) => t,
         Err(e) => return invalid(info, Detail::of("The timestamp token could not be read ({}).", Fill::Reason(e.to_string()))),
@@ -1032,7 +1040,7 @@ fn validate_doc_timestamp(doc: &Document, bytes: &[u8], v: &Dict, info: &mut Sig
     info.modification = if covered == bytes.len() || bytes[covered..].iter().all(|b| b.is_ascii_whitespace() || *b == 0) {
         Modification::None
     } else {
-        classify_changes(doc, cache.revision(bytes, covered), None)
+        classify_changes(doc, cache.revision(doc, bytes, covered), None)
     };
     match &info.modification {
         Modification::None => info.details.push(Detail::plain("This document has not been modified since this timestamp was applied.")),
@@ -1214,6 +1222,18 @@ fn classify_changes(doc: &Document, old: Option<Document>, p: Option<u8>) -> Mod
             _ => false,
         }
     };
+    // A later cross-reference section may carry an entry this reader sets aside (an in-use entry
+    // at offset 0, a second entry for one object, a reserved entry type). The renderer may follow
+    // it and draw another object than the one compared below, so the page could show new content
+    // while every comparison here finds the signed object untouched. No writer has a reason to
+    // add such an entry after signing: it is never a permitted change.
+    for (_, num) in doc.xref_oddities().iter().filter(|o| !old.xref_oddities().contains(o)) {
+        let r = ObjRef { num: *num, generation: doc.generation(*num) };
+        let what = if old_content.contains(&r) || signed_pages.contains(&r) { kind::PAGE_CONTENT } else { kind::OTHER };
+        if !disallowed.contains(&what) {
+            disallowed.push(what);
+        }
+    }
     for num in doc.object_numbers() {
         if same_place(num) {
             continue;
@@ -1222,6 +1242,12 @@ fn classify_changes(doc: &Document, old: Option<Document>, p: Option<u8>) -> Mod
         let new = doc.get(r);
         let before = old.try_get(num).ok().filter(|o| !matches!(**o, Object::Null));
         if before.as_deref() == Some(&*new) {
+            // The same content at a new place. That is true for the renderer as well only when
+            // the entry locates the object itself: where this reader had to search for the
+            // object, another reader may arrive at a different one.
+            if !doc.is_edited(num) && !doc.xref_entry_is_exact(num) && !disallowed.contains(&kind::OTHER) {
+                disallowed.push(kind::OTHER);
+            }
             continue;
         }
         let what = match &*new {
@@ -1581,6 +1607,27 @@ impl Default for AppearanceLabels {
     }
 }
 
+impl AppearanceLabels {
+    /// Each label with its field name (`signed_by`, `distinguished_name`, `reason`, `location`,
+    /// `date`), in the order the visible signature shows them.
+    pub fn fields(&self) -> [(&'static str, &str); 5] {
+        [
+            ("signed_by", self.signed_by.as_str()),
+            ("distinguished_name", self.distinguished_name.as_str()),
+            ("reason", self.reason.as_str()),
+            ("location", self.location.as_str()),
+            ("date", self.date.as_str()),
+        ]
+    }
+
+    /// The first label, with its field name, that has a character the visible signature's font
+    /// can't draw, and that character. Signing refuses such a label when it is shown, so an
+    /// interface checks its translated labels here and falls back to [`Default`] if one fails.
+    pub fn first_undrawable(&self) -> Option<(&'static str, char)> {
+        self.fields().into_iter().find_map(|(field, text)| pdfcraft_fonts::first_undrawable(text).map(|c| (field, c)))
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct SignOptions {
     /// Sign this existing, unsigned signature field.
@@ -1721,6 +1768,9 @@ fn sign_inner(
             let f = f?;
             if f.signature(&doc).is_some() {
                 return Err(SignError::Pdf(format!("the field {:?} is already signed", f.name)));
+            }
+            if f.has_foreign_value(&doc) {
+                return Err(SignError::Pdf(format!("the value of the field {:?} is not a signature", f.name)));
             }
             let fr = f.r.ok_or_else(|| SignError::Pdf("the field is not an indirect object".into()))?;
             doc.update_dict(fr, |d| d.set(b"V".to_vec(), Object::Ref(sig)))?;
@@ -1921,6 +1971,7 @@ pub fn display_date(pdf: &str) -> String {
 /// Helvetica (the signer's name, the certificate's subject, the reason or the location) has a
 /// character Helvetica can't draw: signing invisibly, or leaving that part out, still works. A
 /// graphic doesn't change this: the name it replaces on the left is still among the details.
+/// A label that is drawn ([`AppearanceLabels`], the caller's words) is refused the same way.
 fn appearance(doc: &mut Document, rect: [f64; 4], name: &str, cert: &Certificate, opts: &SignOptions) -> Result<Stream, SignError> {
     use pdfcraft_fonts::{first_undrawable, helvetica_width, literal, undrawable_message, win_ansi, wrap};
     let (w, h) = ((rect[2] - rect[0]).max(0.0), (rect[3] - rect[1]).max(0.0));
@@ -1940,6 +1991,17 @@ fn appearance(doc: &mut Document, rect: [f64; 4], name: &str, cert: &Certificate
                     undrawable_message(&format!("{what} of the visible signature"), c)
                 )));
             }
+        }
+        // The labels are the caller's words (a translation), checked as the details are: only
+        // those that are drawn, as each is drawn only beside its detail.
+        let has = |v: Option<&str>| v.is_some_and(|v| !v.is_empty());
+        let drawn = [a.name, a.distinguished_name, a.reason && has(opts.reason.as_deref()), a.location && has(opts.location.as_deref()), a.date];
+        let mut labels = opts.appearance_labels.fields().into_iter().zip(drawn).filter(|&(_, on)| a.labels && on);
+        if let Some((field, c)) = labels.find_map(|((field, text), _)| first_undrawable(text).map(|c| (field, c))) {
+            return Err(SignError::Unsupported(format!(
+                "{}; pass that label in Western European characters, or leave the labels out of the visible signature",
+                undrawable_message(&format!("the {field} label of the visible signature"), c)
+            )));
         }
     }
     let mut lines: Vec<String> = Vec::new();

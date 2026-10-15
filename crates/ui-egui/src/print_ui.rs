@@ -67,6 +67,9 @@ pub struct PrintDraft {
     pub cut_marks: bool,
     pub orientation: Orientation,
     pub content: Content,
+    /// Print as image (Acrobat's Advanced Print Setup) at `dpi`.
+    pub as_image: bool,
+    pub dpi: f64,
     pub paper: usize,
     /// The sheet shown in the preview (0-based).
     pub sheet: usize,
@@ -111,6 +114,8 @@ impl Default for PrintDraft {
             cut_marks: true,
             orientation: Orientation::Auto,
             content: Content::DocumentAndMarkups,
+            as_image: false,
+            dpi: 300.0,
             paper: 0,
             sheet: 0,
             current_page: 0,
@@ -129,15 +134,15 @@ impl PrintDraft {
             return Err("Cut and stack needs Two-sided: Off. Print single-sided sheets.".into());
         }
         let range = match self.which {
-            Which::All | Which::Selected => None,
-            Which::Current => Some(self.current_page.saturating_add(1).to_string()),
+            Which::All | Which::Selected | Which::Current => None,
             Which::Range => Some(self.range.clone()),
         };
-        let pages = if self.which == Which::Selected {
-            // Positions, not a typed range: a range would read numbers as page labels first.
-            print::select_listed(count, &self.selected, self.subset, self.reverse)
-        } else {
-            print::select_pages(count, range.as_deref(), labels, self.subset, self.reverse)
+        // Selected and Current are positions, not a typed range: a range would read numbers as
+        // page labels first.
+        let pages = match self.which {
+            Which::Selected => print::select_listed(count, &self.selected, self.subset, self.reverse),
+            Which::Current => print::select_listed(count, &[self.current_page], self.subset, self.reverse),
+            Which::All | Which::Range => print::select_pages(count, range.as_deref(), labels, self.subset, self.reverse),
         }
         // What the person got wrong about what to print is said in their language: the engine hands
         // the wording over whole and the page numbers apart from it.
@@ -148,15 +153,22 @@ impl PrintDraft {
                 m => m,
             }),
             Handling::Multiple => match Layout::multiple(self.per_sheet) {
-                Layout::Multiple { cols, rows, .. } => {
-                    Layout::Multiple { cols, rows, order: self.order, border: self.border, auto_rotate: self.auto_rotate }
+                Layout::Multiple { cols, rows, per_sheet, .. } => {
+                    Layout::Multiple { cols, rows, per_sheet, order: self.order, border: self.border, auto_rotate: self.auto_rotate }
                 }
                 other => other,
             },
             Handling::Booklet => Layout::Booklet { subset: self.booklet_subset, binding: self.binding },
             Handling::Poster => Layout::Poster { scale: self.poster_scale, overlap: self.overlap, cut_marks: self.cut_marks },
         };
-        Ok(print::Settings { pages, paper: PAPERS[self.paper.min(PAPERS.len() - 1)].1, orientation: self.orientation, layout, content: self.content })
+        Ok(print::Settings {
+            pages,
+            paper: PAPERS[self.paper.min(PAPERS.len() - 1)].1,
+            orientation: self.orientation,
+            layout,
+            content: self.content,
+            raster: self.as_image.then_some(print::Raster { dpi: self.dpi, grayscale: self.grayscale }),
+        })
     }
 
     pub fn job(&self, title: &str) -> spool::Job {
@@ -178,7 +190,7 @@ impl PrintDraft {
 }
 
 /// Lists the printers off the UI thread (the desktop app sets [`PdfCraftApp::printer_source`]):
-/// on Windows that takes PowerShell a second or more, and CUPS' driverless discovery can wait on
+/// on Windows each driver's capabilities are read for its two-sided support, and CUPS' driverless discovery can wait on
 /// the network. Without a source the dialog reads them as it opens, so tests stay deterministic.
 pub type PrinterSource = std::sync::Arc<dyn Fn() -> Vec<spool::Printer> + Send + Sync>;
 
@@ -909,6 +921,29 @@ pub(crate) fn body(
                 ],
                 220.0,
             );
+            // Advanced (Acrobat's Advanced Print Setup): print as image. Folded unless it is on.
+            ui.add_space(6.0);
+            egui::CollapsingHeader::new(egui::RichText::new(tl!("Advanced").to_uppercase()).font(theme::semibold(10.5)).color(t.text_faint))
+                .id_salt("print-advanced")
+                .default_open(d.as_image)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.add(widgets::checkbox(&mut d.as_image, tl!("Print as image")));
+                        ui.add_enabled_ui(d.as_image, |ui| {
+                            ui.label(tl!("Resolution:"));
+                            let mut dpi = d.dpi.round() as u32;
+                            combo(ui, "print-dpi", &mut dpi, &[(150, "150 dpi"), (300, "300 dpi"), (600, "600 dpi")], 100.0);
+                            d.dpi = f64::from(dpi);
+                        });
+                    });
+                    ui.label(
+                        egui::RichText::new(tl!(
+                            "Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey."
+                        ))
+                        .small()
+                        .color(t.text_muted),
+                    );
+                });
         });
         ui.add_space(12.0);
         // Preview.
@@ -1029,12 +1064,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn current_page_preview_uses_positions_and_selection_guards() {
+        for labels in [["i", "ii", "iii", "1", "2"], ["1", "1", "1", "1", "1"], ["1", "2", "3", "4", "5"]] {
+            let labels: Vec<String> = labels.into_iter().map(str::to_owned).collect();
+            for current_page in 0..5 {
+                let draft = PrintDraft { which: Which::Current, current_page, ..Default::default() };
+                let rasters = preview_rasters(&draft, &[(200.0, 300.0); 5], &labels, 1.0, 8192.0);
+                assert_eq!(rasters.iter().map(|(page, _)| *page).collect::<Vec<_>>(), vec![current_page]);
+            }
+        }
+        let labels: Vec<String> = ["i", "ii", "iii", "1", "2"].into_iter().map(str::to_owned).collect();
+        let mut draft = PrintDraft { which: Which::Selected, selected: vec![0, 3], ..Default::default() };
+        assert_eq!(draft.settings(5, &labels).unwrap().pages, vec![0, 3]);
+        draft.which = Which::All;
+        assert_eq!(draft.settings(5, &labels).unwrap().pages, vec![0, 1, 2, 3, 4]);
+        draft.which = Which::Current;
+        draft.reverse = true;
+        draft.subset = Subset::Odd;
+        assert_eq!(draft.settings(5, &labels).unwrap().pages, vec![0]);
+        draft.subset = Subset::Even;
+        assert!(draft.settings(5, &labels).is_err());
+        draft.subset = Subset::All;
+        for (count, current) in [(0, 0), (5, 5), (5, usize::MAX)] {
+            draft.current_page = current;
+            assert!(draft.settings(count, &labels).is_err());
+        }
+    }
+
+    #[test]
     fn composed_sheets_keep_exact_scaling_and_the_dialogs_duplex_choice() {
         let draft = PrintDraft { duplex: spool::Duplex::LongEdge, ..PrintDraft::default() };
         let job = draft.job("report.pdf");
         assert_eq!(job.scaling, spool::Scaling::Exact);
         assert_eq!(job.duplex, Some(spool::Duplex::LongEdge));
         assert_eq!(PrintDraft::default().job("report.pdf").duplex, Some(spool::Duplex::Off));
+    }
+
+    /// Issue #1308: Current page is the page on screen, even when a later page is labelled with
+    /// its number. A typed range still reads labels first.
+    #[test]
+    fn current_page_is_the_viewed_page_not_a_label() {
+        let labels: Vec<String> = ["i", "ii", "iii", "1", "2"].map(String::from).to_vec();
+        for (current, want) in [(0, vec![0]), (1, vec![1]), (3, vec![3])] {
+            let d = PrintDraft { which: Which::Current, current_page: current, ..PrintDraft::default() };
+            assert_eq!(d.settings(5, &labels).map(|s| s.pages), Ok(want), "viewing page {}", current + 1);
+        }
+        let typed = PrintDraft { which: Which::Range, range: "1".into(), ..PrintDraft::default() };
+        assert_eq!(typed.settings(5, &labels).map(|s| s.pages), Ok(vec![3]));
     }
 
     #[test]

@@ -51,6 +51,8 @@
 	Column select	Spaltenauswahl
 	Full screen mode	Vollbildmodus
 	Read mode	Lesemodus
+	Next tab	Nächster Tab
+	Previous tab	Vorheriger Tab
 	Switch light / dark theme	Helles / dunkles Design umschalten
 	Comments panel	Kommentarbereich
 	Form fields panel	Formularfeldbereich
@@ -738,6 +740,12 @@
 	Flip Vertical	Vertikal spiegeln
 	Replace Image…	Bild ersetzen…
 	Save Image As…	Bild speichern unter…
+	Copy Image	Bild kopieren
+	The image has been copied ({w} × {h} pixels)	Das Bild wurde kopiert ({w} × {h} Pixel)
+	Couldn't copy the image: {e}	Das Bild konnte nicht kopiert werden: {e}
+	Copy Image in Original Format	Bild im Originalformat kopieren
+	The image has been copied as a {ext} file	Das Bild wurde als {ext}-Datei kopiert
+	The page has changed; select the image again	Die Seite hat sich geändert; wählen Sie das Bild erneut aus
 	Check for updates	Nach Updates suchen
 	No check has run yet.	Es wurde noch nicht gesucht.
 	Checking for a newer version…	Suche nach einer neueren Version…
@@ -825,8 +833,15 @@
 	Windows store  ·  	Windows-Zertifikatspeicher  ·  
 	Issued by: 	Ausgestellt von: 
 	, Expires: 	, läuft ab: 
+	Digitally signed by	Digital signiert von
+	DN: 	DN: 
+	Reason: 	Grund: 
+	Location: 	Ort: 
+	Date: 	Datum: 
+	The labels are in English: the signature's font can't draw them in this language.	Die Beschriftungen sind auf Englisch: Die Schrift der Signatur kann sie in dieser Sprache nicht darstellen.
 	No digital IDs yet.	Noch keine digitalen IDs.
 	Configure New Digital ID	Neue digitale ID einrichten
+	Remove "{name}" from this list? The file itself is not deleted.	„{name}“ aus dieser Liste entfernen? Die Datei selbst wird nicht gelöscht.
 	Continue	Weiter
 	Configure a Digital ID for Signing	Digitale ID zum Signieren einrichten
 	Use a Digital ID from a file	Digitale ID aus einer Datei verwenden
@@ -2333,3 +2348,46 @@ animation effects	Off	Aus
 	The linked PDF opened, but its named destination was not applied.	Die verknüpfte PDF wurde geöffnet, aber ihr benanntes Ziel wurde nicht angewendet.
 	The linked PDF opened, but its page destination was out of range.	Die verknüpfte PDF wurde geöffnet, aber ihr Seitenziel liegt außerhalb des Bereichs.
 	Local cross-PDF links require the desktop app	Lokale Verknüpfungen zwischen PDFs erfordern die Desktop-App
+	Minimize	Minimieren
+	Maximize	Maximieren
+	Restore	Wiederherstellen
+	Use system title bar	System-Titelleiste verwenden
+	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Eine einfache Titelleiste für die Fensterknöpfe statt der Tableiste anzeigen. GNOME zeichnet für Apps keine Titelleisten, daher folgt diese nicht seinem Design.
+
+# Absolute local GoToR confirmation (#1364).
+	Allow	Zulassen
+	Only allow this if you trust the source document.	Lassen Sie dies nur zu, wenn Sie dem Quelldokument vertrauen.
+	Open this local PDF?	Diese lokale PDF-Datei öffnen?
+	This document is trying to open a local file:	Dieses Dokument versucht, eine lokale Datei zu öffnen:
+	Move tag earlier	Tag früher verschieben
+	Move tag later	Tag später verschieben
+	Mark as artifact	Als Artefakt markieren
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Dieses Blatt-Tag aus der Lesereihenfolge entfernen und seinen direkten Inhalt als Artefakt markieren
+	Mark content as artifact	Inhalt als Artefakt markieren
+@id	file.word_count	Wörter zählen…
+	Word count	Wörter zählen
+	Word count…	Wörter zählen…
+	Current page only	Nur aktuelle Seite
+	Exclude tagged tables	Als Tabellen gekennzeichnete Inhalte ausschließen
+	Exclude tagged code blocks	Als Codeblöcke gekennzeichnete Inhalte ausschließen
+	Exclude image/OCR text	Bildtext und OCR-Text ausschließen
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Ausschlüsse verwenden PDF-Tags. Tabellen und Code ohne Tags werden weiterhin gezählt. Beim Ausschluss von Bildtext wird auch unsichtbarer Text ausgeschlossen.
+	Words	Wörter
+	Characters	Zeichen
+	Characters without spaces	Zeichen ohne Leerzeichen
+	Pages counted	Gezählte Seiten
+	Some pages contain no countable text. Scanned images need OCR first.	Einige Seiten enthalten keinen zählbaren Text. Führen Sie für gescannte Bilder zuerst eine Texterkennung durch.
+	Some content could not be classified safely and was kept in the count.	Einige Inhalte konnten nicht sicher zugeordnet werden und wurden mitgezählt.
+	Counting words… {n} pages read	Wörter werden gezählt… {n} Seiten gelesen
+	Word counting stopped unexpectedly.	Die Wortzählung wurde unerwartet beendet.
+	Standard	Standard
+	Mobile	Mobilgerät
+	Merge image fragments	Bildfragmente zusammenführen
+	Optimizing… merging image fragments	Optimieren… Bildfragmente werden zusammengeführt
+	Side by side	Nebeneinander
+	New file only	Nur neue Datei
+	Old file: {name}	Alte Datei: {name}
+	New file: {name}	Neue Datei: {name}
+	Print as image	Als Bild drucken
+	Resolution:	Auflösung:
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Verwenden, wenn ein Drucker Text, Schattierungen oder Transparenz auslässt. Der Ausdruck ist kein durchsuchbarer Text mehr; mit Graustufendruck sind die Bilder grau.

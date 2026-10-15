@@ -93,6 +93,8 @@
 	Marquee zoom	Zvětšit vybranou oblast
 	Full screen mode	Režim celé obrazovky
 	Read mode	Režim čtení
+	Next tab	Další karta
+	Previous tab	Předchozí karta
 	Switch light / dark theme	Přepnout světlý / tmavý motiv
 	Comments panel	Panel komentářů
 	Form fields panel	Panel formulářových polí
@@ -835,6 +837,12 @@ key	Space	Mezerník
 	Flip Vertical	Převrátit svisle
 	Replace Image…	Nahradit obrázek…
 	Save Image As…	Uložit obrázek jako…
+	Copy Image	Kopírovat obrázek
+	The image has been copied ({w} × {h} pixels)	Obrázek byl zkopírován ({w} × {h} pixelů)
+	Couldn't copy the image: {e}	Obrázek nelze zkopírovat: {e}
+	Copy Image in Original Format	Kopírovat obrázek v původním formátu
+	The image has been copied as a {ext} file	Obrázek byl zkopírován jako soubor {ext}
+	The page has changed; select the image again	Stránka se změnila; vyberte obrázek znovu
 	Check for updates	Zkontrolovat aktualizace
 	No check has run yet.	Kontrola zatím neproběhla.
 	Checking for a newer version…	Hledání novější verze…
@@ -921,8 +929,15 @@ key	Space	Mezerník
 	Windows store  ·  	Úložiště Windows  ·  
 	Issued by: 	Vydal: 
 	, Expires: 	, platnost do: 
+	Digitally signed by	Digitálně podepsal
+	DN: 	DN: 
+	Reason: 	Důvod: 
+	Location: 	Místo: 
+	Date: 	Datum: 
+	The labels are in English: the signature's font can't draw them in this language.	Popisky jsou v angličtině: písmo podpisu je v tomto jazyce nedokáže vykreslit.
 	No digital IDs yet.	Zatím žádná digitální ID.
 	Configure New Digital ID	Nastavit nové digitální ID
+	Remove "{name}" from this list? The file itself is not deleted.	Odebrat „{name}“ z tohoto seznamu? Samotný soubor se nesmaže.
 	Continue	Pokračovat
 	Configure a Digital ID for Signing	Nastavení digitálního ID pro podepisování
 	Use a Digital ID from a file	Použít digitální ID ze souboru
@@ -2406,3 +2421,46 @@ animation effects	Off	Vypnuto
 	The linked PDF opened, but its named destination was not applied.	Odkazovaný PDF se otevřel, ale jeho pojmenovaný cíl nebyl použit.
 	The linked PDF opened, but its page destination was out of range.	Odkazovaný PDF se otevřel, ale cílová stránka je mimo rozsah.
 	Local cross-PDF links require the desktop app	Místní odkazy mezi soubory PDF vyžadují desktopovou aplikaci
+	Minimize	Minimalizovat
+	Maximize	Maximalizovat
+	Restore	Obnovit
+	Use system title bar	Použít systémové záhlaví okna
+	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Zobrazit jednoduché záhlaví s tlačítky okna místo pruhu karet. GNOME aplikacím záhlaví nekreslí, proto toto záhlaví nesleduje jeho motiv.
+
+# Absolute local GoToR confirmation (#1364).
+	Allow	Povolit
+	Only allow this if you trust the source document.	Povolte tuto akci pouze v případě, že důvěřujete zdrojovému dokumentu.
+	Open this local PDF?	Otevřít tento místní soubor PDF?
+	This document is trying to open a local file:	Tento dokument se pokouší otevřít místní soubor:
+	Move tag earlier	Přesunout značku dříve
+	Move tag later	Přesunout značku později
+	Mark as artifact	Označit jako artefakt
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Odeberte tuto značku listu z pořadí čtení a označte její přímý obsah jako artefakt
+	Mark content as artifact	Označit obsah jako artefakt
+	Word count	Počet slov
+	Current page only	Pouze aktuální stránka
+	Exclude tagged tables	Vynechat označené tabulky
+	Exclude tagged code blocks	Vynechat označené bloky kódu
+	Exclude image/OCR text	Vynechat text obrázků a OCR
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Vynechávání využívá tagy PDF. Neoznačené tabulky a kód zůstávají zahrnuty. Vynechání obrázků odstraní i neviditelný text.
+	Words	Slova
+	Characters	Znaky
+	Characters without spaces	Znaky bez mezer
+	Pages counted	Započítané stránky
+	Some pages contain no countable text. Scanned images need OCR first.	Některé stránky neobsahují text k počítání. U naskenovaných obrázků je nejprve nutné OCR.
+	Some content could not be classified safely and was kept in the count.	Část obsahu nebylo možné spolehlivě zařadit a zůstala zahrnuta v počtu.
+	Counting words… {n} pages read	Počítání slov… přečtené stránky: {n}
+	Word counting stopped unexpectedly.	Počítání slov se neočekávaně zastavilo.
+	Word count…	Počet slov…
+@id	file.word_count	Počet slov…
+	Standard	Standardní
+	Mobile	Mobilní zařízení
+	Merge image fragments	Sloučit fragmenty obrázků
+	Optimizing… merging image fragments	Optimalizace… slučování fragmentů obrázků
+	Side by side	Vedle sebe
+	New file only	Jen nový soubor
+	Old file: {name}	Starý soubor: {name}
+	New file: {name}	Nový soubor: {name}
+	Print as image	Tisknout jako obrázek
+	Resolution:	Rozlišení:
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Použijte, když tiskárna vynechává text, stínování nebo průhlednost. Výtisk už není prohledávatelný text; s tiskem v odstínech šedi jsou obrázky šedé.
