@@ -311,13 +311,6 @@ fn choice_alignment(kind: pdfcraft_engine::NewField, label: &str, quadding: i64)
     h.state_mut().execute("edit.redo");
     h.run_steps(3);
     assert_eq!(field(&h).quadding, quadding);
-    if let Ok(directory) = std::env::var("PDFCRAFT_CHOICE_ALIGNMENT_SHOTS") {
-        h.state_mut().open_field_props("aligned_choice", 0);
-        h.run_steps(2);
-        h.get_by_label("Options").click();
-        h.run_steps(2);
-        h.render().unwrap().save(std::path::Path::new(&directory).join(format!("choice-alignment-{quadding}.png"))).unwrap();
-    }
 }
 
 #[test]

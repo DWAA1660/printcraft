@@ -162,6 +162,9 @@ pub enum Layout {
     Multiple {
         cols: usize,
         rows: usize,
+        /// Source pages on each sheet, at most `cols × rows`: three per sheet uses a 2 × 2 grid
+        /// with one cell left blank.
+        per_sheet: usize,
         order: PageOrder,
         border: bool,
         auto_rotate: bool,
@@ -198,7 +201,7 @@ impl Layout {
                 (c, n.div_ceil(c).max(1))
             }
         };
-        Layout::Multiple { cols, rows, order: PageOrder::Horizontal, border: false, auto_rotate: true }
+        Layout::Multiple { cols, rows, per_sheet: per_sheet.max(1), order: PageOrder::Horizontal, border: false, auto_rotate: true }
     }
 }
 
@@ -225,22 +228,49 @@ pub struct Settings {
     pub orientation: Orientation,
     pub layout: Layout,
     pub content: Content,
+    /// Print as image (Acrobat's Advanced Print Setup): every page rendered to a picture at this
+    /// resolution before it is placed on the paper. The engine does the rendering; `impose` is
+    /// then given the image-only document.
+    pub raster: Option<Raster>,
+}
+
+/// How pages are rendered when printing as image.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Raster {
+    /// Dots per inch, 72–600 (Acrobat offers 150, 300 and 600).
+    pub dpi: f64,
+    /// Render the pictures in grey, so the print-ready PDF itself is grayscale.
+    pub grayscale: bool,
+}
+
+impl Default for Raster {
+    fn default() -> Self {
+        Raster { dpi: 300.0, grayscale: false }
+    }
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { pages: Vec::new(), paper: PAPERS[0].1, orientation: Orientation::Auto, layout: Layout::default(), content: Content::default() }
+        Settings {
+            pages: Vec::new(),
+            paper: PAPERS[0].1,
+            orientation: Orientation::Auto,
+            layout: Layout::default(),
+            content: Content::default(),
+            raster: None,
+        }
     }
 }
 
 /// Common paper sizes (points, portrait).
-pub const PAPERS: [(&str, (f64, f64)); 18] = [
+pub const PAPERS: [(&str, (f64, f64)); 19] = [
     ("US Letter", (612.0, 792.0)),
     ("US Legal", (612.0, 1008.0)),
     ("Tabloid", (792.0, 1224.0)),
     ("A3", (841.89, 1190.55)),
     ("A4", (595.28, 841.89)),
     ("A5", (419.53, 595.28)),
+    ("A6", (297.64, 419.53)),
     ("ARCH A (9 x 12 in)", (648.0, 864.0)),
     ("ARCH B (12 x 18 in)", (864.0, 1296.0)),
     ("ARCH C (18 x 24 in)", (1296.0, 1728.0)),
@@ -343,11 +373,16 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
                 sheets.push(Sheet { size, placed: vec![place_in(p, d, [0.0, 0.0, size.0, size.1], s, false)], ..Sheet::default() });
             }
         }
-        Layout::Multiple { cols, rows, order, border, auto_rotate } => {
+        Layout::Multiple { cols, rows, per_sheet, order, border, auto_rotate } => {
             let cells = cols.checked_mul(rows).filter(|&n| n > 0 && n <= 256);
             let Some(cells) = cells else {
                 return Err(PrintError::Invalid("invalid number of pages per sheet".into()));
             };
+            // The grid can have more cells than the pages asked for on each sheet; the rest stay blank.
+            let per_sheet = per_sheet.min(cells);
+            if per_sheet == 0 {
+                return Err(PrintError::Invalid("invalid number of pages per sheet".into()));
+            }
             // A grid with more columns than rows wants a landscape sheet, and the reverse.
             let first = pages.first().and_then(|&p| sizes.get(p)).copied().ok_or(PrintError::NoPages)?;
             let page_landscape = first.0 > first.1;
@@ -366,7 +401,7 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
             if cw <= 0.0 || ch <= 0.0 {
                 return Err(PrintError::Invalid("the page grid does not fit on the paper".into()));
             }
-            let sheet_count = pages.len().div_ceil(cells);
+            let sheet_count = pages.len().div_ceil(per_sheet);
             for sheet_index in 0..sheet_count {
                 let mut sheet = Sheet { size, ..Sheet::default() };
                 if order == PageOrder::CutStack {
@@ -381,13 +416,13 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
                         sheet.lines.extend([[MARGIN, y, MARGIN + 8.0, y], [size.0 - MARGIN - 8.0, y, size.0 - MARGIN, y]]);
                     }
                 }
-                for k in 0..cells {
+                for k in 0..per_sheet {
                     // A cell's pile gets consecutive pages. Missing pages leave blank cells,
                     // rather than shifting later piles left on the final sheets.
                     let index = if order == PageOrder::CutStack {
                         k.checked_mul(sheet_count).and_then(|n| n.checked_add(sheet_index))
                     } else {
-                        sheet_index.checked_mul(cells).and_then(|n| n.checked_add(k))
+                        sheet_index.checked_mul(per_sheet).and_then(|n| n.checked_add(k))
                     };
                     let Some(p) = index.and_then(|i| pages.get(i)).copied() else { continue };
 
@@ -496,6 +531,13 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
         }
     }
     Ok(sheets)
+}
+
+// Model-derived transforms and clipping bounds need their full PDF decimal precision.
+fn geometry_number(value: f64) -> String {
+    let mut bytes = Vec::new();
+    pdfcraft_cos::serialize(&Object::Real(value), &mut bytes);
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 fn n(v: f64) -> String {
@@ -661,22 +703,22 @@ pub fn impose(src: &Document, settings: &Settings) -> Result<Vec<u8>, PrintError
             let [x0, y0, x1, y1] = pl.clip;
             c.push_str(&format!(
                 "q {} {} {} {} {} {} cm {} {} {} {} re W n {} {} {} {} {} {} cm /{name} Do Q\n",
-                n(a),
-                n(b),
-                n(cc),
-                n(d),
-                n(e),
-                n(f),
-                n(x0),
-                n(y0),
-                n(x1 - x0),
-                n(y1 - y0),
-                n(ua),
-                n(ub),
-                n(uc),
-                n(ud),
-                n(ue),
-                n(uf)
+                geometry_number(a),
+                geometry_number(b),
+                geometry_number(cc),
+                geometry_number(d),
+                geometry_number(e),
+                geometry_number(f),
+                geometry_number(x0),
+                geometry_number(y0),
+                geometry_number(x1 - x0),
+                geometry_number(y1 - y0),
+                geometry_number(ua),
+                geometry_number(ub),
+                geometry_number(uc),
+                geometry_number(ud),
+                geometry_number(ue),
+                geometry_number(uf)
             ));
         }
         if !sheet.borders.is_empty() || !sheet.lines.is_empty() {
@@ -708,6 +750,12 @@ pub fn impose(src: &Document, settings: &Settings) -> Result<Vec<u8>, PrintError
     let mut cat = Dict::new();
     cat.set(b"Type".to_vec(), Object::name("Catalog"));
     cat.set(b"Pages".to_vec(), Object::Ref(pages_root));
+    // Keep the layers' configuration, or a layer that is off in the document would print: the
+    // pages' marked content still refers to its groups, and without this nothing says they are off.
+    let layers = src.trailer().get(b"Root").and_then(|r| src.resolve(r).as_dict().and_then(|root| root.get(b"OCProperties").cloned()));
+    if let Some(layers) = layers {
+        cat.set(b"OCProperties".to_vec(), layers);
+    }
     let root = doc.add(Object::Dict(cat));
     doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(root));
     doc.trailer_mut().remove(b"Info");

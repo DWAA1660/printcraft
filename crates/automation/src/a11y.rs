@@ -203,6 +203,16 @@ fn review_html(record: &Value) -> Result<String> {
 }
 
 impl Automation {
+    pub(crate) fn accessibility_autotag_apply(&mut self, a: &Args) -> Result<Value> {
+        let id = self.doc(a)?.id;
+        self.session.apply(id, pdfcraft_engine::Edit::AutoTagText).map_err(failed)?;
+        let tags = self.accessibility_tags(a)?;
+        Ok(json!({
+            "tags": tags["tags"], "count": tags["count"],
+            "note": "Text objects were tagged as paragraphs. Review heading roles, reading order and remaining accessibility findings manually.",
+        }))
+    }
+
     pub(crate) fn accessibility_autotag_preview(&self, a: &Args) -> Result<Value> {
         let page = self.page(a)?;
         let preview = self.doc(a)?.autotag_preview(page).map_err(failed)?;
@@ -466,6 +476,18 @@ impl Automation {
         self.accessibility_tags(a)
     }
 
+    pub(crate) fn accessibility_mark_tag_artifact(&mut self, a: &Args) -> Result<Value> {
+        let object = u32::try_from(a.int("object")?).map_err(|_| ToolError::InvalidArgs("object must be a positive tag object number".into()))?;
+        if object == 0 {
+            return Err(ToolError::InvalidArgs("object must be a positive tag object number".into()));
+        }
+        let generation = u16::try_from(a.int("generation")?)
+            .map_err(|_| ToolError::InvalidArgs("generation must be a PDF object generation from accessibility_tags".into()))?;
+        let id = self.doc(a)?.id;
+        self.session.apply(id, pdfcraft_engine::Edit::MarkTagArtifact { object: pdfcraft_cos::ObjRef::new(object, generation) }).map_err(failed)?;
+        self.accessibility_tags(a)
+    }
+
     pub(crate) fn accessibility_move_tag(&mut self, a: &Args) -> Result<Value> {
         let reference = |number: &str, generation: &str| -> Result<pdfcraft_cos::ObjRef> {
             let n = u32::try_from(a.int(number)?).map_err(|_| ToolError::InvalidArgs(format!("{number} must be a positive tag object number")))?;
@@ -490,7 +512,7 @@ impl Automation {
 }
 
 impl Automation {
-    fn ocr_settings(&self, a: &Args) -> Result<pdfcraft_engine::ocr::OcrSettings> {
+    pub(crate) fn ocr_settings(&self, a: &Args) -> Result<pdfcraft_engine::ocr::OcrSettings> {
         let mut settings = pdfcraft_engine::ocr::OcrSettings::default();
         if let Some(d) = a.opt_num("dpi")? {
             settings.dpi = d.clamp(72.0, 600.0) as f32;

@@ -67,6 +67,9 @@ pub struct PrintDraft {
     pub cut_marks: bool,
     pub orientation: Orientation,
     pub content: Content,
+    /// Print as image (Acrobat's Advanced Print Setup) at `dpi`.
+    pub as_image: bool,
+    pub dpi: f64,
     pub paper: usize,
     /// The sheet shown in the preview (0-based).
     pub sheet: usize,
@@ -111,6 +114,8 @@ impl Default for PrintDraft {
             cut_marks: true,
             orientation: Orientation::Auto,
             content: Content::DocumentAndMarkups,
+            as_image: false,
+            dpi: 300.0,
             paper: 0,
             sheet: 0,
             current_page: 0,
@@ -148,15 +153,22 @@ impl PrintDraft {
                 m => m,
             }),
             Handling::Multiple => match Layout::multiple(self.per_sheet) {
-                Layout::Multiple { cols, rows, .. } => {
-                    Layout::Multiple { cols, rows, order: self.order, border: self.border, auto_rotate: self.auto_rotate }
+                Layout::Multiple { cols, rows, per_sheet, .. } => {
+                    Layout::Multiple { cols, rows, per_sheet, order: self.order, border: self.border, auto_rotate: self.auto_rotate }
                 }
                 other => other,
             },
             Handling::Booklet => Layout::Booklet { subset: self.booklet_subset, binding: self.binding },
             Handling::Poster => Layout::Poster { scale: self.poster_scale, overlap: self.overlap, cut_marks: self.cut_marks },
         };
-        Ok(print::Settings { pages, paper: PAPERS[self.paper.min(PAPERS.len() - 1)].1, orientation: self.orientation, layout, content: self.content })
+        Ok(print::Settings {
+            pages,
+            paper: PAPERS[self.paper.min(PAPERS.len() - 1)].1,
+            orientation: self.orientation,
+            layout,
+            content: self.content,
+            raster: self.as_image.then_some(print::Raster { dpi: self.dpi, grayscale: self.grayscale }),
+        })
     }
 
     pub fn job(&self, title: &str) -> spool::Job {
@@ -178,7 +190,7 @@ impl PrintDraft {
 }
 
 /// Lists the printers off the UI thread (the desktop app sets [`PdfCraftApp::printer_source`]):
-/// on Windows that takes PowerShell a second or more, and CUPS' driverless discovery can wait on
+/// on Windows each driver's capabilities are read for its two-sided support, and CUPS' driverless discovery can wait on
 /// the network. Without a source the dialog reads them as it opens, so tests stay deterministic.
 pub type PrinterSource = std::sync::Arc<dyn Fn() -> Vec<spool::Printer> + Send + Sync>;
 
@@ -909,6 +921,29 @@ pub(crate) fn body(
                 ],
                 220.0,
             );
+            // Advanced (Acrobat's Advanced Print Setup): print as image. Folded unless it is on.
+            ui.add_space(6.0);
+            egui::CollapsingHeader::new(egui::RichText::new(tl!("Advanced").to_uppercase()).font(theme::semibold(10.5)).color(t.text_faint))
+                .id_salt("print-advanced")
+                .default_open(d.as_image)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.add(widgets::checkbox(&mut d.as_image, tl!("Print as image")));
+                        ui.add_enabled_ui(d.as_image, |ui| {
+                            ui.label(tl!("Resolution:"));
+                            let mut dpi = d.dpi.round() as u32;
+                            combo(ui, "print-dpi", &mut dpi, &[(150, "150 dpi"), (300, "300 dpi"), (600, "600 dpi")], 100.0);
+                            d.dpi = f64::from(dpi);
+                        });
+                    });
+                    ui.label(
+                        egui::RichText::new(tl!(
+                            "Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey."
+                        ))
+                        .small()
+                        .color(t.text_muted),
+                    );
+                });
         });
         ui.add_space(12.0);
         // Preview.

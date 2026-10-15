@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 
 use egui::{Align, Color32, CornerRadius, Layout, Pos2, Rect, Stroke, vec2};
-use pdfcraft_engine::sign::{self, Appearance, Certificate, DigitalId, Modification, Name, PrivateKey};
+use pdfcraft_engine::sign::{self, Appearance, AppearanceLabels, Certificate, DigitalId, Modification, Name, PrivateKey};
 use pdfcraft_engine::{SignOptions, SignatureImage, SignatureInfo, SignatureStatus};
 
 use crate::canvas::{DocView, PageXform};
@@ -111,6 +111,8 @@ pub struct SignDraft {
     pub image: Option<SignatureImage>,
     pub new_id: NewIdDraft,
     pub error: Option<String>,
+    /// Sign with a Digital ID ▸ Remove was clicked for this list entry: asking to confirm.
+    pub confirm_remove: Option<usize>,
 }
 
 impl SignDraft {
@@ -132,6 +134,7 @@ impl SignDraft {
             image: None,
             new_id: NewIdDraft::default(),
             error: None,
+            confirm_remove: None,
         }
     }
 }
@@ -325,6 +328,28 @@ impl PdfCraftApp {
         self.digital_ids.len() - 1
     }
 
+    /// Take the digital ID file at `index` off the list (issue #1396). The file itself stays on
+    /// disk. Keychain and Windows store IDs belong to the OS and are listed again on every
+    /// signing, so they can't be removed here. The open dialog's selection follows the list.
+    pub fn remove_digital_id(&mut self, index: usize) -> bool {
+        if self.digital_ids.get(index).is_none_or(|e| e.path.starts_with("keychain:") || e.path.starts_with("windows:")) {
+            return false;
+        }
+        self.digital_ids.remove(index);
+        if let Some(d) = self.sign_draft.as_mut() {
+            d.confirm_remove = None;
+            d.selected = match d.selected {
+                Some(s) if s > index => Some(s - 1),
+                Some(s) if s == index => self.digital_ids.iter().position(|e| e.unusable.is_none()),
+                s => s,
+            };
+            if self.digital_ids.is_empty() {
+                d.step = SignStep::Configure;
+            }
+        }
+        true
+    }
+
     /// Configure New Digital ID ▸ Create: a self-signed ID saved as a .p12 next to the app data
     /// (or in `export_dir_override`). Returns its list index.
     fn create_digital_id(&mut self) -> Result<usize, String> {
@@ -332,8 +357,10 @@ impl PdfCraftApp {
         if d.name.trim().is_empty() {
             return Err("Enter a name.".into());
         }
-        if d.password.chars().count() < 6 {
-            return Err("The password must have at least 6 characters.".into());
+        // The message is a catalogue key, so it spells the number out; keep the two in step.
+        const _: () = assert!(sign::pkcs12::MIN_PASSWORD_CHARS == 8);
+        if d.password.chars().count() < sign::pkcs12::MIN_PASSWORD_CHARS {
+            return Err("The password must have at least 8 characters.".into());
         }
         if d.password != d.confirm {
             return Err("The passwords do not match.".into());
@@ -409,6 +436,8 @@ impl PdfCraftApp {
             location: some(&d.location),
             certify: d.certify,
             appearance: d.appearance.clone(),
+            // The labels the preview shows: in the interface language, or all in English.
+            appearance_labels: appearance_labels(crate::i18n::current()).0,
             graphic,
             ..SignOptions::default()
         };
@@ -620,6 +649,7 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             }
             if resp.clicked() {
                 d.selected = Some(i);
+                d.confirm_remove = None;
             }
             if resp.double_clicked() {
                 d.step = SignStep::SignAs;
@@ -630,10 +660,28 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         }
     });
     ui.add_space(10.0);
+    // Remove takes a digital ID file off the list after asking (#1396); OS key store IDs stay.
+    let mut remove = None;
+    if let Some(e) = d.confirm_remove.and_then(|i| ids.get(i)) {
+        ui.label(crate::i18n::fmt(tl!("Remove \"{name}\" from this list? The file itself is not deleted."), &[("name", &e.name)]));
+        ui.horizontal(|ui| {
+            if widgets::pill_button(ui, tl!("Remove"), true).clicked() {
+                remove = d.confirm_remove;
+            }
+            if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+                d.confirm_remove = None;
+            }
+        });
+        ui.add_space(10.0);
+    }
+    let removable = d.selected.filter(|&i| ids.get(i).is_some_and(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:")));
     ui.horizontal(|ui| {
         if widgets::pill_button(ui, tl!("Configure New Digital ID"), false).clicked() {
             d.step = SignStep::Configure;
             d.error = None;
+        }
+        if d.confirm_remove.is_none() && ui.add_enabled_ui(removable.is_some(), |ui| widgets::pill_button(ui, tl!("Remove"), false)).inner.clicked() {
+            d.confirm_remove = removable;
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui.add_enabled_ui(d.selected.is_some(), |ui| widgets::pill_button(ui, tl!("Continue"), true)).inner.clicked() {
@@ -645,6 +693,9 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             }
         });
     });
+    if let Some(i) = remove {
+        app.remove_digital_id(i);
+    }
     close
 }
 
@@ -769,12 +820,67 @@ fn graphic_of(signature: Option<&SavedSig>, g: &SignGraphic) -> Option<SavedSig>
     }
 }
 
-/// The signature as it will look: the graphic (or the name) on the left, the details beside it.
+/// The words of a visible signature's labels in `lang`, and whether they fell back to English.
+///
+/// The labels are stamped into the document, so they are all in `lang` or all in English, never a
+/// mix. English when `lang` is English; when it is written right to left (its catalog is kept in
+/// display order, not the order a PDF stores text in); when one label has no translation; or when
+/// the signature's font can't draw one (Chinese, Japanese, Cyrillic, Greek in Helvetica), which
+/// signing would refuse. The English words are the sign crate's own, so they can't drift apart.
+pub(crate) fn appearance_labels(lang: crate::i18n::Lang) -> (AppearanceLabels, bool) {
+    let english = AppearanceLabels::default();
+    if lang == crate::i18n::Lang::EN {
+        return (english, false);
+    }
+    let said = |s: &str| (!lang.rtl() && crate::i18n::has(lang, s)).then(|| crate::i18n::tr(lang, s).to_string());
+    let translated = (|| {
+        Some(AppearanceLabels {
+            signed_by: said(&english.signed_by)?,
+            distinguished_name: said(&english.distinguished_name)?,
+            reason: said(&english.reason)?,
+            location: said(&english.location)?,
+            date: said(&english.date)?,
+        })
+    })();
+    match translated.filter(|l| l.first_undrawable().is_none()) {
+        Some(labels) => (labels, false),
+        None => (english, true),
+    }
+}
+
+/// The detail lines of a visible signature, as `sign::pdf` stamps them (the distinguished name
+/// aside, which the dialog doesn't know before the ID is opened): the label above the name, then
+/// the reason, location and date, each after its label. `reason` and `location` are as typed.
+fn detail_lines(a: &Appearance, labels: &AppearanceLabels, name: &str, reason: &str, location: &str, date: &str) -> Vec<String> {
+    let label = |l: &str, v: &str| if a.labels { format!("{l}{v}") } else { v.to_string() };
+    let mut lines = Vec::new();
+    if a.name {
+        if a.labels {
+            lines.push(labels.signed_by.clone());
+        }
+        lines.push(name.to_string());
+    }
+    if a.reason && !reason.trim().is_empty() {
+        lines.push(label(&labels.reason, reason.trim()));
+    }
+    if a.location && !location.trim().is_empty() {
+        lines.push(label(&labels.location, location.trim()));
+    }
+    if a.date {
+        lines.push(label(&labels.date, date));
+    }
+    lines.retain(|l| !l.is_empty());
+    lines
+}
+
+/// The signature as it will look: the graphic (or the name) on the left, the details beside it
+/// (`lines`, from [`detail_lines`] with the labels signing will stamp).
 fn preview(
     ui: &mut egui::Ui,
     t: &Tokens,
     name: &str,
-    d: &SignDraft,
+    a: &Appearance,
+    lines: &[String],
     graphic: Option<&SavedSig>,
     cache: &mut Option<(SavedSig, egui::TextureHandle)>,
 ) {
@@ -782,20 +888,6 @@ fn preview(
     let bg = if t.dark() { Color32::from_gray(0xF4) } else { Color32::WHITE };
     ui.painter().rect(rect, CornerRadius::same(4), bg, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
     let inner = rect.shrink(10.0);
-    let a = &d.appearance;
-    let mut lines = Vec::new();
-    if a.name {
-        lines.push(if a.labels { format!("Digitally signed by {name}") } else { name.to_string() });
-    }
-    if a.reason && !d.reason.trim().is_empty() {
-        lines.push(format!("{}{}", if a.labels { "Reason: " } else { "" }, d.reason.trim()));
-    }
-    if a.location && !d.location.trim().is_empty() {
-        lines.push(format!("{}{}", if a.labels { "Location: " } else { "" }, d.location.trim()));
-    }
-    if a.date {
-        lines.push(format!("{}{}", if a.labels { "Date: " } else { "" }, "(the signing time)"));
-    }
     // As in the signature itself: a graphic with no details beside it fills the box.
     let alone = graphic.is_some() && lines.is_empty();
     let half = Rect::from_min_size(inner.min, vec2(inner.width() * 0.5 - 6.0, inner.height()));
@@ -812,6 +904,8 @@ fn preview(
 
 fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     let ids = app.digital_ids.clone();
+    // The time as the signature will show it (signing takes the session clock then).
+    let date = sign::pdf::display_date(&app.session.signing_date());
     let Some(d) = app.sign_draft.as_mut() else { return true };
     let Some(entry) = d.selected.and_then(|i| ids.get(i)).cloned() else {
         d.step = SignStep::Choose;
@@ -832,7 +926,16 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     if d.rect.is_some() || d.field.is_some() {
         ui.label(egui::RichText::new(tl!("Appearance")).font(theme::semibold(12.5)));
         let graphic = graphic_of(app.signature.as_ref(), &d.graphic);
-        preview(ui, t, &entry.name, d, graphic.as_ref(), &mut app.sign_graphic_preview);
+        let (labels, in_english) = appearance_labels(crate::i18n::current());
+        let lines = detail_lines(&d.appearance, &labels, &entry.name, &d.reason, &d.location, &date);
+        preview(ui, t, &entry.name, &d.appearance, &lines, graphic.as_ref(), &mut app.sign_graphic_preview);
+        if in_english && d.appearance.labels {
+            ui.label(
+                egui::RichText::new(tl!("The labels are in English: the signature's font can't draw them in this language."))
+                    .small()
+                    .color(t.text_muted),
+            );
+        }
         ui.horizontal_wrapped(|ui| {
             let a = &mut d.appearance;
             ui.add(widgets::checkbox(&mut a.name, tl!("Name")));
@@ -1315,7 +1418,7 @@ mod tests {
         // P-256 keeps the test fast.
         let key = KEY_ALGORITHMS.iter().position(|k| k.1 == "p256").unwrap();
         draft.new_id =
-            NewIdDraft { name: "Grace Hopper".into(), key, password: "secret1".into(), confirm: "secret1".into(), ..NewIdDraft::default() };
+            NewIdDraft { name: "Grace Hopper".into(), key, password: "secret12".into(), confirm: "secret12".into(), ..NewIdDraft::default() };
         app.sign_draft = Some(draft);
         let i = app.create_digital_id()?;
         Ok(PathBuf::from(&app.digital_ids[i].path))
@@ -1332,7 +1435,7 @@ mod tests {
         let saved = create_in(&dir).unwrap();
         assert_eq!(saved, dir.join("Grace Hopper 3.p12"));
         assert_eq!(std::fs::read_to_string(dir.join("victim.txt")).unwrap(), "keep me");
-        assert!(sign::pkcs12::open(&std::fs::read(&saved).unwrap(), "secret1").is_ok());
+        assert!(sign::pkcs12::open(&std::fs::read(&saved).unwrap(), "secret12").is_ok());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1372,5 +1475,83 @@ mod tests {
         let mode = std::fs::metadata(&saved).unwrap().permissions().mode();
         assert_eq!(mode & 0o077, 0, "the private key is not readable by others: {mode:o}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn listed(path: &str, name: &str) -> DigitalIdEntry {
+        DigitalIdEntry { path: path.into(), name: name.into(), issuer: String::new(), email: String::new(), expires: String::new(), unusable: None }
+    }
+
+    /// Issue #1396: an imported ID can be taken off the list (its file stays), the dialog's
+    /// selection follows, an OS key store ID or a stale index is refused, and the removal is saved.
+    #[test]
+    fn a_digital_id_file_is_removed_from_the_list_and_stays_removed() {
+        let dir = scratch();
+        let file = dir.join("old.p12");
+        std::fs::write(&file, b"not opened").unwrap();
+        let mut app = PdfCraftApp::new();
+        app.digital_ids = vec![listed("windows:abc", "Store"), listed(&file.to_string_lossy(), "Old"), listed("/ids/new.p12", "New")];
+        let mut draft = SignDraft::new(0, None, None, None, &app.digital_ids);
+        draft.selected = Some(2);
+        draft.confirm_remove = Some(1);
+        app.sign_draft = Some(draft);
+
+        assert!(!app.remove_digital_id(0), "OS key store IDs stay");
+        assert!(!app.remove_digital_id(9), "an index past the list is refused");
+        assert!(app.remove_digital_id(1));
+        assert_eq!(app.digital_ids.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["Store", "New"]);
+        assert!(file.exists(), "the file itself is not deleted");
+        let d = app.sign_draft.as_ref().unwrap();
+        assert_eq!((d.selected, d.confirm_remove, d.step), (Some(1), None, SignStep::Choose), "still New, no pending question");
+
+        // Removing the selected ID selects the first usable one; removing the last file ID
+        // leaves only the store ID, which isn't saved.
+        assert!(app.remove_digital_id(1));
+        assert_eq!(app.sign_draft.as_ref().unwrap().selected, Some(0));
+        let mut fresh = PdfCraftApp::new();
+        fresh.restore(&app.persist());
+        assert!(fresh.digital_ids.is_empty(), "the removal survives a restart: {:?}", fresh.digital_ids);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The labels a signature is stamped with are all in the interface language, or all in
+    /// English when the signature's font can't draw them there (or the language is right to
+    /// left): never a mix, and never a label signing would refuse.
+    #[test]
+    fn appearance_labels_are_translated_or_all_english() {
+        use crate::i18n::{Lang, tr};
+        let english = AppearanceLabels::default();
+        assert_eq!(appearance_labels(Lang::EN), (english.clone(), false));
+        for code in ["de", "es", "fr", "it", "pt-br", "pl", "tr", "sl", "hu"] {
+            let lang = Lang::from_code(code).unwrap();
+            let (labels, in_english) = appearance_labels(lang);
+            assert!(!in_english, "{code}: {labels:?}");
+            for ((field, ours), (_, source)) in labels.fields().into_iter().zip(english.fields()) {
+                assert_eq!(ours, tr(lang, source), "{code}: {field}");
+            }
+        }
+        let (de, _) = appearance_labels(Lang::from_code("de").unwrap());
+        assert_eq!((de.signed_by.as_str(), de.reason.as_str()), ("Digital signiert von", "Grund: "));
+        for code in ["zh-hans", "zh-hant", "ja", "ru", "uk", "bg", "kk", "el", "te", "cs", "lt", "ar"] {
+            assert_eq!(appearance_labels(Lang::from_code(code).unwrap()), (english.clone(), true), "{code}");
+        }
+        for lang in Lang::all() {
+            let (labels, in_english) = appearance_labels(lang);
+            assert_eq!(labels.first_undrawable(), None, "{}: signing would refuse {labels:?}", lang.code());
+            assert_eq!(in_english, lang != Lang::EN && labels == english, "{}", lang.code());
+        }
+    }
+
+    /// The preview's details are the stamp's: the label above the name, then each detail after
+    /// its label, in the words given, and only the values when the labels are off.
+    #[test]
+    fn preview_lines_use_the_labels_signing_stamps() {
+        let (de, _) = appearance_labels(crate::i18n::Lang::from_code("de").unwrap());
+        let all = Appearance { reason: true, location: true, ..Appearance::default() };
+        let lines = detail_lines(&all, &de, "Ada", " Genehmigt ", "Berlin", "2026.10.14 09:30:00 Z");
+        assert_eq!(lines, ["Digital signiert von", "Ada", "Grund: Genehmigt", "Ort: Berlin", "Datum: 2026.10.14 09:30:00 Z"]);
+        let bare = Appearance { labels: false, ..all.clone() };
+        assert_eq!(detail_lines(&bare, &de, "Ada", "Genehmigt", "", "D"), ["Ada", "Genehmigt", "D"]);
+        let nothing = Appearance { name: false, date: false, ..all };
+        assert!(detail_lines(&nothing, &de, "Ada", "  ", "", "D").is_empty());
     }
 }
