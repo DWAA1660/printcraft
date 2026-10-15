@@ -12,7 +12,7 @@ use crate::theme::Tokens;
 use crate::widgets;
 
 /// The colour of the warning under text the standard fonts can't draw.
-const UNDRAWABLE: Color32 = Color32::from_rgb(0xD7, 0x37, 0x3F);
+pub(crate) const UNDRAWABLE: Color32 = Color32::from_rgb(0xD7, 0x37, 0x3F);
 
 /// The first character of a draft that can't be drawn, as the engine decides it (it refuses
 /// such text, #125): outside the standard fonts and not shaped with the Arabic face.
@@ -105,6 +105,128 @@ impl ContentView {
     }
 }
 
+/// While an added item is moved, the page without it, rendered once per gesture: the item's own
+/// pixels follow the pointer over it instead of staying put until release (#1488).
+#[derive(Default)]
+pub(crate) struct MoveBackground {
+    key: Option<(u64, usize, usize)>,
+    renderer: Option<pdfcraft_render::RenderPool>,
+    texture: Option<egui::TextureHandle>,
+    tag: Option<u64>,
+    /// The item's display-space box when the gesture started.
+    from: Option<[f64; 4]>,
+    /// The applied move's box. The page raster on screen still has the item where it was until
+    /// its replacement arrives, so the preview stays up until then.
+    settling: Option<[f64; 4]>,
+}
+
+impl MoveBackground {
+    pub fn pending(&self) -> bool {
+        self.renderer.is_some() && self.texture.is_none()
+    }
+
+    pub fn prepare(&mut self, ctx: &egui::Context, doc: &pdfcraft_engine::Document, cv: &ContentView, scale: f32) {
+        let key = match (cv.grab, cv.selected) {
+            (Some((gp, Grab::Move, _)), Some((sp, si))) if gp == sp => Some((doc.edit_generation(), sp, si)),
+            _ => None,
+        };
+        if !(key.is_none() && self.settling.is_some()) && self.key != key {
+            *self = Self { key, ..Default::default() };
+            if let Some((_, page, index)) = key {
+                self.renderer = doc.added_content_preview(page, index).ok().map(|p| p.renderer());
+                self.from = on_page(doc.added(), page).into_iter().find(|(i, _)| *i == index).map(|(_, a)| a.content.rect());
+            }
+        }
+        if self.settling.is_some() {
+            return;
+        }
+        let (Some((_, page, _)), Some(renderer)) = (self.key, self.renderer.as_ref()) else { return };
+        let Some(p) = doc.info.pages.get(page) else { return };
+        let max_side = ctx.input(|i| i.max_texture_side) as f32;
+        let scale = scale.min(crate::canvas::BASE_SIDE.min(max_side) / p.width.max(p.height).max(1.0));
+        let tag = (scale * 1000.0) as u64;
+        if self.tag != Some(tag) {
+            renderer.set_queue(vec![pdfcraft_render::RenderRequest { page, scale, tag, ..Default::default() }]);
+            self.tag = Some(tag);
+        }
+        if let Some(out) = renderer.try_recv() {
+            if out.error.is_some() {
+                // Without a background the item stays put while dragged, as before.
+                self.renderer = None;
+                return;
+            }
+            if out.request.tag == tag {
+                self.texture = Some(ctx.load_texture(
+                    "added-content-move-background",
+                    crate::canvas::texture_image([out.width as usize, out.height as usize], out.rgba),
+                    egui::TextureOptions::LINEAR,
+                ));
+            }
+        }
+        if self.pending() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+    }
+
+    /// The move was applied: keep the preview, now at the new generation, until the page is
+    /// rendered again. Any other edit ends it.
+    pub fn committed(&mut self, edit: &Edit, generation: u64) {
+        match edit {
+            Edit::UpdateContent { page, index, content } if self.texture.is_some() && self.key.is_some_and(|(_, p, i)| (p, i) == (*page, *index)) => {
+                self.key = Some((generation, *page, *index));
+                self.settling = Some(content.rect());
+            }
+            _ => *self = Self::default(),
+        }
+    }
+
+    pub fn page_received(&mut self, page: usize) {
+        if self.settling.is_some() && self.key.is_some_and(|(_, p, _)| p == page) {
+            *self = Self::default();
+        }
+    }
+
+    /// The page without the moving item, then the item's pixels taken from `page_tex` (the page
+    /// as rendered, item included where it was) at the dragged or applied position.
+    #[allow(clippy::too_many_arguments)]
+    pub fn paint(
+        &self,
+        ui: &egui::Ui,
+        painter: &egui::Painter,
+        xf: &PageXform,
+        page: usize,
+        info: &DocInfo,
+        cv: &ContentView,
+        page_tex: Option<egui::TextureId>,
+    ) {
+        let (Some((_, kp, _)), Some(background), Some(page_tex), Some(from)) = (self.key, &self.texture, page_tex, self.from) else { return };
+        if kp != page {
+            return;
+        }
+        let r = screen_rect(xf, info, page, from);
+        let d = if let Some((_, _, start)) = cv.grab {
+            let Some(p) = ui.input(|i| i.pointer.hover_pos()) else { return };
+            p - start
+        } else if let Some(to) = self.settling {
+            // A moved text box keeps its top edge (its height follows its lines).
+            screen_rect(xf, info, page, to).left_top() - r.left_top()
+        } else {
+            return;
+        };
+        let painter = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
+        xf.paint_image(&painter, background.id(), 0.0, 0.0, 1.0, 1.0);
+        let r = r.expand(1.0);
+        let mut mesh = egui::Mesh::with_texture(page_tex);
+        for c in [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()] {
+            let (u, v) = xf.screen_to_norm(c);
+            mesh.vertices.push(egui::epaint::Vertex { pos: c + d, uv: Pos2::new(u, v), color: Color32::WHITE });
+        }
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(0, 2, 3);
+        painter.add(egui::Shape::mesh(mesh));
+    }
+}
+
 /// Text style for new text (the panel's Format controls set it).
 pub fn default_style() -> AddedText {
     AddedText { size: 12.0, ..AddedText::default() }
@@ -155,6 +277,22 @@ fn dragged(r: Rect, grab: Grab, d: egui::Vec2, keep_aspect: bool) -> Rect {
             Rect::from_two_pos(out.min, out.max)
         }
     }
+}
+
+/// Added text and images keep pointer ownership over a form field while editing content.
+pub(crate) fn select_grabs(ui: &egui::Ui, xf: &PageXform, page: usize, info: &DocInfo, added: &[Added], view: &DocView) -> bool {
+    let cv = &view.content;
+    if cv.grab.is_some_and(|(grab_page, _, _)| grab_page == page) {
+        return true;
+    }
+    let Some(p) = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos())).filter(|p| xf.rect.contains(*p)) else {
+        return false;
+    };
+    on_page(added, page).into_iter().any(|(index, item)| {
+        let rect = screen_rect(xf, info, page, item.content.rect());
+        rect.expand(2.0).contains(p)
+            || cv.selected == Some((page, index)) && handles(rect).into_iter().any(|(corner, _, _)| corner.distance(p) <= 6.0)
+    })
 }
 
 /// Pointer input on one page in Edit mode (`adding_text` with the Text tool). `true` when it
@@ -605,7 +743,7 @@ impl crate::PdfCraftApp {
     pub fn add_image(&mut self, name: String, bytes: Vec<u8>) {
         let Some((i, id)) = self.active_ids() else { return };
         let page = self.views[i].current;
-        let before = self.session.get(id).map_or(0, |d| d.added.iter().filter(|a| a.page == page).count());
+        let before = self.session.get(id).map_or(0, |d| d.added().iter().filter(|a| a.page == page).count());
         if self.apply_edit(Edit::AddImage { page, rect: None, name, bytes: std::sync::Arc::new(bytes) }) {
             self.views[i].content.select_added = Some((page, before));
             self.left = crate::LeftPanel::Tool("edit");
@@ -619,6 +757,11 @@ pub(crate) enum ImageAction {
     Update(pdfcraft_engine::AddedContent),
     Replace,
 }
+
+// Lucide names a flip icon after the axis it draws, Acrobat names the flip after the direction the
+// picture moves: Flip horizontal (left and right swap) shows Lucide's vertical axis.
+const FLIP_HORIZONTAL_ICON: &str = "flip-vertical-2";
+const FLIP_VERTICAL_ICON: &str = "flip-horizontal-2";
 
 /// Edit image: rotate, flip, crop, replace (shown while an added image is selected).
 pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &pdfcraft_engine::AddedImage) -> Option<ImageAction> {
@@ -641,11 +784,11 @@ pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &pdfcraft_engine::
             turn(&mut i, 3);
             out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
         }
-        if crate::icons::button(ui, "flip-horizontal-2", 28.0, false, tl!("Flip horizontal")).clicked() {
+        if crate::icons::button(ui, FLIP_HORIZONTAL_ICON, 28.0, false, tl!("Flip horizontal")).clicked() {
             i.flip_h = !i.flip_h;
             out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
         }
-        if crate::icons::button(ui, "flip-vertical-2", 28.0, false, tl!("Flip vertical")).clicked() {
+        if crate::icons::button(ui, FLIP_VERTICAL_ICON, 28.0, false, tl!("Flip vertical")).clicked() {
             i.flip_v = !i.flip_v;
             out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
         }
@@ -672,4 +815,54 @@ pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &pdfcraft_engine::
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use egui_kittest::kittest::Queryable;
+
+    use super::*;
+
+    /// The image a flip button leaves behind, as the panel returns it.
+    fn flipped(tooltip: &str) -> pdfcraft_engine::AddedImage {
+        let img = pdfcraft_engine::AddedImage::new([0.0, 0.0, 100.0, 50.0], pdfcraft_cos::ObjRef::new(7, 0));
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::new_ui_state(
+            move |ui, out: &mut Option<pdfcraft_engine::AddedImage>| {
+                // The app's fonts (the semibold section title) take effect from the next frame.
+                if !fonts {
+                    ui.ctx().set_fonts(crate::theme::font_definitions());
+                    fonts = true;
+                    return;
+                }
+                let t = Tokens::get(ui.ctx());
+                if let Some(ImageAction::Update(AddedContent::Image(i))) = image_panel(ui, &t, &img) {
+                    *out = Some(i);
+                }
+            },
+            None,
+        );
+        h.run();
+        h.get_by_label(tooltip).click();
+        h.run();
+        h.state().clone().expect("the button updates the image")
+    }
+
+    #[test]
+    fn flip_buttons_show_the_mirror_axis_of_the_flip_they_make() {
+        // #1834: Acrobat's Flip horizontal swaps left and right across a vertical axis. Lucide names
+        // its flip icons after the axis drawn, so that is its flip-vertical-2.
+        let svg = |name: &str| {
+            let (_, bytes) = crate::icon_data::ICONS.iter().find(|(n, _)| *n == name).expect("bundled icon");
+            String::from_utf8_lossy(bytes).into_owned()
+        };
+        let (h, v) = (svg(FLIP_HORIZONTAL_ICON), svg(FLIP_VERTICAL_ICON));
+        assert!(h.contains("M12 2v2") && !h.contains("M4 12H2"), "Flip horizontal draws a vertical axis:\n{h}");
+        assert!(v.contains("M4 12H2") && !v.contains("M12 2v2"), "Flip vertical draws a horizontal axis:\n{v}");
+
+        let i = flipped("Flip horizontal");
+        assert!(i.flip_h && !i.flip_v, "Flip horizontal mirrors left and right");
+        let i = flipped("Flip vertical");
+        assert!(i.flip_v && !i.flip_h, "Flip vertical mirrors top and bottom");
+    }
 }

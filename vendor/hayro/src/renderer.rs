@@ -534,7 +534,7 @@ impl Renderer {
         reach
     }
 
-    fn draw_image_with_alpha_mask(&mut self, image_data: ImageData, alpha_data: LumaData) {
+    fn draw_image_with_alpha_mask(&mut self, image_data: ImageData, mut alpha_data: LumaData) {
         // PdfCraft patch: mismatched masks need a dummy RGB staging image. Validate and
         // reserve it before creating/pushing any mask, so failure skips the whole image.
         let Some(len) = source_byte_len(alpha_data.width, alpha_data.height, 3, MAX_IMAGE_PIXELS)
@@ -555,6 +555,15 @@ impl Renderer {
                     image_data.width() as f64 / alpha_data.width as f64,
                     image_data.height() as f64 / alpha_data.height as f64,
                 );
+            // PdfCraft patch (#1649): a mask that differs in size from its image carries the
+            // shape on its own (Word saves text as a tiny black image with a glyph-bitmap mask).
+            // Shrunk by nearest-neighbour it keeps one sample in N and drops every stroke thinner
+            // than N mask pixels, so a shrunk mask is filtered whatever its `/Interpolate`, which
+            // only asks for smoothing when the mask is enlarged.
+            let (x, y) = x_y_advances(&transform);
+            if x.length() < 1.0 || y.length() < 1.0 {
+                alpha_data.interpolate = true;
+            }
             let mut renderer = Self {
                 ctx: RenderContext::new_with(
                     self.ctx.width(),
@@ -1066,8 +1075,13 @@ impl Renderer {
                         // become native gradients instead of a texture sampled pixel by pixel.
                         // Upstream also shifts by half a pixel for vello_cpu 0.3; 0.0.8 already
                         // evaluates gradients at pixel centres, like the texture below.
-                        if let Some(native) =
-                            encoded.as_svg_gradient(bbox, NATIVE_GRADIENT_TOLERANCE)
+                        // PdfCraft patch (#2128): vello_cpu 0.0.8 copies an opaque gradient
+                        // over fully covered tiles without applying the mask or blend mode, and
+                        // a gradient can't be flagged transparent like the texture below, so
+                        // under a soft mask or blend mode the shading is sampled instead.
+                        if !self.force_images_may_have_transparency()
+                            && let Some(native) =
+                                encoded.as_svg_gradient(bbox, NATIVE_GRADIENT_TOLERANCE)
                         {
                             self.ctx
                                 .set_paint_transform(path_transform.inverse() * native.transform);

@@ -1,17 +1,22 @@
 //! pdfcraft-fonts — font metrics and encodings for generated appearances (L2).
 //!
-//! See the README: the metrics are approximations by character class (no vendor metrics files
-//! are bundled). The full font subsystem lands in M2.2/M7.
+//! Standard-14 advance widths are exact (`Std14`, ISO 32000-2 Annex D). What remains approximate
+//! is everything that needs a font *program*: this crate reads font dictionaries, never embedded
+//! programs, so it has no glyph outlines for document fonts and cannot subset or re-embed. That
+//! is phase F 4.2 in docs/plan/execution-plan.md.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod craft;
 pub mod embedding;
 mod encodings;
+pub mod fallback;
 pub mod pdf;
 mod script;
 mod shaping;
 pub mod source_shaping;
+mod std14;
+mod std14_metrics;
 pub use craft::{
     CRAFT_FONTS, CraftFont, SHIPPORI_MINCHO, document_arabic_font, document_hebrew_font, document_japanese_font, document_japanese_font_for_style,
     document_japanese_fonts_for_style, document_thai_font, ui_arabic_fonts, ui_chinese_fonts, ui_cjk_fonts, ui_hebrew_fonts, ui_japanese_fonts,
@@ -20,28 +25,17 @@ pub use craft::{
 pub use script::{
     GlyphError, GlyphOutline, INTER_REGULAR, MAX_SIGNATURE_CHARS, ScriptOutline, japanese_glyph, japanese_glyph_from, script_missing, script_outline,
 };
-pub use shaping::{ShapedCluster, ShapedScript, arabic_glyph, arabic_has, shape_arabic, shape_thai, shaped_glyph, thai_has};
+pub use shaping::{
+    ShapedCluster, ShapedScript, arabic_glyph, arabic_has, hebrew_has, shape_arabic, shape_hebrew, shape_thai, shaped_glyph, thai_has,
+};
+pub use std14::Std14;
 
-/// Approximate advance of `s` in Helvetica (or Arial) at `size` points.
+/// Advance of `s` in Helvetica at `size` points, using the exact standard-14 metrics.
+///
+/// Kept as a free function because generated appearances overwhelmingly use Helvetica; reach for
+/// [`Std14`] directly for any other face, and never for a scaled approximation of this one.
 pub fn helvetica_width(s: &str, size: f64) -> f64 {
-    let units: f64 = s
-        .chars()
-        .map(|c| match c {
-            ' ' | 'i' | 'j' | 'l' | '\'' | '!' | '|' | '.' | ',' | ':' | ';' | 'I' => 260.0,
-            'f' | 't' | 'r' | '(' | ')' | '[' | ']' | '/' | '-' | '"' => 333.0,
-            'm' => 833.0,
-            'w' => 722.0,
-            'M' => 833.0,
-            'W' => 944.0,
-            'J' | 'c' | 'k' | 's' | 'v' | 'x' | 'y' | 'z' => 500.0,
-            '0'..='9' | 'a'..='z' | '$' | '#' | '?' | '_' => 556.0,
-            'A'..='Z' => 680.0,
-            '@' => 1015.0,
-            _ if c.is_whitespace() => 260.0,
-            _ => 584.0,
-        })
-        .sum();
-    units * size / 1000.0
+    Std14::Helvetica.text_width(s, size)
 }
 
 /// Approximate advance of `s` at `size` points in a CJK font: full-width characters take one
@@ -311,11 +305,39 @@ mod tests {
         assert_eq!(literal(b"a(b)\\c"), b"(a\\(b\\)\\\\c)");
     }
 
+    /// WinAnsiEncoding's 0xAD is the `hyphen` glyph, not U+00AD.
+    ///
+    /// Annex D.2 gives codes 0x2D and 0xAD the same glyph name, so the byte a Windows codepage
+    /// calls a soft hyphen draws an ordinary hyphen and must extract as one. Reading it as U+00AD
+    /// hid the character: a soft hyphen is invisible, so a search for "well-known" missed text
+    /// that drew exactly that, and `redact`'s pattern matching missed it too. One corpus fixture
+    /// alone extracted 104 of them.
+    #[test]
+    fn win_ansi_soft_hyphen_byte_reads_as_an_ordinary_hyphen() {
+        assert_eq!(encodings::WIN_ANSI.get(0xAD), Some(&u32::from('-')));
+        assert_eq!(encodings::WIN_ANSI.get(0x2D), Some(&u32::from('-')));
+        // Writing is unaffected: '-' takes the canonical low code, and a caller holding a literal
+        // U+00AD still writes the 0xAD byte, which is the one that draws a hyphen.
+        assert_eq!(win_ansi_byte('-'), Some(0x2D));
+        assert_eq!(win_ansi_byte('\u{00ad}'), Some(0xAD));
+        assert_eq!(win_ansi("a-b"), b"a-b");
+    }
+
     #[test]
     fn win_ansi_covers_the_0x80_to_0x9f_glyphs() {
-        // Every character in the WinAnsiEncoding table encodes to its code and back (#347).
+        // Every character in the WinAnsiEncoding table encodes to its code and back (#347), except
+        // where two codes share one glyph: 0xAD is `hyphen`, the same glyph as 0x2D, so it decodes
+        // to '-' and '-' encodes back to the canonical 0x2D. Round-tripping the *code* is what
+        // cannot hold there; round-tripping the character still does.
+        const ALIASES: &[u8] = &[0xAD];
         for (code, &u) in encodings::WIN_ANSI.iter().enumerate() {
             let Some(c) = char::from_u32(u).filter(|_| u != 0) else { continue };
+            if ALIASES.contains(&(code as u8)) {
+                let canonical = win_ansi_byte(c).expect("an aliased glyph still encodes");
+                assert!(canonical < code as u8, "{c:?}: the canonical code is the lower one");
+                assert_eq!(encodings::WIN_ANSI.get(usize::from(canonical)), Some(&u), "both codes mean the same character");
+                continue;
+            }
             assert_eq!(win_ansi_byte(c), Some(code as u8), "{c:?} (U+{u:04X})");
             assert_eq!(win_ansi(&c.to_string()), [code as u8]);
         }

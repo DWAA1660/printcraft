@@ -92,6 +92,20 @@ fn the_documented_options_still_edit_and_save() {
     }
 }
 
+/// `--out` naming the input replaces it through a staging file (#2166): the result is the
+/// edited, reopenable file, and nothing is left beside it.
+#[test]
+fn editing_in_place_leaves_a_valid_file_and_no_staging_file() {
+    let input = tmp("in-place", "doc.pdf");
+    std::fs::write(&input, fixture()).unwrap();
+    let out = Command::new(BIN).args(["edit", input.to_str().unwrap(), "--out", input.to_str().unwrap(), "--rotate", "1:90"]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(first_page_rotation(&input), 90);
+    let names: Vec<String> =
+        std::fs::read_dir(input.parent().unwrap()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    assert_eq!(names, ["doc.pdf"], "no staging file beside the result");
+}
+
 mod one_based_arguments {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -223,4 +237,19 @@ fn the_append_destination_and_counts_grown_by_earlier_edits_are_accepted() {
         };
         assert_eq!(sizes, expected, "{name}");
     }
+}
+
+/// A page past the end names its own option and the page count left by the earlier options (#1550).
+#[test]
+fn a_page_past_the_end_after_earlier_edits_names_that_option() {
+    let input = tmp("chained", "in.pdf");
+    std::fs::write(&input, fixture()).unwrap();
+    let output = tmp("chained", "out.pdf");
+    // 1 page, grown to 3, then --delete leaves 2: the 3 in --move 3:1 is the page that is gone.
+    let args = ["--insert-blank", "2", "--insert-blank", "3", "--delete", "3", "--move", "3:1"];
+    let out = Command::new(BIN).args(["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap()]).args(args).output().unwrap();
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("--move: page 3 does not exist") && err.contains("has 2 pages"), "{err}");
+    assert!(!output.exists());
 }
